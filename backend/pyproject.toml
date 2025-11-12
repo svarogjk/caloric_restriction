@@ -1,0 +1,23 @@
+[project]
+name = "caloric_restriction"
+version = "0.1.0"
+description = "Caloric Restriction Project"
+requires-python = ">=3.13"
+dependencies = [
+    "httpx>=0.28.1",
+    "numpy>=2.3.4",
+    "pandas==2.3",
+    "pydantic-ai>=1.14.0",
+    "scipy>=1.16.3",
+    "statsmodels>=0.14.5",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
