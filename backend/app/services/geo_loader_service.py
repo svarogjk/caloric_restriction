@@ -15,7 +15,7 @@ import io
 import pandas as pd
 import numpy as np
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent
 
 from app.models.llm_models import model_dict
@@ -52,6 +52,19 @@ class DataLoadingStrategy(BaseModel):
     notes: str = Field(
         description="Additional parsing instructions"
     )
+    
+    @field_validator('skip_rows', 'expression_start_row', mode='before')
+    @classmethod
+    def coerce_int_fields(cls, v):
+        """Coerce string integers to int"""
+        if isinstance(v, str):
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                return 0
+        elif v is None:
+            return 0
+        return v
 
 
 @dataclass
@@ -163,6 +176,15 @@ class GEODataLoaderService:
             logger.error(f"Failed to load dataset {dataset.accession}")
             return None
         
+        # Validate data is not empty
+        if loaded_data.expression_matrix.empty or len(loaded_data.expression_matrix) == 0:
+            logger.error(f"Dataset {dataset.accession} has no expression data (empty matrix)")
+            return None
+        
+        if len(loaded_data.expression_matrix.columns) < 2:
+            logger.error(f"Dataset {dataset.accession} has too few samples ({len(loaded_data.expression_matrix.columns)})")
+            return None
+        
         # Normalize if requested
         if normalize:
             loaded_data = self._normalize_expression(loaded_data)
@@ -250,6 +272,8 @@ Determine the optimal parsing strategy for this file."""
                 file_format="series_matrix",
                 separator="\t",
                 skip_rows=0,
+                sample_id_column=None,
+                expression_start_row=0,
                 has_header=True,
                 notes="Default strategy due to AI failure"
             )
@@ -261,28 +285,40 @@ Determine the optimal parsing strategy for this file."""
         strategy: DataLoadingStrategy
     ) -> LoadedGEOData:
         """Parse series matrix file according to strategy"""
-        
         lines = content.split('\n')
+        logger.info(f"_parse_series_matrix, n_lines={len(lines)}")
         
-        # Find data start (skip metadata lines starting with "!")
-        data_start = 0
+        # Extract metadata and find data boundaries
         sample_metadata = {}
+        data_start = None
+        data_end = None
         
         for i, line in enumerate(lines):
-            if line.startswith('!'):
-                # Extract sample metadata if present
-                if 'Sample_' in line:
-                    parts = line.split('\t')
-                    if len(parts) > 1:
-                        key = parts[0].replace('!Sample_', '').strip()
-                        values = [p.strip('"') for p in parts[1:]]
-                        sample_metadata[key] = values
-            else:
-                data_start = i
+            # Extract sample metadata
+            if line.startswith('!Sample_'):
+                parts = line.split('\t')
+                if len(parts) > 1:
+                    key = parts[0].replace('!Sample_', '').strip()
+                    values = [p.strip('"') for p in parts[1:]]
+                    sample_metadata[key] = values
+            # Find data section markers
+            elif line.startswith('!series_matrix_table_begin'):
+                data_start = i + 1  # Data starts on next line
+            elif line.startswith('!series_matrix_table_end'):
+                data_end = i
                 break
         
-        # Read expression data
-        data_lines = lines[data_start:]
+        if data_start is None:
+            logger.error("Could not find !series_matrix_table_begin marker")
+            raise ValueError("Invalid series matrix file format")
+        
+        if data_end is None:
+            data_end = len(lines)
+        
+        logger.info(f"Extracting expression data from lines {data_start} to {data_end}")
+        
+        # Extract and parse expression data
+        data_lines = lines[data_start:data_end]
         data_str = '\n'.join(data_lines)
         
         try:
@@ -372,6 +408,9 @@ Determine the optimal parsing strategy for this file."""
             loading_strategy=DataLoadingStrategy(
                 file_format="cached",
                 separator="n/a",
+                skip_rows=0,
+                sample_id_column=None,
+                expression_start_row=0,
                 has_header=True,
                 notes="Loaded from cache"
             ),

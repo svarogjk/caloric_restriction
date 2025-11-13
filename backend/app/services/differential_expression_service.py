@@ -189,51 +189,71 @@ class DifferentialExpressionService:
             (treatment_samples, control_samples)
         """
         metadata = loaded_data.sample_metadata
+        expr_samples = set(loaded_data.expression_matrix.columns)
         
         if metadata.empty:
             logger.warning("No metadata available for group detection")
             # Fall back to simple split
-            samples = list(loaded_data.expression_matrix.columns)
+            samples = list(expr_samples)
             n = len(samples)
             return samples[:n//2], samples[n//2:]
+        
+        # Ensure metadata index matches expression matrix columns
+        metadata = metadata[metadata.index.isin(expr_samples)]
         
         # Look for common metadata columns indicating groups
         group_columns = ['characteristics_ch1', 'source_name_ch1', 'title', 'description']
         
         for col in group_columns:
-            if col in metadata.columns:
-                values = metadata[col].astype(str)
+            if col not in metadata.columns:
+                continue
                 
-                # Look for treatment keywords
-                treatment_keywords = ['treatment', 'cr', 'caloric restriction', 
-                                     'restricted', 'drug', 'intervention']
-                control_keywords = ['control', 'ad lib', 'ad libitum', 
-                                   'placebo', 'vehicle', 'wild type', 'wt']
-                
-                treatment_mask = values.str.lower().str.contains('|'.join(treatment_keywords))
-                control_mask = values.str.lower().str.contains('|'.join(control_keywords))
-                
-                treatment_samples = metadata[treatment_mask].index.tolist()
-                control_samples = metadata[control_mask].index.tolist()
-                
-                if treatment_samples and control_samples:
-                    logger.info(f"Detected groups from column '{col}'")
-                    return treatment_samples, control_samples
+            values = metadata[col].astype(str)
+            
+            # Look for treatment keywords
+            treatment_keywords = ['treatment', 'cr', 'caloric restriction', 
+                                 'restricted', 'drug', 'intervention', 'aged', 'old']
+            control_keywords = ['control', 'ad lib', 'ad libitum', 
+                               'placebo', 'vehicle', 'wild type', 'wt', 'young']
+            
+            treatment_mask = values.str.lower().str.contains('|'.join(treatment_keywords), na=False)
+            control_mask = values.str.lower().str.contains('|'.join(control_keywords), na=False)
+            
+            treatment_samples = metadata[treatment_mask].index.tolist()
+            control_samples = metadata[control_mask].index.tolist()
+            
+            # Validate samples exist in expression matrix
+            treatment_samples = [s for s in treatment_samples if s in expr_samples]
+            control_samples = [s for s in control_samples if s in expr_samples]
+            
+            if (treatment_samples and control_samples and 
+                len(treatment_samples) >= self.min_samples_per_group and
+                len(control_samples) >= self.min_samples_per_group):
+                logger.info(f"Detected groups from column '{col}'")
+                return treatment_samples, control_samples
         
         # If no clear groups found, try to split by unique values
         for col in metadata.columns:
             unique_vals = metadata[col].unique()
-            if len(unique_vals) == 2:
-                # Assume binary grouping
-                group1 = metadata[metadata[col] == unique_vals[0]].index.tolist()
-                group2 = metadata[metadata[col] == unique_vals[1]].index.tolist()
+            if 2 <= len(unique_vals) <= 3:  # Allow for 2-3 groups to pick the two largest
+                # Sort by frequency
+                value_counts = metadata[col].value_counts()
+                top_2_values = value_counts.head(2).index.tolist()
                 
-                if len(group1) >= self.min_samples_per_group and len(group2) >= self.min_samples_per_group:
+                group1 = metadata[metadata[col] == top_2_values[0]].index.tolist()
+                group2 = metadata[metadata[col] == top_2_values[1]].index.tolist() if len(top_2_values) > 1 else []
+                
+                # Validate samples exist
+                group1 = [s for s in group1 if s in expr_samples]
+                group2 = [s for s in group2 if s in expr_samples]
+                
+                if (len(group1) >= self.min_samples_per_group and 
+                    len(group2) >= self.min_samples_per_group):
                     logger.info(f"Using binary split from column '{col}'")
                     return group1, group2
         
         logger.warning("Could not reliably detect groups, using simple split")
-        samples = list(loaded_data.expression_matrix.columns)
+        samples = list(expr_samples)
         n = len(samples)
         return samples[:n//2], samples[n//2:]
     

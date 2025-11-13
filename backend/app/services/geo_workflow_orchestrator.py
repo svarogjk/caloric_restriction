@@ -21,6 +21,15 @@ from app.services.differential_expression_service import (
     DEGResult
 )
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Output to console/stderr
+    ]
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -210,6 +219,20 @@ class GEOWorkflowOrchestrator:
                     logger.warning(f"Failed to load {dataset.accession}")
                     continue
                 
+                logger.info(f"loaded data for {dataset.accession} {dataset.title}")
+                
+                # Quality check: minimum sample size
+                n_samples = len(loaded_data.expression_matrix.columns)
+                if n_samples < 4:  # Need at least 2 per group
+                    logger.warning(f"Dataset {dataset.accession} has too few samples ({n_samples})")
+                    continue
+                
+                # Quality check: expression data
+                n_genes = len(loaded_data.expression_matrix)
+                if n_genes < 100:
+                    logger.warning(f"Dataset {dataset.accession} has too few genes ({n_genes})")
+                    continue
+                
                 # Perform DE analysis
                 de_result = await self.de_service.analyze_differential_expression(
                     loaded_data=loaded_data
@@ -341,7 +364,7 @@ async def example_workflow():
     """Example of complete workflow"""
     
     orchestrator = GEOWorkflowOrchestrator(
-        email="research@example.com",
+        email="svarogjk1989@gmail.com",
         model="mistral"
     )
     
