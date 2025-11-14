@@ -4,10 +4,13 @@ version = "0.1.0"
 description = "Caloric Restriction Project"
 requires-python = ">=3.13"
 dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
     "httpx>=0.28.1",
     "numpy>=2.3.4",
     "pandas==2.3",
     "pyarrow>=22.0.0",
+    "pydantic>=2.0.0",
     "pydantic-ai>=1.14.0",
     "scipy>=1.16.3",
     "statsmodels>=0.14.5",
