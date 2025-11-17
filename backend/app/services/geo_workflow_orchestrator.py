@@ -160,7 +160,8 @@ class GEOWorkflowOrchestrator:
             return result
         
         except Exception as e:
-            logger.error(f"GEO search failed: {e}")
+            logger.error(f"GEO search failed: {e}", exc_info=True)
+            logger.error(f"Keywords used: {keywords}")
             return GEOSearchResult(
                 datasets=[],
                 total_count=0,

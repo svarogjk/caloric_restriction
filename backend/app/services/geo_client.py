@@ -177,7 +177,8 @@ class GEOClient:
             )
         
         except Exception as e:
-            logger.error(f"Error searching GEO: {e}")
+            logger.error(f"Error searching GEO: {e}", exc_info=True)
+            logger.error(f"Search query was: {search_query}")
             raise
     
     async def fetch_datasets(self, ids: List[str]) -> List[GEODataset]:
