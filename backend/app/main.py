@@ -64,7 +64,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(routes.router)
+app.include_router(routes.router, prefix="/api")
 
 
 if __name__ == "__main__":

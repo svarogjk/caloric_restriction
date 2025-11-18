@@ -3,7 +3,7 @@ API routes for GEO Analysis
 """
 
 import logging
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException
 
 from app.models.request_models import AnalysisRequest
 from app.models.response_models import AnalysisResponse, HealthResponse, GeneOccurrenceResponse
@@ -39,19 +39,27 @@ async def health_check():
     )
 
 
-@router.post("/analyze", response_model=AnalysisResponse)
-async def analyze_geo_data(request: AnalysisRequest):
+@router.get("/models")
+async def get_available_models():
     """
-    Analyze GEO datasets for common differential expression patterns
+    Get available LLM models for search
+    
+    Returns:
+        List of available model names
+    """
+    return ["mistral", "claude"]
+
+
+@router.post("/search", response_model=AnalysisResponse)
+async def search_datasets(request: AnalysisRequest):
+    """
+    Search for datasets related to a query using LLM analysis
     
     Args:
         request: AnalysisRequest containing search parameters
     
     Returns:
         AnalysisResponse with common genes and analysis results
-    
-    Raises:
-        HTTPException: If analysis fails
     """
     global orchestrator
     
@@ -62,9 +70,9 @@ async def analyze_geo_data(request: AnalysisRequest):
         )
     
     try:
-        logger.info(f"Received analysis request: {request.query}")
+        logger.info(f"Received search request: {request.query}")
         
-        # Run analysis
+        # Run analysis with the search query
         result: CrossDatasetAnalysis = await orchestrator.analyze_query(
             query=request.query,
             max_datasets=request.max_datasets,
@@ -94,52 +102,9 @@ async def analyze_geo_data(request: AnalysisRequest):
         )
     
     except Exception as e:
-        logger.error(f"Analysis failed: {e}", exc_info=True)
+        logger.error(f"Search failed: {e}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail=f"Analysis failed: {str(e)}"
+            detail=f"Search failed: {str(e)}"
         )
 
-
-@router.get("/analyze/quick", response_model=AnalysisResponse)
-async def quick_analysis():
-    """
-    Quick analysis endpoint with default parameters
-    
-    Useful for testing the API
-    
-    Returns:
-        AnalysisResponse with common genes
-    """
-    request = AnalysisRequest(
-        query="caloric restriction aging lifespan",
-        max_datasets=5,
-        organism="Mus musculus",
-        min_occurrence=2
-    )
-    return await analyze_geo_data(request)
-
-
-@router.post("/analyze/async")
-async def analyze_geo_data_async(
-    request: AnalysisRequest,
-    background_tasks: BackgroundTasks
-):
-    """
-    Asynchronous analysis endpoint - returns immediately with task ID
-    
-    Note: This is a placeholder for future implementation of
-    job tracking and result retrieval
-    
-    Args:
-        request: AnalysisRequest containing search parameters
-        background_tasks: FastAPI background tasks
-    
-    Returns:
-        Dict with task_id for result retrieval
-    """
-    # TODO: Implement job tracking with database
-    return {
-        "message": "Async analysis not yet implemented",
-        "status": "not_implemented"
-    }

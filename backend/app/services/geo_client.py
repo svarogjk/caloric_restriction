@@ -13,6 +13,7 @@ import xml.etree.ElementTree as ET
 import httpx
 import time
 import re
+import ssl
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +66,17 @@ class GEOClient:
         if api_key:
             self.RATE_LIMIT_DELAY = 0.1
         
+        # Create SSL context with relaxed certificate verification
+        # This helps with SSL/TLS connection issues
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
         self.client = httpx.AsyncClient(
             timeout=60.0,
             follow_redirects=True,
-            headers={"User-Agent": f"GEOClient/1.0 ({email if email else 'no-email'})"}
+            headers={"User-Agent": f"GEOClient/1.0 ({email if email else 'no-email'})"},
+            verify=False  # Disable SSL verification for development/testing
         )
     
     async def _rate_limit(self):
@@ -128,7 +136,7 @@ class GEOClient:
         date_from: Optional[str] = None,
         date_to: Optional[str] = None
     ) -> GEOSearchResult:
-        """Search GEO for datasets"""
+        """Search GEO for datasets with retry logic"""
         await self._rate_limit()
         
         search_query = self._build_geo_query(
@@ -147,39 +155,54 @@ class GEOClient:
             usehistory="y"
         )
         
-        try:
-            response = await self.client.get(
-                f"{self.BASE_URL}/esearch.fcgi",
-                params=search_params
-            )
-            response.raise_for_status()
-            search_data = response.json()
-            
-            ids = search_data.get("esearchresult", {}).get("idlist", [])
-            total_count = int(search_data.get("esearchresult", {}).get("count", 0))
-            
-            if not ids:
-                logger.info(f"No GEO datasets found for query: {search_query}")
+        max_retries = 3
+        retry_delay = 2
+        
+        for attempt in range(max_retries):
+            try:
+                response = await self.client.get(
+                    f"{self.BASE_URL}/esearch.fcgi",
+                    params=search_params
+                )
+                response.raise_for_status()
+                search_data = response.json()
+                
+                ids = search_data.get("esearchresult", {}).get("idlist", [])
+                total_count = int(search_data.get("esearchresult", {}).get("count", 0))
+                
+                if not ids:
+                    logger.info(f"No GEO datasets found for query: {search_query}")
+                    return GEOSearchResult(
+                        datasets=[],
+                        total_count=0,
+                        search_query=search_query,
+                        timestamp=datetime.now()
+                    )
+                
+                datasets = await self.fetch_datasets(ids)
+                
                 return GEOSearchResult(
-                    datasets=[],
-                    total_count=0,
+                    datasets=datasets,
+                    total_count=total_count,
                     search_query=search_query,
                     timestamp=datetime.now()
                 )
             
-            datasets = await self.fetch_datasets(ids)
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPError) as e:
+                if attempt < max_retries - 1:
+                    logger.warning(f"GEO API connection error (attempt {attempt + 1}/{max_retries}): {type(e).__name__}. Retrying in {retry_delay}s...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # exponential backoff
+                    continue
+                else:
+                    logger.error(f"Error searching GEO after {max_retries} attempts: {e}", exc_info=True)
+                    logger.error(f"Search query was: {search_query}")
+                    raise
             
-            return GEOSearchResult(
-                datasets=datasets,
-                total_count=total_count,
-                search_query=search_query,
-                timestamp=datetime.now()
-            )
-        
-        except Exception as e:
-            logger.error(f"Error searching GEO: {e}", exc_info=True)
-            logger.error(f"Search query was: {search_query}")
-            raise
+            except Exception as e:
+                logger.error(f"Error searching GEO: {e}", exc_info=True)
+                logger.error(f"Search query was: {search_query}")
+                raise
     
     async def fetch_datasets(self, ids: List[str]) -> List[GEODataset]:
         """Fetch detailed information for GEO dataset IDs"""

@@ -146,22 +146,25 @@ class GEOWorkflowOrchestrator:
         organism: Optional[str],
         max_results: int
     ) -> GEOSearchResult:
-        """Search GEO for datasets"""
+        """Search GEO for datasets with improved error handling"""
         
         keywords = self._extract_keywords(query)
         
         try:
+            logger.info(f"Attempting GEO search with keywords: {keywords}")
             result = await self.geo_client.search(
                 keywords=keywords,
                 max_results=max_results,
                 organism=organism,
                 dataset_type="Expression profiling by array"
             )
+            logger.info(f"GEO search completed successfully. Found {result.total_count} total results, {len(result.datasets)} datasets retrieved.")
             return result
         
         except Exception as e:
-            logger.error(f"GEO search failed: {e}", exc_info=True)
+            logger.error(f"GEO search failed after retries: {type(e).__name__}: {e}")
             logger.error(f"Keywords used: {keywords}")
+            logger.warning(f"Returning empty results for query: {query}")
             return GEOSearchResult(
                 datasets=[],
                 total_count=0,

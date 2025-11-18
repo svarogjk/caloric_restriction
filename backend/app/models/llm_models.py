@@ -12,6 +12,12 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.mistral import MistralProvider
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
+# Configure logging for this module
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
 logger = logging.getLogger(__name__)
 
 # Initialize client and model (singleton pattern)
@@ -21,9 +27,19 @@ model_client = AsyncClient(timeout=3600)
 mistral_key = os.environ.get("MISTRAL_KEY", "")
 if not mistral_key:
     try:
-        with open("app/services/mistral_key.txt") as f:
+        # Try relative path from current directory
+        key_path = "app/services/mistral_key.txt"
+        if not os.path.exists(key_path):
+            # Try from parent directory
+            key_path = "backend/app/services/mistral_key.txt"
+        if not os.path.exists(key_path):
+            # Try finding from module location
+            import pathlib
+            key_path = pathlib.Path(__file__).parent.parent / "services" / "mistral_key.txt"
+        
+        with open(key_path) as f:
             mistral_key = f.read().rstrip()
-            logger.info("Mistral API key loaded from file")
+            logger.info(f"Mistral API key loaded from file: {key_path}")
     except FileNotFoundError:
         logger.warning("No Mistral API key found - using environment fallback")
         mistral_key = os.environ.get("LLM_API_KEY", "")
@@ -38,9 +54,19 @@ if not mistral_key:
 anthropic_key = os.environ.get("ANTHROPIC_KEY", "")
 if not anthropic_key:
     try:
-        with open("app/services/anthropic_key.txt") as f:
+        # Try relative path from current directory
+        key_path = "app/services/anthropic_key.txt"
+        if not os.path.exists(key_path):
+            # Try from parent directory
+            key_path = "backend/app/services/anthropic_key.txt"
+        if not os.path.exists(key_path):
+            # Try finding from module location
+            import pathlib
+            key_path = pathlib.Path(__file__).parent.parent / "services" / "anthropic_key.txt"
+        
+        with open(key_path) as f:
             anthropic_key = f.read().rstrip()
-            logger.info("Anthropic API key loaded from file")
+            logger.info(f"Anthropic API key loaded from file: {key_path}")
     except FileNotFoundError:
         logger.warning("No Anthropic API key found - using environment fallback")
         anthropic_key = os.environ.get("LLM_API_KEY", "")

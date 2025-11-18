@@ -13,13 +13,13 @@ const apiClient = axios.create({
 export const searchDatasets = async (
     query: string,
     model: string
-): Promise<Dataset[]> => {
+): Promise<any> => {
     try {
-        const response = await apiClient.get<Dataset[]>('/search', {
-            params: {
-                q: query,
-                model: model !== 'all-models' ? model : undefined,
-            },
+        const response = await apiClient.post('/search', {
+            query: query,
+            max_datasets: 10,
+            organism: 'Mus musculus',
+            min_occurrence: 1
         })
         return response.data
     } catch (error) {
