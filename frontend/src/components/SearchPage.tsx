@@ -77,6 +77,14 @@ const SearchPage: React.FC = () => {
           className="bg-white rounded-lg shadow-lg p-8 mb-8"
           onKeyPress={handleKeyPress}
         >
+          <div className="flex gap-6 mb-6">
+            <ModelSelector
+              selectedModel={selectedModel}
+              models={models}
+              onChange={(value) => dispatch(setSelectedModel(value))}
+            />
+          </div>
+
           <SearchBar
             query={query}
             onChange={(value) => dispatch(setQuery(value))}
@@ -84,16 +92,10 @@ const SearchPage: React.FC = () => {
             loading={loading}
           />
 
-          <ModelSelector
-            selectedModel={selectedModel}
-            models={models}
-            onChange={(value) => dispatch(setSelectedModel(value))}
-          />
-
           <button
             onClick={handleSearch}
             disabled={loading}
-            className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 text-white font-semibold py-3 px-6 rounded-lg transition duration-200 flex items-center justify-center"
+            className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-white font-semibold py-2 px-6 rounded-lg transition duration-200 flex items-center justify-center text-sm cursor-pointer active:bg-indigo-800"
           >
             {loading ? (
               <>

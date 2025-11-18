@@ -12,21 +12,17 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
   onChange,
 }) => {
   return (
-    <div>
+    <div className="w-48">
       <label className="block text-sm font-medium text-gray-700 mb-2">
-        Analysis Model
+        LLM Model
       </label>
       <select
         value={selectedModel}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white transition"
+        onChange={(e) => onChange(e.value)}
+        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white transition"
       >
-        <option value="all-models">All Models</option>
-        {models.map((model) => (
-          <option key={model} value={model}>
-            {model}
-          </option>
-        ))}
+        <option value="mistral">Mistral</option>
+        <option value="claude">Claude</option>
       </select>
     </div>
   )
