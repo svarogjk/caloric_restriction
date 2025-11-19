@@ -102,6 +102,17 @@ class GEODataLoaderService:
         
         self.client = httpx.AsyncClient(timeout=300.0, follow_redirects=True)
     
+    def set_model(self, model: str) -> None:
+        """Update the model used by the format agent"""
+        self.model = model
+        self.format_agent = Agent(
+            model=model_dict.get(self.model, model_dict["mistral"]),
+            output_type=DataLoadingStrategy,
+            system_prompt=self._get_format_detection_prompt(),
+            retries=2,
+        )
+        logger.info(f"Updated loader service to use model: {model}")
+    
     def _get_format_detection_prompt(self) -> str:
         """Get system prompt for format detection"""
         return """You are an expert at parsing GEO dataset files.

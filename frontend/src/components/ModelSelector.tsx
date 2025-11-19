@@ -18,7 +18,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       </label>
       <select
         value={selectedModel}
-        onChange={(e) => onChange(e.value)}
+        onChange={(e) => onChange(e.target.value)}
         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white transition"
       >
         <option value="mistral">Mistral</option>

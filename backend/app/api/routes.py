@@ -70,14 +70,20 @@ async def search_datasets(request: AnalysisRequest):
         )
     
     try:
-        logger.info(f"Received search request: {request.query}")
+        # Map "claude" to "anthropic" for internal use
+        model = request.model
+        if model == "claude":
+            model = "anthropic"
         
-        # Run analysis with the search query
+        logger.info(f"Received search request: {request.query} with model: {request.model} (mapped to {model})")
+        
+        # Run analysis with the search query and selected model
         result: CrossDatasetAnalysis = await orchestrator.analyze_query(
             query=request.query,
             max_datasets=request.max_datasets,
             organism=request.organism,
-            min_occurrence=request.min_occurrence
+            min_occurrence=request.min_occurrence,
+            model=model
         )
         
         # Convert GeneOccurrence objects to response models
@@ -86,6 +92,8 @@ async def search_datasets(request: AnalysisRequest):
                 gene_id=gene.gene_id,
                 n_datasets=gene.n_datasets,
                 avg_log_fc=gene.avg_log_fc,
+                avg_p_value=gene.avg_p_value,
+                avg_adj_p_value=gene.avg_adj_p_value,
                 direction_consistency=gene.direction_consistency,
                 datasets=gene.datasets
             )

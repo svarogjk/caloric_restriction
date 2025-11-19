@@ -6,7 +6,7 @@ Identifies commonly altered genes across multiple datasets
 
 import logging
 import asyncio
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 from collections import Counter
@@ -14,11 +14,10 @@ import pandas as pd
 
 from app.services.geo_client import GEOClient, GEODataset, GEOSearchResult
 from app.services.geo_ranking_service import GEODatasetRankingService
-from app.services.geo_loader_service import GEODataLoaderService, LoadedGEOData
+from app.services.geo_loader_service import GEODataLoaderService
 from app.services.differential_expression_service import (
     DifferentialExpressionService,
-    DifferentialExpressionResult,
-    DEGResult
+    DifferentialExpressionResult
 )
 
 # Configure logging
@@ -40,6 +39,8 @@ class GeneOccurrence:
     gene_id: str
     n_datasets: int
     avg_log_fc: float
+    avg_p_value: float
+    avg_adj_p_value: float
     datasets: List[str]
     direction_consistency: float  # 0-1, how consistent is up/down regulation
 
@@ -79,7 +80,8 @@ class GEOWorkflowOrchestrator:
         self.loader_service = GEODataLoaderService(model=model)
         self.de_service = DifferentialExpressionService(
             fdr_threshold=0.05,
-            log_fc_threshold=1.0
+            log_fc_threshold=1.0,
+            model=model
         )
     
     async def analyze_query(
@@ -87,7 +89,8 @@ class GEOWorkflowOrchestrator:
         query: str,
         max_datasets: int = 10,
         organism: Optional[str] = "Mus musculus",
-        min_occurrence: int = 2
+        min_occurrence: int = 2,
+        model: Optional[str] = None
     ) -> CrossDatasetAnalysis:
         """
         Complete analysis workflow for a query
@@ -97,12 +100,22 @@ class GEOWorkflowOrchestrator:
             max_datasets: Maximum datasets to analyze
             organism: Filter by organism
             min_occurrence: Minimum datasets where gene must appear
+            model: LLM model to use ('mistral' or 'claude'), defaults to instance model
         
         Returns:
             CrossDatasetAnalysis with common genes
         """
         start_time = datetime.now()
-        logger.info(f"Starting GEO analysis workflow for: {query}")
+        
+        # Use provided model or fall back to instance model
+        use_model = model if model else "mistral"  # Default fallback
+        logger.info(f"Starting GEO analysis workflow for: {query} with model: {use_model}")
+        
+        # Update services to use the specified model if different from current
+        if model:
+            self.ranking_service.set_model(model)
+            self.loader_service.set_model(model)
+            self.de_service.set_model(model)
         
         # Step 1: Search GEO
         search_result = await self._search_geo(query, organism, max_datasets * 2)
@@ -250,7 +263,7 @@ class GEOWorkflowOrchestrator:
                     deg_results.append(de_result)
                     logger.info(f"  Found {de_result.n_upregulated + de_result.n_downregulated} DEGs")
                 else:
-                    logger.warning(f"  No significant DEGs found")
+                    logger.warning("  No significant DEGs found")
             
             except Exception as e:
                 logger.error(f"Error processing {dataset.accession}: {e}")
@@ -266,7 +279,7 @@ class GEOWorkflowOrchestrator:
         """Identify genes commonly altered across datasets"""
         
         # Collect all significant genes
-        gene_data = {}  # gene_id -> {datasets: [], log_fcs: [], directions: []}
+        gene_data = {}  # gene_id -> {datasets: [], log_fcs: [], directions: [], p_values: [], adj_p_values: []}
         
         for result in deg_results:
             significant_degs = [deg for deg in result.deg_genes if deg.is_significant]
@@ -278,12 +291,16 @@ class GEOWorkflowOrchestrator:
                     gene_data[gene_id] = {
                         'datasets': [],
                         'log_fcs': [],
-                        'directions': []
+                        'directions': [],
+                        'p_values': [],
+                        'adj_p_values': []
                     }
                 
                 gene_data[gene_id]['datasets'].append(result.accession)
                 gene_data[gene_id]['log_fcs'].append(deg.log_fold_change)
                 gene_data[gene_id]['directions'].append(1 if deg.log_fold_change > 0 else -1)
+                gene_data[gene_id]['p_values'].append(deg.p_value)
+                gene_data[gene_id]['adj_p_values'].append(deg.adj_p_value)
         
         # Filter by minimum occurrence
         common_genes = []
@@ -293,6 +310,8 @@ class GEOWorkflowOrchestrator:
             
             if n_datasets >= min_occurrence:
                 avg_log_fc = sum(data['log_fcs']) / len(data['log_fcs'])
+                avg_p_value = sum(data['p_values']) / len(data['p_values'])
+                avg_adj_p_value = sum(data['adj_p_values']) / len(data['adj_p_values'])
                 
                 # Calculate direction consistency
                 direction_counts = Counter(data['directions'])
@@ -303,6 +322,8 @@ class GEOWorkflowOrchestrator:
                     gene_id=gene_id,
                     n_datasets=n_datasets,
                     avg_log_fc=avg_log_fc,
+                    avg_p_value=avg_p_value,
+                    avg_adj_p_value=avg_adj_p_value,
                     datasets=data['datasets'],
                     direction_consistency=direction_consistency
                 ))
@@ -381,12 +402,12 @@ async def example_workflow():
             min_occurrence=2
         )
         
-        print(f"\n=== GEO Analysis Results ===")
+        print("\n=== GEO Analysis Results ===")
         print(f"Query: {result.query}")
         print(f"Datasets analyzed: {result.n_datasets_analyzed}")
         print(f"Datasets with DEGs: {result.n_datasets_with_degs}")
         print(f"Processing time: {result.processing_time:.1f}s")
-        print(f"\nTop 20 Common Genes:")
+        print("\nTop 20 Common Genes:")
         print(f"{'Gene ID':<20} {'Datasets':<10} {'Avg LogFC':<12} {'Direction':<12}")
         print("-" * 60)
         

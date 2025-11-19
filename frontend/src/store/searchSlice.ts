@@ -1,32 +1,38 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit'
 
-export interface Dataset {
-    id: string
-    name: string
-    description: string
-    geneExpression: {
-        log2FoldChange: number
-        pValue: number
-        gene: string
-    }[]
+export interface GeneOccurrence {
+    gene_id: string
+    n_datasets: number
+    avg_log_fc: number
+    direction_consistency: number
+    datasets: string[]
+}
+
+export interface AnalysisResult {
+    query: string
+    n_datasets_analyzed: number
+    n_datasets_with_degs: number
+    common_genes: GeneOccurrence[]
+    processing_time: number
+    timestamp: string
 }
 
 export interface SearchState {
     query: string
     selectedModel: string
-    results: Dataset[]
+    results: AnalysisResult | null
     loading: boolean
     error: string | null
-    expandedDatasetId: string | null
+    expandedGeneId: string | null
 }
 
 const initialState: SearchState = {
     query: '',
-    selectedModel: 'all-models',
-    results: [],
+    selectedModel: 'mistral',
+    results: null,
     loading: false,
     error: null,
-    expandedDatasetId: null,
+    expandedGeneId: null,
 }
 
 const searchSlice = createSlice({
@@ -42,14 +48,14 @@ const searchSlice = createSlice({
         setLoading: (state, action: PayloadAction<boolean>) => {
             state.loading = action.payload
         },
-        setResults: (state, action: PayloadAction<Dataset[]>) => {
+        setResults: (state, action: PayloadAction<AnalysisResult>) => {
             state.results = action.payload
         },
         setError: (state, action: PayloadAction<string | null>) => {
             state.error = action.payload
         },
-        expandDataset: (state, action: PayloadAction<string>) => {
-            state.expandedDatasetId = state.expandedDatasetId === action.payload ? null : action.payload
+        expandGene: (state, action: PayloadAction<string>) => {
+            state.expandedGeneId = state.expandedGeneId === action.payload ? null : action.payload
         },
     },
 })
@@ -60,7 +66,7 @@ export const {
     setLoading,
     setResults,
     setError,
-    expandDataset,
+    expandGene,
 } = searchSlice.actions
 
 export default searchSlice.reducer

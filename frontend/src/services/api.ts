@@ -17,9 +17,10 @@ export const searchDatasets = async (
     try {
         const response = await apiClient.post('/search', {
             query: query,
+            model: model,
             max_datasets: 10,
             organism: 'Mus musculus',
-            min_occurrence: 1
+            min_occurrence: 2
         })
         return response.data
     } catch (error) {

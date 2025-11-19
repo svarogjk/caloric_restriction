@@ -12,11 +12,79 @@ import pandas as pd
 import numpy as np
 from scipy import stats
 from statsmodels.stats.multitest import multipletests
+from pydantic_ai import Agent
+from pydantic import BaseModel, Field
 
 from app.services.geo_loader_service import LoadedGEOData
 
 logger = logging.getLogger(__name__)
 warnings.filterwarnings('ignore')
+
+
+# Response model for LLM group detection
+class GroupDetectionResponse(BaseModel):
+    """Response model for LLM group detection"""
+    treatment_sample_ids: List[str] = Field(
+        ...,
+        description="List of sample IDs identified as treatment/intervention group"
+    )
+    control_sample_ids: List[str] = Field(
+        ...,
+        description="List of sample IDs identified as control group"
+    )
+    reasoning: str = Field(
+        ...,
+        description="Explanation of how groups were identified"
+    )
+    confidence: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Confidence score for the group detection (0.0-1.0)"
+    )
+
+
+def create_group_detection_agent(model: str = "anthropic") -> Agent:
+    """Create LLM agent for group detection with specified model
+    
+    Args:
+        model: Model to use ('anthropic' or 'mistral')
+        
+    Returns:
+        Configured Agent instance
+    """
+    from app.models.llm_models import model_dict
+    
+    selected_model = model_dict.get(model)
+    if not selected_model:
+        logger.warning(f"Unknown model '{model}', defaulting to mistral")
+        selected_model = model_dict.get("mistral", model_dict["mistral"])
+    
+    logger.info(f"Creating group detection agent with model: {model}")
+    
+    system_prompt = """You are an expert at analyzing GEO dataset metadata to identify experimental groups.
+
+Your task: Identify which samples are treatment/intervention vs control groups.
+
+You MUST return a structured response with:
+- treatment_sample_ids: list of sample IDs in treatment group
+- control_sample_ids: list of sample IDs in control group  
+- reasoning: brief explanation of your decision
+- confidence: score 0.0-1.0 for your confidence
+
+Look for keywords in metadata like:
+- Treatment/intervention: CR, caloric restriction, drug, treatment, aged, old, HFD, high fat
+- Control: control, ad lib, vehicle, placebo, young, CON, normal diet
+
+Return ONLY the structured data, no additional text."""
+    
+    return Agent(
+        model=selected_model,
+        output_type=GroupDetectionResponse,
+        system_prompt=system_prompt,
+        retries=2
+    )
+
 
 
 @dataclass
@@ -59,7 +127,8 @@ class DifferentialExpressionService:
         self,
         fdr_threshold: float = 0.05,
         log_fc_threshold: float = 1.0,
-        min_samples_per_group: int = 3
+        min_samples_per_group: int = 3,
+        model: str = "anthropic"
     ):
         """
         Initialize DE analysis service
@@ -68,10 +137,19 @@ class DifferentialExpressionService:
             fdr_threshold: FDR cutoff for significance
             log_fc_threshold: Minimum absolute log fold change
             min_samples_per_group: Minimum samples required per group
+            model: LLM model to use for group detection ('anthropic' or 'mistral')
         """
         self.fdr_threshold = fdr_threshold
         self.log_fc_threshold = log_fc_threshold
         self.min_samples_per_group = min_samples_per_group
+        self.model = model
+        self.group_detection_agent = create_group_detection_agent(model)
+    
+    def set_model(self, model: str) -> None:
+        """Update the model used by the group detection agent"""
+        self.model = model
+        self.group_detection_agent = create_group_detection_agent(model)
+        logger.info(f"Updated differential expression service to use model: {model}")
     
     async def analyze_differential_expression(
         self,
@@ -94,7 +172,7 @@ class DifferentialExpressionService:
         
         # Auto-detect groups if not provided
         if treatment_samples is None or control_samples is None:
-            treatment_samples, control_samples = self._detect_groups(loaded_data)
+            treatment_samples, control_samples = await self._detect_groups(loaded_data)
             
             if not treatment_samples or not control_samples:
                 logger.error("Could not detect treatment/control groups")
@@ -178,12 +256,12 @@ class DifferentialExpressionService:
             log_fc_threshold=self.log_fc_threshold
         )
     
-    def _detect_groups(
+    async def _detect_groups(
         self,
         loaded_data: LoadedGEOData
     ) -> Tuple[List[str], List[str]]:
         """
-        Auto-detect treatment and control groups from metadata
+        Auto-detect treatment and control groups from metadata using LLM agent with fallback
         
         Returns:
             (treatment_samples, control_samples)
@@ -201,7 +279,19 @@ class DifferentialExpressionService:
         # Ensure metadata index matches expression matrix columns
         metadata = metadata[metadata.index.isin(expr_samples)]
         
-        # Look for common metadata columns indicating groups
+        # Try LLM agent first
+        try:
+            llm_groups = await self._detect_groups_with_llm(metadata, expr_samples)
+            if llm_groups:
+                treatment_samples, control_samples = llm_groups
+                if (len(treatment_samples) >= self.min_samples_per_group and 
+                    len(control_samples) >= self.min_samples_per_group):
+                    logger.info(f"LLM detected groups: {len(treatment_samples)} treatment, {len(control_samples)} control")
+                    return treatment_samples, control_samples
+        except Exception as e:
+            logger.warning(f"LLM group detection failed, falling back to keyword matching: {e}")
+        
+        # Fallback: Look for common metadata columns indicating groups
         group_columns = ['characteristics_ch1', 'source_name_ch1', 'title', 'description']
         
         for col in group_columns:
@@ -229,7 +319,7 @@ class DifferentialExpressionService:
             if (treatment_samples and control_samples and 
                 len(treatment_samples) >= self.min_samples_per_group and
                 len(control_samples) >= self.min_samples_per_group):
-                logger.info(f"Detected groups from column '{col}'")
+                logger.info(f"Detected groups from column '{col}' using keyword matching")
                 return treatment_samples, control_samples
         
         # If no clear groups found, try to split by unique values
@@ -256,6 +346,146 @@ class DifferentialExpressionService:
         samples = list(expr_samples)
         n = len(samples)
         return samples[:n//2], samples[n//2:]
+    
+    async def _detect_groups_with_llm(
+        self,
+        metadata: pd.DataFrame,
+        expr_samples: set
+    ) -> Optional[Tuple[List[str], List[str]]]:
+        """
+        Use LLM agent to intelligently detect treatment and control groups
+        
+        Args:
+            metadata: Sample metadata DataFrame
+            expr_samples: Set of sample IDs in expression matrix
+            
+        Returns:
+            (treatment_samples, control_samples) or None if detection fails
+        """
+        # Prepare metadata summary for LLM
+        metadata_summary = self._prepare_metadata_for_llm(metadata)
+        
+        try:
+            result = await self._run_group_detection_agent(metadata_summary)
+            
+            if not result:
+                return None
+            
+            # Validate detected samples exist in expression matrix
+            treatment_samples = [s for s in result.treatment_sample_ids if s in expr_samples]
+            control_samples = [s for s in result.control_sample_ids if s in expr_samples]
+            
+            logger.info(f"LLM reasoning: {result.reasoning} (confidence: {result.confidence:.2f})")
+            
+            if treatment_samples and control_samples:
+                return treatment_samples, control_samples
+            
+            return None
+            
+        except Exception as e:
+            logger.warning(f"LLM agent execution failed: {e}")
+            return None
+    
+    async def _run_group_detection_agent(self, metadata_summary: str) -> Optional[GroupDetectionResponse]:
+        """Run the group detection agent asynchronously"""
+        try:
+            prompt = f"""Analyze the following GEO dataset sample metadata and identify treatment and control groups.
+
+Metadata Summary:
+{metadata_summary}
+
+Instructions:
+1. Identify which samples belong to the TREATMENT/INTERVENTION group
+2. Identify which samples belong to the CONTROL group
+3. Each group MUST have at least 3 samples
+4. Return the sample IDs (like GSM123456) for each group
+5. Explain your reasoning briefly
+
+Look for indicators in the metadata:
+- Treatment keywords: CR, caloric restriction, treatment, drug, intervention, aged, old, HFD, high fat, DIO
+- Control keywords: control, ad lib, ad libitum, placebo, vehicle, young, CON, normal diet, LFD
+
+Return your response in the required structured format."""
+            
+            result = await self.group_detection_agent.run(prompt)
+            
+            # Try different ways to extract the structured response from pydantic_ai
+            response = None
+            
+            # Method 1: Try .output attribute (most common in newer versions)
+            if hasattr(result, 'output'):
+                output = result.output
+                if isinstance(output, GroupDetectionResponse):
+                    response = output
+                elif isinstance(output, dict):
+                    # Try to construct from dict
+                    try:
+                        response = GroupDetectionResponse(**output)
+                    except Exception as e:
+                        logger.warning(f"Failed to construct from dict: {e}")
+                elif isinstance(output, str):
+                    # LLM returned text instead of structured output - this shouldn't happen
+                    logger.warning(f"LLM returned text instead of structured output: {output[:200]}")
+            
+            # Method 2: Try .data attribute/method
+            if response is None and hasattr(result, 'data'):
+                try:
+                    data = result.data if not callable(result.data) else result.data()
+                    if isinstance(data, GroupDetectionResponse):
+                        response = data
+                    elif isinstance(data, dict):
+                        response = GroupDetectionResponse(**data)
+                except (AttributeError, TypeError) as e:
+                    logger.debug(f"Could not get data: {e}")
+            
+            # Method 3: Check if result itself is the response
+            if response is None and isinstance(result, GroupDetectionResponse):
+                response = result
+            
+            if response is None:
+                logger.warning(f"Could not extract GroupDetectionResponse from result type: {type(result)}")
+                if hasattr(result, '__dict__'):
+                    logger.debug(f"Result attributes: {result.__dict__.keys()}")
+                return None
+            
+            # Validate the response has required data
+            if not response.treatment_sample_ids or not response.control_sample_ids:
+                logger.warning(f"LLM returned empty groups: treatment={len(response.treatment_sample_ids)}, control={len(response.control_sample_ids)}")
+                return None
+            
+            return response
+            
+        except Exception as e:
+            logger.warning(f"Group detection agent failed: {e}")
+            import traceback
+            logger.debug(f"Traceback: {traceback.format_exc()}")
+            return None
+    
+    def _prepare_metadata_for_llm(self, metadata: pd.DataFrame) -> str:
+        """
+        Prepare metadata in a format suitable for LLM analysis
+        
+        Args:
+            metadata: Sample metadata DataFrame
+            
+        Returns:
+            Formatted string summary of metadata
+        """
+        summary_lines = []
+        summary_lines.append(f"Total samples: {len(metadata)}")
+        summary_lines.append(f"Available columns: {', '.join(metadata.columns.tolist())}\n")
+        
+        # Include key metadata columns
+        key_columns = ['characteristics_ch1', 'source_name_ch1', 'title', 'description']
+        for col in key_columns:
+            if col in metadata.columns:
+                summary_lines.append(f"\n{col}:")
+                # Sample a few entries from each column
+                samples = metadata[col].astype(str).head(min(10, len(metadata)))
+                for idx, val in samples.items():
+                    summary_lines.append(f"  {idx}: {val[:100]}")  # Truncate long values
+        
+        return "\n".join(summary_lines)
     
     def _test_gene(
         self,

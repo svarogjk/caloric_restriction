@@ -31,3 +31,7 @@ class AnalysisRequest(BaseModel):
         le=50,
         description="Minimum datasets where gene must appear"
     )
+    model: str = Field(
+        default="mistral",
+        description="LLM model to use ('mistral' or 'claude')"
+    )

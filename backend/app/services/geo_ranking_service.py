@@ -55,6 +55,17 @@ class GEODatasetRankingService:
             retries=2,
         )
     
+    def set_model(self, model: str) -> None:
+        """Update the model used by the ranking agent"""
+        self.model = model
+        self.ranking_agent = Agent(
+            model=model_dict.get(self.model, model_dict["mistral"]),
+            output_type=RankedDatasets,
+            system_prompt=self._get_system_prompt(),
+            retries=2,
+        )
+        logger.info(f"Updated ranking service to use model: {model}")
+    
     def _get_system_prompt(self) -> str:
         """Get system prompt for dataset ranking"""
         return """You are an expert at identifying GEO datasets suitable for differential expression analysis.

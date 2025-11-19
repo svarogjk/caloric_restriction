@@ -12,6 +12,8 @@ class GeneOccurrenceResponse(BaseModel):
     gene_id: str
     n_datasets: int
     avg_log_fc: float
+    avg_p_value: float
+    avg_adj_p_value: float
     direction_consistency: float
     datasets: List[str]
 

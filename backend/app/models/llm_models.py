@@ -91,7 +91,7 @@ mistral_model = MistralModel(
 
 # Create the model instance
 anthropic_model = AnthropicModel(
-    "claude-sonnet-4-5",
+    "claude-haiku-4-5",
     provider=AnthropicProvider(
         api_key=anthropic_key,
         http_client=model_client,

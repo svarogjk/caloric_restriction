@@ -11,7 +11,8 @@ import { RootState } from '../store/store'
 import { searchDatasets, getAvailableModels } from '../services/api'
 import SearchBar from './SearchBar'
 import ModelSelector from './ModelSelector'
-import DatasetList from './DatasetList'
+import GeneList from './GeneList'
+import VolcanoPlot from './VolcanoPlot'
 
 const SearchPage: React.FC = () => {
   const dispatch = useDispatch()
@@ -133,16 +134,68 @@ const SearchPage: React.FC = () => {
           </div>
         )}
 
-        {results.length > 0 && (
+        {results && (
           <div>
-            <h2 className="text-2xl font-bold text-gray-800 mb-4">
-              Results ({results.length})
-            </h2>
-            <DatasetList datasets={results} />
+            <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                Analysis Results
+              </h2>
+              <div className="grid grid-cols-3 gap-4 mb-6">
+                <div className="bg-blue-50 p-4 rounded-lg">
+                  <p className="text-gray-600 text-sm font-medium">
+                    Datasets Analyzed
+                  </p>
+                  <p className="text-3xl font-bold text-blue-600">
+                    {results.n_datasets_analyzed}
+                  </p>
+                </div>
+                <div className="bg-green-50 p-4 rounded-lg">
+                  <p className="text-gray-600 text-sm font-medium">
+                    With DEGs
+                  </p>
+                  <p className="text-3xl font-bold text-green-600">
+                    {results.n_datasets_with_degs}
+                  </p>
+                </div>
+                <div className="bg-purple-50 p-4 rounded-lg">
+                  <p className="text-gray-600 text-sm font-medium">
+                    Common Genes
+                  </p>
+                  <p className="text-3xl font-bold text-purple-600">
+                    {results.common_genes.length}
+                  </p>
+                </div>
+              </div>
+              <p className="text-gray-500 text-sm">
+                Processing time: {results.processing_time.toFixed(2)} seconds
+              </p>
+            </div>
+
+            {results.common_genes.length > 0 && (
+              <div>
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                  Volcano Plot
+                </h2>
+                <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+                  <VolcanoPlot 
+                    data={results.common_genes.map((gene: any) => ({
+                      gene: gene.gene_id,
+                      log2FoldChange: gene.avg_log_fc,
+                      pValue: gene.avg_adj_p_value
+                    }))}
+                  />
+                </div>
+
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">
+                  Common Genes ({results.common_genes.length})
+                </h2>
+                <GeneList genes={results.common_genes} />
+              </div>
+            )}
           </div>
         )}
 
-        {!loading && results.length === 0 && !error && (
+        {!loading && !results && !error && (
           <div className="text-center py-12">
             <svg
               className="mx-auto h-12 w-12 text-gray-400"
