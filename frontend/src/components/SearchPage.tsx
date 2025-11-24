@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux'
 import {
   setQuery,
   setSelectedModel,
+  setDatasetCount,
   setLoading,
   setResults,
   setError,
@@ -11,12 +12,13 @@ import { RootState } from '../store/store'
 import { searchDatasets, getAvailableModels } from '../services/api'
 import SearchBar from './SearchBar'
 import ModelSelector from './ModelSelector'
+import DatasetCountSelector from './DatasetCountSelector'
 import GeneList from './GeneList'
 import VolcanoPlot from './VolcanoPlot'
 
 const SearchPage: React.FC = () => {
   const dispatch = useDispatch()
-  const { query, selectedModel, results, loading, error } = useSelector(
+  const { query, selectedModel, datasetCount, results, loading, error } = useSelector(
     (state: RootState) => state.search
   )
   const [models, setModels] = React.useState<string[]>([])
@@ -44,7 +46,7 @@ const SearchPage: React.FC = () => {
     dispatch(setError(null))
 
     try {
-      const data = await searchDatasets(query, selectedModel)
+      const data = await searchDatasets(query, selectedModel, datasetCount)
       dispatch(setResults(data))
     } catch (err) {
       dispatch(
@@ -55,7 +57,7 @@ const SearchPage: React.FC = () => {
     } finally {
       dispatch(setLoading(false))
     }
-  }, [query, selectedModel, dispatch])
+  }, [query, selectedModel, datasetCount, dispatch])
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter') {
@@ -83,6 +85,10 @@ const SearchPage: React.FC = () => {
               selectedModel={selectedModel}
               models={models}
               onChange={(value) => dispatch(setSelectedModel(value))}
+            />
+            <DatasetCountSelector
+              value={datasetCount}
+              onChange={(value) => dispatch(setDatasetCount(value))}
             />
           </div>
 

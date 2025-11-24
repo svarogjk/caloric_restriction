@@ -18,7 +18,7 @@ class AnalysisRequest(BaseModel):
     max_datasets: int = Field(
         default=10,
         ge=1,
-        le=100,
+        le=1000,
         description="Maximum number of datasets to analyze"
     )
     organism: Optional[str] = Field(

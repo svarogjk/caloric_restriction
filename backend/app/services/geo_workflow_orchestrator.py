@@ -118,7 +118,7 @@ class GEOWorkflowOrchestrator:
             self.de_service.set_model(model)
         
         # Step 1: Search GEO
-        search_result = await self._search_geo(query, organism, max_datasets * 2)
+        search_result = await self._search_geo(query, organism, max_datasets)
         
         if not search_result.datasets:
             logger.warning("No datasets found")
@@ -276,36 +276,39 @@ class GEOWorkflowOrchestrator:
         deg_results: List[DifferentialExpressionResult],
         min_occurrence: int
     ) -> List[GeneOccurrence]:
-        """Identify genes commonly altered across datasets"""
+        """Identify genes commonly altered across datasets using gene symbols"""
         
-        # Collect all significant genes
-        gene_data = {}  # gene_id -> {datasets: [], log_fcs: [], directions: [], p_values: [], adj_p_values: []}
+        # Collect all significant genes, prioritizing gene symbols
+        gene_data = {}  # gene_identifier -> {datasets: [], log_fcs: [], directions: [], p_values: [], adj_p_values: [], probe_ids: []}
         
         for result in deg_results:
             significant_degs = [deg for deg in result.deg_genes if deg.is_significant]
             
             for deg in significant_degs:
-                gene_id = deg.gene_id
+                # Use gene symbol if available, otherwise use probe ID
+                gene_identifier = deg.gene_symbol if deg.gene_symbol else deg.gene_id
                 
-                if gene_id not in gene_data:
-                    gene_data[gene_id] = {
+                if gene_identifier not in gene_data:
+                    gene_data[gene_identifier] = {
                         'datasets': [],
                         'log_fcs': [],
                         'directions': [],
                         'p_values': [],
-                        'adj_p_values': []
+                        'adj_p_values': [],
+                        'probe_ids': []
                     }
                 
-                gene_data[gene_id]['datasets'].append(result.accession)
-                gene_data[gene_id]['log_fcs'].append(deg.log_fold_change)
-                gene_data[gene_id]['directions'].append(1 if deg.log_fold_change > 0 else -1)
-                gene_data[gene_id]['p_values'].append(deg.p_value)
-                gene_data[gene_id]['adj_p_values'].append(deg.adj_p_value)
+                gene_data[gene_identifier]['datasets'].append(result.accession)
+                gene_data[gene_identifier]['log_fcs'].append(deg.log_fold_change)
+                gene_data[gene_identifier]['directions'].append(1 if deg.log_fold_change > 0 else -1)
+                gene_data[gene_identifier]['p_values'].append(deg.p_value)
+                gene_data[gene_identifier]['adj_p_values'].append(deg.adj_p_value)
+                gene_data[gene_identifier]['probe_ids'].append(deg.gene_id)
         
         # Filter by minimum occurrence
         common_genes = []
         
-        for gene_id, data in gene_data.items():
+        for gene_identifier, data in gene_data.items():
             n_datasets = len(data['datasets'])
             
             if n_datasets >= min_occurrence:
@@ -319,7 +322,7 @@ class GEOWorkflowOrchestrator:
                 direction_consistency = max_direction_count / n_datasets
                 
                 common_genes.append(GeneOccurrence(
-                    gene_id=gene_id,
+                    gene_id=gene_identifier,  # Store the identifier (symbol or probe ID)
                     n_datasets=n_datasets,
                     avg_log_fc=avg_log_fc,
                     avg_p_value=avg_p_value,
@@ -330,6 +333,15 @@ class GEOWorkflowOrchestrator:
         
         # Sort by number of datasets (descending)
         common_genes.sort(key=lambda x: (x.n_datasets, abs(x.avg_log_fc)), reverse=True)
+        
+        logger.info(f"Found {len(common_genes)} common genes across datasets")
+        
+        # Log sample of common genes for verification
+        if common_genes:
+            sample_genes = common_genes[:10]
+            logger.info(f"Sample common genes:")
+            for gene in sample_genes:
+                logger.info(f"  {gene.gene_id}: found in {gene.n_datasets} datasets, avg_log2FC: {gene.avg_log_fc:.2f}, direction consistency: {gene.direction_consistency:.1%}")
         
         return common_genes
     

@@ -20,6 +20,7 @@ from pydantic_ai import Agent
 
 from app.models.llm_models import model_dict
 from app.services.geo_client import GEODataset
+from app.services.gene_mapping_service import GeneMappingService
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class LoadedGEOData:
     loading_strategy: DataLoadingStrategy
     quality_metrics: Dict[str, float]
     cache_path: Optional[Path] = None
+    probe_to_gene_mapping: Optional[Dict[str, str]] = None  # Probe ID -> Gene Symbol mapping
 
 
 class GEODataLoaderService:
@@ -101,6 +103,7 @@ class GEODataLoaderService:
         )
         
         self.client = httpx.AsyncClient(timeout=300.0, follow_redirects=True)
+        self.gene_mapping_service = GeneMappingService()
     
     def set_model(self, model: str) -> None:
         """Update the model used by the format agent"""
@@ -202,6 +205,9 @@ class GEODataLoaderService:
         
         # Calculate quality metrics
         loaded_data.quality_metrics = self._calculate_quality_metrics(loaded_data)
+        
+        # Apply gene symbol mapping
+        loaded_data = await self.apply_gene_mapping(loaded_data)
         
         # Cache for future use
         if use_cache:
@@ -429,6 +435,58 @@ Determine the optimal parsing strategy for this file."""
             cache_path=cache_path
         )
     
+    async def apply_gene_mapping(self, data: LoadedGEOData) -> LoadedGEOData:
+        """
+        Apply gene symbol mapping to loaded GEO data
+        
+        Args:
+            data: Loaded GEO data with probe IDs
+        
+        Returns:
+            Data with probe_to_gene_mapping populated
+        """
+        if not data.platform_info or 'platform' not in data.platform_info:
+            logger.warning(f"No platform info for {data.accession}, skipping gene mapping")
+            return data
+        
+        platform_id = data.platform_info['platform']
+        if not platform_id or not isinstance(platform_id, str):
+            logger.warning(f"Invalid platform ID for {data.accession}, skipping gene mapping")
+            return data
+        
+        logger.info(f"Fetching gene mapping for platform {platform_id}")
+        
+        try:
+            # Get probe ID to gene symbol mapping
+            mapping = await self.gene_mapping_service.get_probe_to_gene_mapping(platform_id)
+            
+            if mapping:
+                data.probe_to_gene_mapping = mapping
+                mapped_count = sum(1 for probe_id in data.expression_matrix.index if probe_id in mapping)
+                logger.info(f"Mapped {mapped_count}/{len(data.expression_matrix)} probes to gene symbols for {data.accession}")
+                
+                # Log sample of mapped genes for verification
+                sample_mappings = []
+                for probe_id in list(data.expression_matrix.index)[:50]:  # Check first 50 probes
+                    if probe_id in mapping:
+                        sample_mappings.append((probe_id, mapping[probe_id]))
+                        if len(sample_mappings) >= 10:
+                            break
+                
+                if sample_mappings:
+                    logger.info(f"Sample gene mappings for {data.accession}:")
+                    for probe_id, gene_symbol in sample_mappings:
+                        logger.info(f"  {probe_id} → {gene_symbol}")
+            else:
+                logger.warning(f"Could not fetch gene mapping for platform {platform_id}")
+            
+            return data
+        
+        except Exception as e:
+            logger.error(f"Error applying gene mapping: {e}")
+            return data
+    
     async def close(self):
-        """Close HTTP client"""
+        """Close HTTP client and gene mapping service"""
         await self.client.aclose()
+        await self.gene_mapping_service.close()

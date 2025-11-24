@@ -12,13 +12,14 @@ const apiClient = axios.create({
 
 export const searchDatasets = async (
     query: string,
-    model: string
+    model: string,
+    maxDatasets: number = 10
 ): Promise<any> => {
     try {
         const response = await apiClient.post('/search', {
             query: query,
             model: model,
-            max_datasets: 10,
+            max_datasets: maxDatasets,
             organism: 'Mus musculus',
             min_occurrence: 2
         })

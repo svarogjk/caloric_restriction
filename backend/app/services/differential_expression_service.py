@@ -91,13 +91,14 @@ Return ONLY the structured data, no additional text."""
 class DEGResult:
     """Differential expression result for a single gene"""
     
-    gene_id: str
-    log_fold_change: float
-    p_value: float
-    adj_p_value: float
-    mean_treatment: float
-    mean_control: float
-    is_significant: bool
+    gene_id: str  # Original probe ID
+    gene_symbol: Optional[str] = None  # Mapped gene symbol (if available)
+    log_fold_change: float = 0.0
+    p_value: float = 1.0
+    adj_p_value: float = 1.0
+    mean_treatment: float = 0.0
+    mean_control: float = 0.0
+    is_significant: bool = False
 
 
 @dataclass
@@ -207,6 +208,11 @@ class DifferentialExpressionService:
             if result:
                 deg_results.append(result)
         
+        # Apply gene symbol mapping if available
+        if loaded_data.probe_to_gene_mapping:
+            for result in deg_results:
+                if result.gene_id in loaded_data.probe_to_gene_mapping:
+                    result.gene_symbol = loaded_data.probe_to_gene_mapping[result.gene_id]
         if not deg_results:
             logger.error("No genes passed filtering")
             return None
@@ -240,6 +246,15 @@ class DifferentialExpressionService:
         
         logger.info(f"Found {len(significant)} significant DEGs: "
                    f"{n_upregulated} up, {n_downregulated} down")
+        
+        # Log sample of mapped gene symbols for verification
+        if loaded_data.probe_to_gene_mapping:
+            sample_degs_with_symbols = [r for r in significant if r.gene_symbol][:10]
+            if sample_degs_with_symbols:
+                logger.info(f"Sample DEGs with gene symbols for {loaded_data.accession}:")
+                for deg in sample_degs_with_symbols:
+                    direction = "↑" if deg.log_fold_change > 0 else "↓"
+                    logger.info(f"  {direction} {deg.gene_symbol} (probe: {deg.gene_id}, log2FC: {deg.log_fold_change:.2f}, adj_p: {deg.adj_p_value:.2e})")
         
         return DifferentialExpressionResult(
             accession=loaded_data.accession,

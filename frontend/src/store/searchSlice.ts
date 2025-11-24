@@ -20,6 +20,7 @@ export interface AnalysisResult {
 export interface SearchState {
     query: string
     selectedModel: string
+    datasetCount: number
     results: AnalysisResult | null
     loading: boolean
     error: string | null
@@ -29,6 +30,7 @@ export interface SearchState {
 const initialState: SearchState = {
     query: '',
     selectedModel: 'mistral',
+    datasetCount: 10,
     results: null,
     loading: false,
     error: null,
@@ -44,6 +46,9 @@ const searchSlice = createSlice({
         },
         setSelectedModel: (state, action: PayloadAction<string>) => {
             state.selectedModel = action.payload
+        },
+        setDatasetCount: (state, action: PayloadAction<number>) => {
+            state.datasetCount = action.payload
         },
         setLoading: (state, action: PayloadAction<boolean>) => {
             state.loading = action.payload
@@ -63,6 +68,7 @@ const searchSlice = createSlice({
 export const {
     setQuery,
     setSelectedModel,
+    setDatasetCount,
     setLoading,
     setResults,
     setError,
