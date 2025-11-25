@@ -366,9 +366,12 @@ Determine the optimal parsing strategy for this file."""
             raise
     
     def _normalize_expression(self, data: LoadedGEOData) -> LoadedGEOData:
-        """Normalize expression data"""
+        """Normalize expression data with diagnostics"""
         
         expr = data.expression_matrix
+        
+        logger.info(f"Before normalization: min={expr.min().min():.2f}, max={expr.max().max():.2f}, "
+                   f"median={expr.median().median():.2f}, NaN rate={expr.isna().sum().sum() / expr.size:.1%}")
         
         # Log2 transform if not already
         if expr.min().min() >= 0 and expr.max().max() > 100:
@@ -377,12 +380,21 @@ Determine the optimal parsing strategy for this file."""
         
         # Quantile normalization across samples
         logger.info("Applying quantile normalization")
-        rank_mean = expr.stack().groupby(
-            expr.rank(method='first').stack().astype(int)
-        ).mean()
-        expr_normalized = expr.rank(method='min').stack().astype(int).map(rank_mean).unstack()
+        try:
+            rank_mean = expr.stack().groupby(
+                expr.rank(method='first').stack().astype(int)
+            ).mean()
+            expr_normalized = expr.rank(method='min').stack().astype(int).map(rank_mean).unstack()
+            
+            logger.info(f"After normalization: min={expr_normalized.min().min():.2f}, "
+                       f"max={expr_normalized.max().max():.2f}, "
+                       f"median={expr_normalized.median().median():.2f}")
+            
+            data.expression_matrix = expr_normalized
+        except Exception as e:
+            logger.warning(f"Quantile normalization failed: {e}. Using unnormalized data.")
+            data.expression_matrix = expr
         
-        data.expression_matrix = expr_normalized
         return data
     
     def _calculate_quality_metrics(self, data: LoadedGEOData) -> Dict[str, float]:
@@ -402,27 +414,69 @@ Determine the optimal parsing strategy for this file."""
         return metrics
     
     def _save_to_cache(self, data: LoadedGEOData, cache_path: Path):
-        """Save data to cache"""
+        """Save data to cache with comprehensive metadata for session reuse"""
         try:
+            # Save expression matrix
             data.expression_matrix.to_parquet(cache_path)
-            meta_path = cache_path.with_suffix('.meta.parquet')
+            logger.debug(f"Saved expression matrix to: {cache_path}")
+            
+            # Save sample metadata
+            meta_path = cache_path.with_name(f"{cache_path.stem}.metadata.parquet")
             data.sample_metadata.to_parquet(meta_path)
-            logger.info(f"Saved to cache: {cache_path}")
+            logger.debug(f"Saved sample metadata to: {meta_path}")
+            
+            # Save loading strategy as JSON for reproducibility
+            strategy_path = cache_path.with_name(f"{cache_path.stem}.strategy.json")
+            import json
+            strategy_dict = {
+                'file_format': data.loading_strategy.file_format,
+                'separator': data.loading_strategy.separator,
+                'skip_rows': data.loading_strategy.skip_rows,
+                'sample_id_column': data.loading_strategy.sample_id_column,
+                'expression_start_row': data.loading_strategy.expression_start_row,
+                'has_header': data.loading_strategy.has_header,
+                'notes': data.loading_strategy.notes
+            }
+            with open(strategy_path, 'w') as f:
+                json.dump(strategy_dict, f, indent=2)
+            logger.debug(f"Saved loading strategy to: {strategy_path}")
+            
+            # Save quality metrics
+            metrics_path = cache_path.with_name(f"{cache_path.stem}.metrics.json")
+            with open(metrics_path, 'w') as f:
+                json.dump(data.quality_metrics, f, indent=2)
+            logger.debug(f"Saved quality metrics to: {metrics_path}")
+            
+            # Save gene mapping if available
+            if data.probe_to_gene_mapping:
+                mapping_path = cache_path.with_name(f"{cache_path.stem}.gene_mapping.parquet")
+                mapping_df = pd.DataFrame([
+                    {'probe_id': k, 'gene_symbol': v}
+                    for k, v in data.probe_to_gene_mapping.items()
+                ])
+                mapping_df.to_parquet(mapping_path, index=False)
+                logger.debug(f"Saved gene mapping to: {mapping_path}")
+            
+            logger.info(f"Successfully cached dataset {data.accession} with all metadata")
         except Exception as e:
             logger.warning(f"Failed to save cache: {e}")
     
     def _load_from_cache(self, cache_path: Path, dataset: GEODataset) -> LoadedGEOData:
-        """Load data from cache"""
-        expr_df = pd.read_parquet(cache_path)
-        meta_path = cache_path.with_suffix('.meta.parquet')
-        meta_df = pd.read_parquet(meta_path) if meta_path.exists() else pd.DataFrame()
-        
-        return LoadedGEOData(
-            accession=dataset.accession,
-            expression_matrix=expr_df,
-            sample_metadata=meta_df,
-            platform_info={"platform": dataset.platform},
-            loading_strategy=DataLoadingStrategy(
+        """Load data from cache with metadata restoration"""
+        try:
+            # Load expression matrix
+            expr_df = pd.read_parquet(cache_path)
+            logger.debug(f"Loaded expression matrix from cache: {expr_df.shape}")
+            
+            # Load sample metadata
+            meta_path = cache_path.with_name(f"{cache_path.stem}.metadata.parquet")
+            meta_df = pd.read_parquet(meta_path) if meta_path.exists() else pd.DataFrame()
+            logger.debug(f"Loaded sample metadata from cache: {meta_df.shape}")
+            
+            # Load loading strategy
+            import json
+            strategy_path = cache_path.with_name(f"{cache_path.stem}.strategy.json")
+            strategy = DataLoadingStrategy(
                 file_format="cached",
                 separator="n/a",
                 skip_rows=0,
@@ -430,10 +484,55 @@ Determine the optimal parsing strategy for this file."""
                 expression_start_row=0,
                 has_header=True,
                 notes="Loaded from cache"
-            ),
-            quality_metrics={},
-            cache_path=cache_path
-        )
+            )
+            if strategy_path.exists():
+                try:
+                    with open(strategy_path, 'r') as f:
+                        strategy_dict = json.load(f)
+                    strategy = DataLoadingStrategy(**strategy_dict)
+                    logger.debug(f"Restored loading strategy from cache")
+                except Exception as e:
+                    logger.debug(f"Could not restore strategy: {e}")
+            
+            # Load quality metrics
+            metrics_path = cache_path.with_name(f"{cache_path.stem}.metrics.json")
+            quality_metrics = {}
+            if metrics_path.exists():
+                try:
+                    with open(metrics_path, 'r') as f:
+                        quality_metrics = json.load(f)
+                    logger.debug(f"Restored quality metrics from cache")
+                except Exception as e:
+                    logger.debug(f"Could not restore metrics: {e}")
+            
+            # Load gene mapping if available
+            probe_to_gene_mapping = None
+            mapping_path = cache_path.with_name(f"{cache_path.stem}.gene_mapping.parquet")
+            if mapping_path.exists():
+                try:
+                    mapping_df = pd.read_parquet(mapping_path)
+                    probe_to_gene_mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
+                    logger.debug(f"Loaded gene mapping from cache: {len(probe_to_gene_mapping)} probes")
+                except Exception as e:
+                    logger.debug(f"Could not restore gene mapping: {e}")
+            
+            loaded_data = LoadedGEOData(
+                accession=dataset.accession,
+                expression_matrix=expr_df,
+                sample_metadata=meta_df,
+                platform_info={"platform": dataset.platform},
+                loading_strategy=strategy,
+                quality_metrics=quality_metrics,
+                cache_path=cache_path,
+                probe_to_gene_mapping=probe_to_gene_mapping
+            )
+            
+            logger.info(f"Successfully loaded {dataset.accession} from cache")
+            return loaded_data
+            
+        except Exception as e:
+            logger.error(f"Failed to load from cache: {e}")
+            raise
     
     async def apply_gene_mapping(self, data: LoadedGEOData) -> LoadedGEOData:
         """

@@ -80,7 +80,8 @@ class GEOWorkflowOrchestrator:
         self.loader_service = GEODataLoaderService(model=model)
         self.de_service = DifferentialExpressionService(
             fdr_threshold=0.05,
-            log_fc_threshold=1.0,
+            log_fc_threshold=0.5,  # Lowered for discovery mode
+            p_value_threshold=0.01,
             model=model
         )
     
@@ -217,57 +218,88 @@ class GEOWorkflowOrchestrator:
         self,
         datasets: List[GEODataset]
     ) -> List[DifferentialExpressionResult]:
-        """Load and analyze multiple datasets"""
+        """Load and analyze multiple datasets in parallel for better performance"""
         
-        deg_results = []
+        # Limit concurrency to prevent overwhelming server/API
+        semaphore = asyncio.Semaphore(3)
         
-        for i, dataset in enumerate(datasets):
-            logger.info(f"Processing dataset {i+1}/{len(datasets)}: {dataset.accession}")
-            
+        async def process_dataset_with_timeout(dataset: GEODataset) -> Optional[DifferentialExpressionResult]:
+            """Process single dataset with timeout protection"""
             try:
-                # Load data
-                loaded_data = await self.loader_service.load_dataset(
-                    dataset=dataset,
-                    use_cache=True,
-                    normalize=True
+                # 5 minute timeout per dataset (loading + DE analysis)
+                result = await asyncio.wait_for(
+                    process_dataset(dataset),
+                    timeout=300.0
                 )
-                
-                if loaded_data is None:
-                    logger.warning(f"Failed to load {dataset.accession}")
-                    continue
-                
-                logger.info(f"loaded data for {dataset.accession} {dataset.title}")
-                
-                # Quality check: minimum sample size
-                n_samples = len(loaded_data.expression_matrix.columns)
-                if n_samples < 4:  # Need at least 2 per group
-                    logger.warning(f"Dataset {dataset.accession} has too few samples ({n_samples})")
-                    continue
-                
-                # Quality check: expression data
-                n_genes = len(loaded_data.expression_matrix)
-                if n_genes < 100:
-                    logger.warning(f"Dataset {dataset.accession} has too few genes ({n_genes})")
-                    continue
-                
-                # Perform DE analysis
-                de_result = await self.de_service.analyze_differential_expression(
-                    loaded_data=loaded_data
-                )
-                
-                if de_result is None:
-                    logger.warning(f"Failed DE analysis for {dataset.accession}")
-                    continue
-                
-                if de_result.n_upregulated + de_result.n_downregulated > 0:
-                    deg_results.append(de_result)
-                    logger.info(f"  Found {de_result.n_upregulated + de_result.n_downregulated} DEGs")
-                else:
-                    logger.warning("  No significant DEGs found")
-            
+                return result
+            except asyncio.TimeoutError:
+                logger.error(f"Dataset {dataset.accession} processing timed out (>5 min)")
+                return None
             except Exception as e:
-                logger.error(f"Error processing {dataset.accession}: {e}")
-                continue
+                logger.error(f"Unexpected error processing {dataset.accession}: {e}")
+                return None
+        
+        async def process_dataset(dataset: GEODataset) -> Optional[DifferentialExpressionResult]:
+            """Process single dataset with semaphore to limit concurrency"""
+            async with semaphore:
+                logger.info(f"Processing dataset: {dataset.accession}")
+                
+                try:
+                    # Load data
+                    loaded_data = await self.loader_service.load_dataset(
+                        dataset=dataset,
+                        use_cache=True,
+                        normalize=True
+                    )
+                    
+                    if loaded_data is None:
+                        logger.warning(f"Failed to load {dataset.accession}")
+                        return None
+                    
+                    logger.info(f"Loaded data for {dataset.accession} {dataset.title}")
+                    
+                    # Quality check: minimum sample size
+                    n_samples = len(loaded_data.expression_matrix.columns)
+                    if n_samples < 4:  # Need at least 2 per group
+                        logger.warning(f"Dataset {dataset.accession} has too few samples ({n_samples})")
+                        return None
+                    
+                    # Quality check: expression data
+                    n_genes = len(loaded_data.expression_matrix)
+                    if n_genes < 100:
+                        logger.warning(f"Dataset {dataset.accession} has too few genes ({n_genes})")
+                        return None
+                    
+                    # Perform DE analysis
+                    de_result = await self.de_service.analyze_differential_expression(
+                        loaded_data=loaded_data
+                    )
+                    
+                    if de_result is None:
+                        logger.warning(f"Failed DE analysis for {dataset.accession}")
+                        return None
+                    
+                    if de_result.n_upregulated + de_result.n_downregulated > 0:
+                        logger.info(f"  Found {de_result.n_upregulated + de_result.n_downregulated} DEGs")
+                        return de_result
+                    else:
+                        logger.warning("  No significant DEGs found")
+                        return None
+                
+                except Exception as e:
+                    logger.error(f"Error processing {dataset.accession}: {e}")
+                    return None
+        
+        # Process all datasets concurrently with timeout per dataset
+        results = await asyncio.gather(
+            *[process_dataset_with_timeout(dataset) for dataset in datasets],
+            return_exceptions=False
+        )
+        
+        # Filter out None results
+        deg_results = [r for r in results if r is not None]
+        
+        logger.info(f"Completed DE analysis on {len(deg_results)} datasets (from {len(datasets)} total)")
         
         return deg_results
     

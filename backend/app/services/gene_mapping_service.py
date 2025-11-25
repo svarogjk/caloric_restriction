@@ -5,7 +5,8 @@ Maps probe IDs to standardized gene symbols using GEO platform annotations
 
 import logging
 import gzip
-from typing import Dict, Optional
+import asyncio
+from typing import Dict, Optional, List
 from pathlib import Path
 import pandas as pd
 import httpx
@@ -20,6 +21,8 @@ class GeneMappingService:
     
     CACHE_DIR = Path("/tmp/gpl_cache")
     GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
+    MAX_RETRIES = 3
+    RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
     
     def __init__(self):
         """Initialize gene mapping service"""
@@ -31,6 +34,36 @@ class GeneMappingService:
     async def close(self):
         """Close HTTP client"""
         await self.client.aclose()
+    
+    async def get_batch_probe_to_gene_mappings(
+        self,
+        platform_ids: List[str],
+        use_cache: bool = True
+    ) -> Dict[str, Optional[Dict[str, str]]]:
+        """
+        Get mappings for multiple platforms in parallel (much faster than sequential calls).
+        
+        Args:
+            platform_ids: List of GEO platform IDs
+            use_cache: Whether to use cached mappings
+        
+        Returns:
+            Dictionary mapping platform_id -> mapping (or None if failed)
+        """
+        logger.info(f"Fetching mappings for {len(platform_ids)} platforms in parallel")
+        
+        # Use asyncio.gather to fetch all mappings concurrently
+        results = await asyncio.gather(
+            *[self.get_probe_to_gene_mapping(pid, use_cache) for pid in platform_ids],
+            return_exceptions=False
+        )
+        
+        # Return as dict mapping platform_id to result
+        mappings = {pid: result for pid, result in zip(platform_ids, results)}
+        successful = sum(1 for m in mappings.values() if m is not None)
+        logger.info(f"Successfully loaded {successful}/{len(platform_ids)} platform mappings")
+        
+        return mappings
     
     async def get_probe_to_gene_mapping(
         self,
@@ -86,7 +119,7 @@ class GeneMappingService:
     
     async def _fetch_platform_mapping(self, platform_id: str) -> Optional[Dict[str, str]]:
         """
-        Fetch platform mapping from GEO
+        Fetch platform mapping from GEO with retry logic
         
         Args:
             platform_id: Platform ID (e.g., "GPL1261" or "1261" or "13912")
@@ -117,34 +150,59 @@ class GeneMappingService:
             # Fallback for very short IDs (unlikely)
             folder_prefix = f"GPL{numeric_id}nnn"
         
+        # Try with retry logic
+        for attempt in range(self.MAX_RETRIES):
+            try:
+                mapping = await self._fetch_with_retry(gpl_id, folder_prefix)
+                if mapping:
+                    return mapping
+            except Exception as e:
+                logger.debug(f"Attempt {attempt + 1} failed: {e}")
+                if attempt < self.MAX_RETRIES - 1:
+                    wait_time = (self.RETRY_BACKOFF ** attempt)
+                    logger.debug(f"Retrying in {wait_time:.1f}s...")
+                    await asyncio.sleep(wait_time)
+        
+        logger.warning(f"Failed to fetch mapping for {gpl_id} after {self.MAX_RETRIES} retries")
+        return None
+    
+    async def _fetch_with_retry(self, gpl_id: str, folder_prefix: str) -> Optional[Dict[str, str]]:
+        """
+        Attempt to fetch platform mapping, trying both family and miniml formats
+        
+        Args:
+            gpl_id: GPL ID
+            folder_prefix: Folder prefix for FTP path
+        
+        Returns:
+            Dictionary mapping probe_id -> gene_symbol, or None if both formats fail
+        """
+        # Try family format first
         family_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
         
         try:
             logger.debug(f"Downloading GPL file from: {family_url}")
             response = await self.client.get(family_url)
             
-            if response.status_code != 200:
-                logger.warning(f"Failed to download GPL file (status {response.status_code}). Trying miniml format...")
-                # Try alternative miniml format
-                return await self._try_miniml_format(gpl_id, folder_prefix)
-            
-            # Decompress and parse
-            content = gzip.decompress(response.content).decode('utf-8', errors='ignore')
-            mapping = self._parse_gpl_file(content, gpl_id)
-            
-            if mapping:
-                logger.info(f"Successfully fetched mapping for {gpl_id}: {len(mapping)} probes")
-            else:
-                logger.warning(f"No gene symbols found in GPL file for {gpl_id}. Trying miniml format...")
-                # Try alternative miniml format if family file has no data
-                return await self._try_miniml_format(gpl_id, folder_prefix)
-            
-            return mapping
+            if response.status_code == 200:
+                # Decompress and parse
+                content = gzip.decompress(response.content).decode('utf-8', errors='ignore')
+                mapping = self._parse_gpl_file(content, gpl_id)
+                
+                if mapping:
+                    logger.info(f"Successfully fetched mapping for {gpl_id}: {len(mapping)} probes")
+                    return mapping
         
         except Exception as e:
-            logger.error(f"Error fetching platform mapping for {gpl_id}: {e}. Trying miniml format...")
-            # Try alternative miniml format on error
-            return await self._try_miniml_format(gpl_id, folder_prefix)
+            logger.debug(f"Error fetching family format for {gpl_id}: {e}")
+        
+        # Try miniml format as fallback
+        logger.debug(f"Trying miniml format for {gpl_id}...")
+        miniml_result = await self._try_miniml_format(gpl_id, folder_prefix)
+        if miniml_result:
+            return miniml_result
+        
+        return None
     
     def _parse_gpl_file(self, content: str, platform_id: str) -> Optional[Dict[str, str]]:
         """
