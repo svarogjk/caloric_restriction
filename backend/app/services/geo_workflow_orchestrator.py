@@ -132,7 +132,10 @@ class GEOWorkflowOrchestrator:
         
         logger.info(f"Ranked and selected top {len(ranked_datasets)} datasets")
         
-        # Step 3: Load and analyze each dataset
+        # Step 3: Pre-load all platform mappings before DE analysis to avoid timeouts
+        await self._preload_platforms(ranked_datasets)
+        
+        # Step 4: Load and analyze each dataset
         deg_results = await self._analyze_datasets(ranked_datasets)
         
         logger.info(f"Completed DE analysis on {len(deg_results)} datasets")
@@ -214,6 +217,41 @@ class GEOWorkflowOrchestrator:
             logger.error(f"Dataset ranking failed: {e}")
             return datasets[:top_k]
     
+    async def _preload_platforms(self, datasets: List[GEODataset]) -> None:
+        """
+        Pre-load all platform mappings for the datasets before DE analysis.
+        This avoids loading platforms during the timeout-sensitive processing phase.
+        
+        Args:
+            datasets: List of datasets to pre-load platforms for
+        """
+        if not datasets:
+            logger.debug("No datasets to preload platforms for")
+            return
+        
+        # Extract unique platform IDs
+        platform_ids = set()
+        for dataset in datasets:
+            if dataset.platform and isinstance(dataset.platform, str):
+                platform_ids.add(dataset.platform)
+        
+        if not platform_ids:
+            logger.debug("No platform IDs found in datasets")
+            return
+        
+        platform_ids = list(platform_ids)
+        logger.info(f"Pre-loading {len(platform_ids)} platform mappings: {platform_ids}")
+        
+        try:
+            # Batch load all platforms concurrently
+            await self.loader_service.gene_mapping_service.get_batch_probe_to_gene_mappings(
+                platform_ids=platform_ids,
+                use_cache=True
+            )
+            logger.info("Successfully pre-loaded platform mappings")
+        except Exception as e:
+            logger.warning(f"Error pre-loading platforms: {e}. Continuing with analysis anyway.")
+    
     async def _analyze_datasets(
         self,
         datasets: List[GEODataset]
@@ -221,19 +259,28 @@ class GEOWorkflowOrchestrator:
         """Load and analyze multiple datasets in parallel for better performance"""
         
         # Limit concurrency to prevent overwhelming server/API
-        semaphore = asyncio.Semaphore(3)
+        # With 3 concurrent, each dataset can take up to 20 minutes worst case
+        semaphore = asyncio.Semaphore(1)
         
-        async def process_dataset_with_timeout(dataset: GEODataset) -> Optional[DifferentialExpressionResult]:
-            """Process single dataset with timeout protection"""
+        async def process_dataset_with_timeout(dataset: GEODataset, position: int) -> Optional[DifferentialExpressionResult]:
+            """Process single dataset with adaptive timeout protection"""
+            # Adaptive timeout based on position in queue
+            # DE analysis on 20K-40K genes with t-tests can take 10-30 minutes
+            # Position 0-2: 50 min (immediate processing)
+            # Position 3+: 60 min (includes queue wait + processing)
+            max_timeout = 3000.0 if position < 3 else 3600.0
+            
             try:
-                # 5 minute timeout per dataset (loading + DE analysis)
+                logger.debug(f"Dataset {dataset.accession} - position {position}, timeout {max_timeout/60:.0f} min")
+                
                 result = await asyncio.wait_for(
                     process_dataset(dataset),
-                    timeout=300.0
+                    timeout=max_timeout
                 )
                 return result
             except asyncio.TimeoutError:
-                logger.error(f"Dataset {dataset.accession} processing timed out (>5 min)")
+                logger.error(f"Dataset {dataset.accession} processing timed out (>{max_timeout/60:.0f} min). "
+                           f"DE analysis on large gene sets requires significant compute time.")
                 return None
             except Exception as e:
                 logger.error(f"Unexpected error processing {dataset.accession}: {e}")
@@ -290,9 +337,9 @@ class GEOWorkflowOrchestrator:
                     logger.error(f"Error processing {dataset.accession}: {e}")
                     return None
         
-        # Process all datasets concurrently with timeout per dataset
+        # Process all datasets concurrently with adaptive timeout
         results = await asyncio.gather(
-            *[process_dataset_with_timeout(dataset) for dataset in datasets],
+            *[process_dataset_with_timeout(dataset, idx) for idx, dataset in enumerate(datasets)],
             return_exceptions=False
         )
         
@@ -371,7 +418,7 @@ class GEOWorkflowOrchestrator:
         # Log sample of common genes for verification
         if common_genes:
             sample_genes = common_genes[:10]
-            logger.info(f"Sample common genes:")
+            logger.info("Sample common genes:")
             for gene in sample_genes:
                 logger.info(f"  {gene.gene_id}: found in {gene.n_datasets} datasets, avg_log2FC: {gene.avg_log_fc:.2f}, direction consistency: {gene.direction_consistency:.1%}")
         

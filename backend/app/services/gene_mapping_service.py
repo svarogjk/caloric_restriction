@@ -6,6 +6,7 @@ Maps probe IDs to standardized gene symbols using GEO platform annotations
 import logging
 import gzip
 import asyncio
+import json
 from typing import Dict, Optional, List
 from pathlib import Path
 import pandas as pd
@@ -20,6 +21,7 @@ class GeneMappingService:
     """
     
     CACHE_DIR = Path("/tmp/gpl_cache")
+    MEMORY_CACHE_FILE = CACHE_DIR / ".memory_cache_index.json"
     GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
     MAX_RETRIES = 3
     RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
@@ -30,6 +32,46 @@ class GeneMappingService:
         self.client = httpx.AsyncClient(timeout=300.0, follow_redirects=True)
         # Cache of platform -> {probe_id -> gene_symbol}
         self._mapping_cache: Dict[str, Dict[str, str]] = {}
+        # Load previously cached platforms into memory on init
+        self._load_memory_cache_index()
+    
+    def _load_memory_cache_index(self) -> None:
+        """Load previously cached platforms into memory cache on initialization"""
+        try:
+            if self.MEMORY_CACHE_FILE.exists():
+                with open(self.MEMORY_CACHE_FILE, 'r') as f:
+                    cache_index = json.load(f)
+                
+                # Pre-load all cached platforms from disk into memory
+                loaded_count = 0
+                for platform_id in cache_index.get('cached_platforms', []):
+                    cache_path = self.CACHE_DIR / f"{platform_id}.parquet"
+                    if cache_path.exists():
+                        try:
+                            mapping_df = pd.read_parquet(cache_path)
+                            mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
+                            self._mapping_cache[platform_id] = mapping
+                            loaded_count += 1
+                            logger.debug(f"Pre-loaded cache for {platform_id}: {len(mapping)} probes")
+                        except Exception as e:
+                            logger.debug(f"Failed to pre-load {platform_id}: {e}")
+                
+                if loaded_count > 0:
+                    logger.info(f"Pre-loaded {loaded_count} platform mappings from persistent cache")
+        except Exception as e:
+            logger.debug(f"Could not load memory cache index: {e}")
+    
+    def _save_memory_cache_index(self) -> None:
+        """Save index of cached platforms to persistent storage"""
+        try:
+            cache_index = {
+                'cached_platforms': list(self._mapping_cache.keys())
+            }
+            with open(self.MEMORY_CACHE_FILE, 'w') as f:
+                json.dump(cache_index, f)
+            logger.debug(f"Saved memory cache index: {len(self._mapping_cache)} platforms")
+        except Exception as e:
+            logger.debug(f"Failed to save memory cache index: {e}")
     
     async def close(self):
         """Close HTTP client"""
@@ -112,6 +154,8 @@ class GeneMappingService:
                     ])
                     mapping_df.to_parquet(cache_path, index=False)
                     logger.info(f"Saved mapping for {platform_id} to cache")
+                    # Update the memory cache index
+                    self._save_memory_cache_index()
                 except Exception as e:
                     logger.warning(f"Failed to save cache for {platform_id}: {e}")
         
