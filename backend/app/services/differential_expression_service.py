@@ -18,6 +18,10 @@ from statsmodels.stats.multitest import multipletests
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 
+from app.config.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 from app.services.geo_loader_service import LoadedGEOData
 
 logger = logging.getLogger(__name__)
@@ -246,6 +250,14 @@ class DifferentialExpressionService:
         # Extract expression data for groups
         expr_matrix = loaded_data.expression_matrix
         n_genes = len(expr_matrix.index)
+        
+        # Early stopping for extremely large datasets to avoid timeout
+        # With 22K+ genes, parallel t-tests can take 20+ minutes
+        if n_genes > 25000:
+            logger.warning(f"Dataset too large ({n_genes} genes) for practical DE analysis. "
+                          f"Skipping to avoid timeout. Consider using pre-filtered probe sets.")
+            return None
+        
         logger.info(f"Starting statistical testing on {n_genes} genes...")
         
         treatment_expr = expr_matrix[treatment_samples]

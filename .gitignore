@@ -29,3 +29,4 @@ backend/geo_cache/GSE100000_series_matrix.txt.gz
 backend/app/services/api_key.txt
 backend/app/services/anthropic_key.txt
 backend/app/services/mistral_key.txt
+backend/geo_logs/geo_analysis.log

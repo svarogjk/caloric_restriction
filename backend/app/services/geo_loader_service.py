@@ -18,6 +18,10 @@ import httpx
 from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent
 
+from app.config.logging_config import get_logger
+
+logger = get_logger(__name__)
+
 from app.models.llm_models import model_dict
 from app.services.geo_client import GEODataset
 from app.services.gene_mapping_service import GeneMappingService

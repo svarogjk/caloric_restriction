@@ -12,13 +12,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.services.geo_workflow_orchestrator import GEOWorkflowOrchestrator
 from app.api import routes
+from app.config.logging_config import setup_logging, get_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Setup logging to console and file
+setup_logging(level=logging.DEBUG)
+logger = get_logger(__name__)
 
 # Global orchestrator instance
 orchestrator: Optional[GEOWorkflowOrchestrator] = None

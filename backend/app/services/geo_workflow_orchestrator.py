@@ -19,6 +19,9 @@ from app.services.differential_expression_service import (
     DifferentialExpressionService,
     DifferentialExpressionResult
 )
+from app.config.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Configure logging
 logging.basicConfig(
@@ -127,21 +130,26 @@ class GEOWorkflowOrchestrator:
         
         logger.info(f"Found {len(search_result.datasets)} datasets")
         
-        # Step 2: Rank datasets by DE potential
-        ranked_datasets = await self._rank_datasets(search_result.datasets, query, max_datasets)
+        # Step 2: Rank datasets by DE potential with 2x multiplier for better scoring
+        # Request 2x datasets for ranking, then analyze only top 2
+        ranking_multiplier = 2
+        datasets_for_ranking = min(len(search_result.datasets), max_datasets * ranking_multiplier)
+        ranked_datasets = await self._rank_datasets(search_result.datasets, query, datasets_for_ranking)
         
-        logger.info(f"Ranked and selected top {len(ranked_datasets)} datasets")
+        # Limit analysis to top 2 datasets only for speed
+        top_datasets_for_analysis = ranked_datasets[:2]
+        logger.info(f"Ranked {datasets_for_ranking} datasets, analyzing top {len(top_datasets_for_analysis)} for speed")
         
         # Step 3: Pre-load all platform mappings before DE analysis to avoid timeouts
-        await self._preload_platforms(ranked_datasets)
+        await self._preload_platforms(top_datasets_for_analysis)
         
         # Step 4: Load and analyze each dataset
-        deg_results = await self._analyze_datasets(ranked_datasets)
+        deg_results = await self._analyze_datasets(top_datasets_for_analysis)
         
         logger.info(f"Completed DE analysis on {len(deg_results)} datasets")
         
-        # Step 4: Identify common genes
-        common_genes = self._find_common_genes(deg_results, min_occurrence)
+        # Step 5: Identify common genes only if we have results
+        common_genes = self._find_common_genes(deg_results, min_occurrence) if deg_results else []
         
         logger.info(f"Found {len(common_genes)} genes common across datasets")
         
@@ -259,16 +267,14 @@ class GEOWorkflowOrchestrator:
         """Load and analyze multiple datasets in parallel for better performance"""
         
         # Limit concurrency to prevent overwhelming server/API
-        # With 3 concurrent, each dataset can take up to 20 minutes worst case
+        # With sequential processing, we can set reasonable timeouts
         semaphore = asyncio.Semaphore(1)
         
         async def process_dataset_with_timeout(dataset: GEODataset, position: int) -> Optional[DifferentialExpressionResult]:
             """Process single dataset with adaptive timeout protection"""
-            # Adaptive timeout based on position in queue
-            # DE analysis on 20K-40K genes with t-tests can take 10-30 minutes
-            # Position 0-2: 50 min (immediate processing)
-            # Position 3+: 60 min (includes queue wait + processing)
-            max_timeout = 3000.0 if position < 3 else 3600.0
+            # Reduced timeout for faster overall processing
+            # With only 2 datasets max and sequential processing: 25 minutes per dataset
+            max_timeout = 1500.0  # 25 minutes for gene mapping + DE analysis
             
             try:
                 logger.debug(f"Dataset {dataset.accession} - position {position}, timeout {max_timeout/60:.0f} min")
