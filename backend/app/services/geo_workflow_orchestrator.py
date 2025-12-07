@@ -130,9 +130,9 @@ class GEOWorkflowOrchestrator:
         
         logger.info(f"Found {len(search_result.datasets)} datasets")
         
-        # Step 2: Rank datasets by DE potential with 2x multiplier for better scoring
-        # Request 2x datasets for ranking, then analyze only top 2
-        ranking_multiplier = 2
+        # Step 2: Rank datasets by DE potential with 3x multiplier for better scoring
+        # Request 3x datasets for ranking, then analyze only top 2
+        ranking_multiplier = 3
         datasets_for_ranking = min(len(search_result.datasets), max_datasets * ranking_multiplier)
         ranked_datasets = await self._rank_datasets(search_result.datasets, query, datasets_for_ranking)
         

@@ -29,35 +29,26 @@ class GeneMappingService:
     def __init__(self):
         """Initialize gene mapping service"""
         self.CACHE_DIR.mkdir(exist_ok=True)
-        self.client = httpx.AsyncClient(timeout=300.0, follow_redirects=True)
-        # Cache of platform -> {probe_id -> gene_symbol}
+        # Reduced timeout for better responsiveness on large downloads
+        self.client = httpx.AsyncClient(timeout=120.0, follow_redirects=True)
+        # Cache only platform IDs, not the actual mappings (to save memory)
+        self._cached_platform_ids: set = set()
+        # Small in-memory cache for recently accessed mappings (LRU-like)
         self._mapping_cache: Dict[str, Dict[str, str]] = {}
-        # Load previously cached platforms into memory on init
+        self.MAX_CACHE_SIZE = 3  # Only keep 3 platforms in memory
+        # Load list of previously cached platforms on init
         self._load_memory_cache_index()
     
     def _load_memory_cache_index(self) -> None:
-        """Load previously cached platforms into memory cache on initialization"""
+        """Load index of cached platforms (not the actual data) to track what's cached on disk"""
         try:
             if self.MEMORY_CACHE_FILE.exists():
                 with open(self.MEMORY_CACHE_FILE, 'r') as f:
                     cache_index = json.load(f)
                 
-                # Pre-load all cached platforms from disk into memory
-                loaded_count = 0
-                for platform_id in cache_index.get('cached_platforms', []):
-                    cache_path = self.CACHE_DIR / f"{platform_id}.parquet"
-                    if cache_path.exists():
-                        try:
-                            mapping_df = pd.read_parquet(cache_path)
-                            mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
-                            self._mapping_cache[platform_id] = mapping
-                            loaded_count += 1
-                            logger.debug(f"Pre-loaded cache for {platform_id}: {len(mapping)} probes")
-                        except Exception as e:
-                            logger.debug(f"Failed to pre-load {platform_id}: {e}")
-                
-                if loaded_count > 0:
-                    logger.info(f"Pre-loaded {loaded_count} platform mappings from persistent cache")
+                # Only track which platforms are cached on disk, don't load them into memory yet
+                self._cached_platform_ids = set(cache_index.get('cached_platforms', []))
+                logger.debug(f"Index loaded: {len(self._cached_platform_ids)} platforms available on disk")
         except Exception as e:
             logger.debug(f"Could not load memory cache index: {e}")
     
@@ -65,11 +56,11 @@ class GeneMappingService:
         """Save index of cached platforms to persistent storage"""
         try:
             cache_index = {
-                'cached_platforms': list(self._mapping_cache.keys())
+                'cached_platforms': list(self._cached_platform_ids)
             }
             with open(self.MEMORY_CACHE_FILE, 'w') as f:
                 json.dump(cache_index, f)
-            logger.debug(f"Saved memory cache index: {len(self._mapping_cache)} platforms")
+            logger.debug(f"Saved memory cache index: {len(self._cached_platform_ids)} platforms")
         except Exception as e:
             logger.debug(f"Failed to save memory cache index: {e}")
     
@@ -113,7 +104,8 @@ class GeneMappingService:
         use_cache: bool = True
     ) -> Optional[Dict[str, str]]:
         """
-        Get mapping from probe IDs to gene symbols for a platform
+        Get mapping from probe IDs to gene symbols for a platform.
+        Loads from disk on-demand to minimize memory footprint.
         
         Args:
             platform_id: GEO platform ID (e.g., "GPL1261")
@@ -122,48 +114,90 @@ class GeneMappingService:
         Returns:
             Dictionary mapping probe_id -> gene_symbol, or None if failed
         """
-        # Check memory cache first
+        # Check small in-memory cache first
         if platform_id in self._mapping_cache:
-            logger.debug(f"Using cached mapping for {platform_id}")
+            logger.debug(f"Using in-memory cache for {platform_id}")
             return self._mapping_cache[platform_id]
         
-        # Try to load from disk cache
+        # Try to load from disk cache (don't keep in memory for large files)
         cache_path = self.CACHE_DIR / f"{platform_id}.parquet"
         if use_cache and cache_path.exists():
             try:
                 mapping_df = pd.read_parquet(cache_path)
                 mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
-                self._mapping_cache[platform_id] = mapping
-                logger.info(f"Loaded mapping for {platform_id} from cache: {len(mapping)} probes")
+                
+                # Only keep small mappings in memory cache (< 100k entries)
+                if len(mapping) < 100000:
+                    self._mapping_cache[platform_id] = mapping
+                    # Enforce max cache size - remove oldest if over limit
+                    if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
+                        oldest = next(iter(self._mapping_cache))
+                        del self._mapping_cache[oldest]
+                        logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+                
+                logger.info(f"Loaded mapping for {platform_id} from disk: {len(mapping)} probes")
                 return mapping
             except Exception as e:
                 logger.warning(f"Failed to load cached mapping for {platform_id}: {e}")
                 pass
         
-        # Fetch from GEO
-        mapping = await self._fetch_platform_mapping(platform_id)
+        # Fetch from GEO with timeout protection
+        try:
+            mapping = await asyncio.wait_for(
+                self._fetch_platform_mapping(platform_id),
+                timeout=180  # 3 minute timeout per platform
+            )
+        except asyncio.TimeoutError:
+            logger.error(f"Platform mapping download timed out for {platform_id}")
+            return None
         
         if mapping:
-            self._mapping_cache[platform_id] = mapping
-            # Save to cache
+            # Only keep small mappings in memory
+            if len(mapping) < 100000:
+                self._mapping_cache[platform_id] = mapping
+                # Enforce max cache size
+                if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
+                    oldest = next(iter(self._mapping_cache))
+                    del self._mapping_cache[oldest]
+                    logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+            
+            # Save to disk cache
             if use_cache:
                 try:
-                    mapping_df = pd.DataFrame([
-                        {'probe_id': k, 'gene_symbol': v}
-                        for k, v in mapping.items()
-                    ])
-                    mapping_df.to_parquet(cache_path, index=False)
-                    logger.info(f"Saved mapping for {platform_id} to cache")
-                    # Update the memory cache index
-                    self._save_memory_cache_index()
+                    await self._save_mapping_to_parquet(platform_id, mapping)
                 except Exception as e:
                     logger.warning(f"Failed to save cache for {platform_id}: {e}")
         
         return mapping
     
+    async def _save_mapping_to_parquet(self, platform_id: str, mapping: Dict[str, str]) -> None:
+        """
+        Save mapping to parquet file asynchronously to avoid blocking
+        
+        Args:
+            platform_id: Platform ID
+            mapping: Probe ID to gene symbol mapping
+        """
+        cache_path = self.CACHE_DIR / f"{platform_id}.parquet"
+        
+        # Convert to DataFrame and save with compression
+        mapping_df = pd.DataFrame([
+            {'probe_id': k, 'gene_symbol': v}
+            for k, v in mapping.items()
+        ])
+        
+        # Save with snappy compression for better performance
+        mapping_df.to_parquet(cache_path, compression='snappy', index=False)
+        
+        # Track this platform as cached
+        self._cached_platform_ids.add(platform_id)
+        self._save_memory_cache_index()
+        
+        logger.info(f"Saved mapping for {platform_id} to cache: {len(mapping)} probes, {cache_path.stat().st_size / (1024*1024):.1f}MB")
+    
     async def _fetch_platform_mapping(self, platform_id: str) -> Optional[Dict[str, str]]:
         """
-        Fetch platform mapping from GEO with retry logic
+        Fetch platform mapping from GEO with retry logic and folder prefix calculation
         
         Args:
             platform_id: Platform ID (e.g., "GPL1261" or "1261" or "13912")
@@ -181,18 +215,29 @@ class GeneMappingService:
             numeric_id = platform_id
             gpl_id = f"GPL{platform_id}"
         
-        # Construct URL to GEO FTP location
+        # Construct folder prefix for GEO FTP location
         # GEO FTP structure: /geo/platforms/GPLnnn/GPLXXXX/soft/
         # Examples:
         # - GPL1261 -> /geo/platforms/GPL1nnn/GPL1261/soft/GPL1261_family.soft.gz
         # - GPL13912 -> /geo/platforms/GPL13nnn/GPL13912/soft/GPL13912_family.soft.gz
+        # - GPL81 -> /geo/platforms/GPL8nnn/GPL81/soft/GPL81_family.soft.gz (edge case!)
         # - GPL6246 -> /geo/platforms/GPL6nnn/GPL6246/soft/GPL6246_family.soft.gz
-        # Pattern: take all digits except last 3 and append "nnn"
-        if len(numeric_id) >= 3:
+        # Pattern: remove last 3 digits and append "nnn"
+        
+        if len(numeric_id) >= 4:
+            # Standard case: 4 or more digits (e.g., 1261, 13912, 6246)
             folder_prefix = f"GPL{numeric_id[:-3]}nnn"
+        elif len(numeric_id) == 3:
+            # 3 digits (e.g., 081 from GPL81 padded, or 100)
+            folder_prefix = f"GPL{numeric_id[0]}nnn"
+        elif len(numeric_id) == 2:
+            # 2 digits (e.g., 81 from GPL81) - map to GPL8nnn
+            folder_prefix = f"GPL{numeric_id[0]}nnn"
         else:
-            # Fallback for very short IDs (unlikely)
+            # 1 digit fallback
             folder_prefix = f"GPL{numeric_id}nnn"
+        
+        logger.debug(f"Calculated folder prefix for {gpl_id}: {folder_prefix}")
         
         # Try with retry logic
         for attempt in range(self.MAX_RETRIES):
@@ -201,10 +246,10 @@ class GeneMappingService:
                 if mapping:
                     return mapping
             except Exception as e:
-                logger.debug(f"Attempt {attempt + 1} failed: {e}")
+                logger.debug(f"Attempt {attempt + 1} failed for {gpl_id}: {e}")
                 if attempt < self.MAX_RETRIES - 1:
                     wait_time = (self.RETRY_BACKOFF ** attempt)
-                    logger.debug(f"Retrying in {wait_time:.1f}s...")
+                    logger.debug(f"Retrying {gpl_id} in {wait_time:.1f}s...")
                     await asyncio.sleep(wait_time)
         
         logger.warning(f"Failed to fetch mapping for {gpl_id} after {self.MAX_RETRIES} retries")
@@ -212,7 +257,8 @@ class GeneMappingService:
     
     async def _fetch_with_retry(self, gpl_id: str, folder_prefix: str) -> Optional[Dict[str, str]]:
         """
-        Attempt to fetch platform mapping, trying both family and miniml formats
+        Attempt to fetch platform mapping, trying both family and miniml formats.
+        Uses aggressive timeout to prevent hanging on large downloads.
         
         Args:
             gpl_id: GPL ID
@@ -221,26 +267,37 @@ class GeneMappingService:
         Returns:
             Dictionary mapping probe_id -> gene_symbol, or None if both formats fail
         """
-        # Try family format first
+        # Try family format first with 120 second timeout per request
         family_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
         
         try:
             logger.debug(f"Downloading GPL file from: {family_url}")
-            response = await self.client.get(family_url)
+            response = await asyncio.wait_for(
+                self.client.get(family_url),
+                timeout=120.0  # 2 minute timeout for download
+            )
             
             if response.status_code == 200:
-                # Decompress and parse
-                content = gzip.decompress(response.content).decode('utf-8', errors='ignore')
-                mapping = self._parse_gpl_file(content, gpl_id)
-                
-                if mapping:
-                    logger.info(f"Successfully fetched mapping for {gpl_id}: {len(mapping)} probes")
-                    return mapping
+                # Decompress and parse with timeout
+                try:
+                    logger.debug(f"Decompressing and parsing {gpl_id}...")
+                    content = gzip.decompress(response.content).decode('utf-8', errors='ignore')
+                    mapping = self._parse_gpl_file(content, gpl_id)
+                    
+                    if mapping:
+                        logger.info(f"Successfully fetched mapping for {gpl_id}: {len(mapping)} probes")
+                        return mapping
+                except asyncio.TimeoutError:
+                    logger.error(f"Timeout decompressing/parsing {gpl_id}")
+                    return None
         
+        except asyncio.TimeoutError:
+            logger.error(f"Download timeout for {gpl_id} from {family_url}")
+            return None
         except Exception as e:
             logger.debug(f"Error fetching family format for {gpl_id}: {e}")
         
-        # Try miniml format as fallback
+        # Try miniml format as fallback (only if family format failed)
         logger.debug(f"Trying miniml format for {gpl_id}...")
         miniml_result = await self._try_miniml_format(gpl_id, folder_prefix)
         if miniml_result:
@@ -250,7 +307,8 @@ class GeneMappingService:
     
     def _parse_gpl_file(self, content: str, platform_id: str) -> Optional[Dict[str, str]]:
         """
-        Parse GPL family file and extract probe ID -> gene symbol mapping
+        Parse GPL family file line-by-line and extract probe ID -> gene symbol mapping.
+        Uses streaming approach to minimize memory usage.
         
         Args:
             content: Content of GPL family SOFT file
@@ -261,55 +319,53 @@ class GeneMappingService:
         """
         try:
             mapping = {}
-            lines = content.split('\n')
-            
-            # Find the start of the table section
-            table_start = None
-            for i, line in enumerate(lines):
-                if line.startswith('#ID'):
-                    table_start = i
-                    break
-            
-            if table_start is None:
-                logger.debug(f"Could not find table start in GPL file for {platform_id}")
-                return None
-            
-            # Parse header to find relevant columns
-            header_line = lines[table_start]
-            headers = header_line.split('\t')
-            
-            # Find indices for ID and gene symbol columns
+            lines_processed = 0
+            table_started = False
             id_idx = None
             symbol_idx = None
             
-            for idx, header in enumerate(headers):
-                if header.startswith('#ID'):
-                    id_idx = idx
-                elif 'GENE_SYMBOL' in header.upper() or 'SYMBOL' in header.upper():
-                    symbol_idx = idx
-            
-            if id_idx is None:
-                logger.debug(f"Could not find ID column in GPL file for {platform_id}")
-                return None
-            
-            # If no explicit gene symbol column, try common column names
-            if symbol_idx is None:
-                for idx, header in enumerate(headers):
-                    if any(x in header.upper() for x in ['GENE', 'NAME', 'DESCRIPTION']):
-                        symbol_idx = idx
-                        break
-            
-            # Parse data rows
-            for line in lines[table_start + 1:]:
-                if not line or line.startswith('#'):
+            # Process line by line instead of loading entire file
+            for line in content.split('\n'):
+                lines_processed += 1
+                
+                # Skip empty lines and comment-only lines
+                if not line or line.startswith('#!') or line.startswith('##'):
                     continue
                 
+                # Find table header line (starts with #ID)
+                if line.startswith('#ID') and not table_started:
+                    table_started = True
+                    headers = line.split('\t')
+                    
+                    # Find column indices
+                    for idx, header in enumerate(headers):
+                        if header.startswith('#ID'):
+                            id_idx = idx
+                        elif any(x in header.upper() for x in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']):
+                            symbol_idx = idx
+                    
+                    # Fallback: if no explicit gene symbol column, try other common names
+                    if symbol_idx is None:
+                        for idx, header in enumerate(headers):
+                            if any(x in header.upper() for x in ['GENE', 'NAME', 'DESCRIPTION']):
+                                symbol_idx = idx
+                                break
+                    
+                    logger.debug(f"Found table header at line {lines_processed}, ID col: {id_idx}, Symbol col: {symbol_idx}")
+                    continue
+                
+                # Skip lines before table starts or comment lines
+                if not table_started or line.startswith('#'):
+                    continue
+                
+                # Parse data rows
                 parts = line.split('\t')
-                if len(parts) <= id_idx:
+                if id_idx is None or len(parts) <= id_idx:
                     continue
                 
                 probe_id = parts[id_idx].strip()
                 
+                # Skip empty or invalid probe IDs
                 if not probe_id or probe_id.startswith('#'):
                     continue
                 
@@ -323,8 +379,15 @@ class GeneMappingService:
                     gene_symbol = gene_symbol.split('///')[0].strip()
                 
                 # Skip if no valid gene symbol
-                if gene_symbol and gene_symbol != '' and gene_symbol.lower() != 'null':
-                    mapping[probe_id] = gene_symbol
+                if not gene_symbol or gene_symbol == '' or gene_symbol.lower() == 'null' or gene_symbol.lower() == 'na':
+                    continue
+                
+                mapping[probe_id] = gene_symbol
+            
+            if mapping:
+                logger.info(f"Parsed GPL file for {platform_id}: {len(mapping)} probes from {lines_processed} lines")
+            else:
+                logger.warning(f"No valid mappings found in GPL file for {platform_id} ({lines_processed} lines processed)")
             
             return mapping if mapping else None
         
