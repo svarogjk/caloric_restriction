@@ -552,27 +552,44 @@ Determine the optimal parsing strategy for this file."""
             logger.warning(f"No platform info for {data.accession}, skipping gene mapping")
             return data
         
-        platform_id = data.platform_info['platform']
-        if not platform_id or not isinstance(platform_id, str):
-            logger.warning(f"Invalid platform ID for {data.accession}, skipping gene mapping")
+        platform_ids = data.platform_info.get('platforms', [])
+        if not platform_ids:
+            # Fallback to single platform field for backwards compatibility
+            single_platform = data.platform_info.get('platform')
+            platform_ids = [single_platform] if single_platform else []
+        
+        if not platform_ids:
+            logger.warning(f"No platform IDs for {data.accession}, skipping gene mapping")
             return data
         
-        logger.info(f"Fetching gene mapping for platform {platform_id}")
+        logger.info(f"Fetching gene mappings for {len(platform_ids)} platform(s): {platform_ids}")
         
         try:
-            # Get probe ID to gene symbol mapping
-            mapping = await self.gene_mapping_service.get_probe_to_gene_mapping(platform_id)
+            # Try to get mappings for all platforms in order (combine all mappings)
+            combined_mapping = {}
             
-            if mapping:
-                data.probe_to_gene_mapping = mapping
-                mapped_count = sum(1 for probe_id in data.expression_matrix.index if probe_id in mapping)
-                logger.info(f"Mapped {mapped_count}/{len(data.expression_matrix)} probes to gene symbols for {data.accession}")
+            for platform_id in platform_ids:
+                if not platform_id:
+                    continue
+                    
+                logger.debug(f"Trying platform {platform_id}")
+                mapping = await self.gene_mapping_service.get_probe_to_gene_mapping(platform_id)
+                
+                if mapping:
+                    combined_mapping.update(mapping)
+                    mapped_count = sum(1 for probe_id in data.expression_matrix.index if probe_id in mapping)
+                    logger.info(f"Platform {platform_id}: Mapped {mapped_count}/{len(data.expression_matrix)} probes")
+            
+            if combined_mapping:
+                data.probe_to_gene_mapping = combined_mapping
+                total_mapped = sum(1 for probe_id in data.expression_matrix.index if probe_id in combined_mapping)
+                logger.info(f"Total mapped: {total_mapped}/{len(data.expression_matrix)} probes for {data.accession}")
                 
                 # Log sample of mapped genes for verification
                 sample_mappings = []
                 for probe_id in list(data.expression_matrix.index)[:50]:  # Check first 50 probes
-                    if probe_id in mapping:
-                        sample_mappings.append((probe_id, mapping[probe_id]))
+                    if probe_id in combined_mapping:
+                        sample_mappings.append((probe_id, combined_mapping[probe_id]))
                         if len(sample_mappings) >= 10:
                             break
                 
@@ -581,7 +598,7 @@ Determine the optimal parsing strategy for this file."""
                     for probe_id, gene_symbol in sample_mappings:
                         logger.info(f"  {probe_id} → {gene_symbol}")
             else:
-                logger.warning(f"Could not fetch gene mapping for platform {platform_id}")
+                logger.warning(f"Could not fetch gene mappings for any of {len(platform_ids)} platform(s)")
             
             return data
         

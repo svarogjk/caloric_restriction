@@ -6,7 +6,7 @@ Identifies commonly altered genes across multiple datasets
 
 import logging
 import asyncio
-from typing import List, Optional
+from typing import List, Optional, Literal
 from dataclasses import dataclass
 from datetime import datetime
 from collections import Counter
@@ -19,6 +19,7 @@ from app.services.differential_expression_service import (
     DifferentialExpressionService,
     DifferentialExpressionResult
 )
+from app.services.gene_mapping_ai_agent import GeneMappingAIAgent
 from app.config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -75,9 +76,17 @@ class GEOWorkflowOrchestrator:
         self,
         api_key: Optional[str] = None,
         email: Optional[str] = None,
-        model: str = "mistral"
+        model: str = "mistral",
+        use_ai_gene_mapping: bool = True
     ):
-        """Initialize all services"""
+        """Initialize all services
+        
+        Args:
+            api_key: Optional GEO API key
+            email: Optional email for GEO API
+            model: LLM model to use ('mistral' or 'claude')
+            use_ai_gene_mapping: Whether to use AI agent for gene mapping
+        """
         self.geo_client = GEOClient(api_key=api_key, email=email)
         self.ranking_service = GEODatasetRankingService(model=model)
         self.loader_service = GEODataLoaderService(model=model)
@@ -87,6 +96,12 @@ class GEOWorkflowOrchestrator:
             p_value_threshold=0.01,
             model=model
         )
+        # Initialize AI agent for gene mapping if requested
+        self.use_ai_gene_mapping = use_ai_gene_mapping
+        self.gene_mapping_agent = GeneMappingAIAgent(
+            model_type="claude" if model == "claude" else "mistral"
+        ) if use_ai_gene_mapping else None
+        self.current_model = model
     
     async def analyze_query(
         self,
@@ -94,7 +109,9 @@ class GEOWorkflowOrchestrator:
         max_datasets: int = 10,
         organism: Optional[str] = "Mus musculus",
         min_occurrence: int = 2,
-        model: Optional[str] = None
+        model: Optional[str] = None,
+        ranking_multiplier: int = 3,
+        use_ai_gene_mapping: bool = True
     ) -> CrossDatasetAnalysis:
         """
         Complete analysis workflow for a query
@@ -105,6 +122,8 @@ class GEOWorkflowOrchestrator:
             organism: Filter by organism
             min_occurrence: Minimum datasets where gene must appear
             model: LLM model to use ('mistral' or 'claude'), defaults to instance model
+            ranking_multiplier: Multiplier for datasets to rank before analysis (default 3)
+            use_ai_gene_mapping: Whether to use AI agent for gene mapping (default True)
         
         Returns:
             CrossDatasetAnalysis with common genes
@@ -112,14 +131,25 @@ class GEOWorkflowOrchestrator:
         start_time = datetime.now()
         
         # Use provided model or fall back to instance model
-        use_model = model if model else "mistral"  # Default fallback
-        logger.info(f"Starting GEO analysis workflow for: {query} with model: {use_model}")
+        use_model = model if model else self.current_model
+        logger.info(f"Starting GEO analysis workflow for: {query} with model: {use_model}, "
+                   f"AI gene mapping: {use_ai_gene_mapping}")
         
         # Update services to use the specified model if different from current
-        if model:
+        if model and model != self.current_model:
             self.ranking_service.set_model(model)
             self.loader_service.set_model(model)
             self.de_service.set_model(model)
+            # Update AI agent if needed
+            if use_ai_gene_mapping and self.gene_mapping_agent:
+                ai_model_type = "claude" if model == "claude" else "mistral"
+                self.gene_mapping_agent = GeneMappingAIAgent(model_type=ai_model_type)
+            self.current_model = model
+        
+        # Update AI gene mapping preference
+        if use_ai_gene_mapping and not self.gene_mapping_agent:
+            ai_model_type = "claude" if use_model == "claude" else "mistral"
+            self.gene_mapping_agent = GeneMappingAIAgent(model_type=ai_model_type)
         
         # Step 1: Search GEO
         search_result = await self._search_geo(query, organism, max_datasets)
@@ -130,9 +160,8 @@ class GEOWorkflowOrchestrator:
         
         logger.info(f"Found {len(search_result.datasets)} datasets")
         
-        # Step 2: Rank datasets by DE potential with 3x multiplier for better scoring
-        # Request 3x datasets for ranking, then analyze only top 2
-        ranking_multiplier = 3
+        # Step 2: Rank datasets by DE potential with ranking multiplier for better scoring
+        # Request multiplier*max_datasets for ranking, then analyze only top 2
         datasets_for_ranking = min(len(search_result.datasets), max_datasets * ranking_multiplier)
         ranked_datasets = await self._rank_datasets(search_result.datasets, query, datasets_for_ranking)
         
@@ -229,6 +258,7 @@ class GEOWorkflowOrchestrator:
         """
         Pre-load all platform mappings for the datasets before DE analysis.
         This avoids loading platforms during the timeout-sensitive processing phase.
+        Uses AI agent if available for more efficient parsing.
         
         Args:
             datasets: List of datasets to pre-load platforms for
@@ -237,28 +267,78 @@ class GEOWorkflowOrchestrator:
             logger.debug("No datasets to preload platforms for")
             return
         
-        # Extract unique platform IDs
+        # Extract unique platform IDs (datasets can have multiple platforms)
         platform_ids = set()
         for dataset in datasets:
-            if dataset.platform and isinstance(dataset.platform, str):
-                platform_ids.add(dataset.platform)
+            if dataset.platforms:
+                for platform_id in dataset.platforms:
+                    if platform_id and isinstance(platform_id, str):
+                        platform_ids.add(platform_id)
         
         if not platform_ids:
             logger.debug("No platform IDs found in datasets")
             return
         
         platform_ids = list(platform_ids)
-        logger.info(f"Pre-loading {len(platform_ids)} platform mappings: {platform_ids}")
+        logger.info(f"Pre-loading {len(platform_ids)} platform mappings: {platform_ids}, "
+                   f"using AI agent: {self.gene_mapping_agent is not None}")
         
         try:
-            # Batch load all platforms concurrently
-            await self.loader_service.gene_mapping_service.get_batch_probe_to_gene_mappings(
-                platform_ids=platform_ids,
-                use_cache=True
-            )
+            if self.gene_mapping_agent:
+                # Use AI agent for smarter mapping (reads only necessary tokens)
+                await self._preload_platforms_with_ai(platform_ids)
+            else:
+                # Batch load all platforms concurrently using standard service
+                await self.loader_service.gene_mapping_service.get_batch_probe_to_gene_mappings(
+                    platform_ids=platform_ids,
+                    use_cache=True
+                )
             logger.info("Successfully pre-loaded platform mappings")
         except Exception as e:
             logger.warning(f"Error pre-loading platforms: {e}. Continuing with analysis anyway.")
+    
+    async def _preload_platforms_with_ai(self, platform_ids: List[str]) -> None:
+        """
+        Pre-load platform mappings using AI agent for efficient parsing.
+        
+        Args:
+            platform_ids: List of platform IDs to load
+        """
+        logger.info(f"Using AI agent to pre-load {len(platform_ids)} platform mappings")
+        
+        for platform_id in platform_ids:
+            try:
+                # Construct URL for the platform
+                # Ensure platform_id has GPL prefix
+                gpl_id = platform_id if platform_id.startswith("GPL") else f"GPL{platform_id}"
+                numeric_id = gpl_id.replace("GPL", "")
+                
+                if len(numeric_id) >= 4:
+                    folder_prefix = f"GPL{numeric_id[:-3]}nnn"
+                elif len(numeric_id) == 3:
+                    folder_prefix = f"GPL{numeric_id[0]}nnn"
+                else:
+                    folder_prefix = f"GPL{numeric_id[0] if numeric_id else '1'}nnn"
+                
+                # Use GPL-prefixed ID in URL
+                url = f"https://ftp.ncbi.nlm.nih.gov/geo/platforms/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
+                
+                # Use AI agent to fetch and parse with smart timeout
+                logger.debug(f"Fetching {gpl_id} using AI agent from {url}")
+                result = await self.gene_mapping_agent.process_gpl_file_from_url(
+                    url=url,
+                    platform_id=gpl_id,
+                    timeout_seconds=120.0
+                )
+                
+                if result.success:
+                    logger.info(f"AI agent successfully loaded {gpl_id}: {result.mapping_count} mappings")
+                else:
+                    logger.warning(f"AI agent failed to load {gpl_id}")
+                    
+            except Exception as e:
+                logger.warning(f"Error loading {platform_id} with AI agent: {e}")
+
     
     async def _analyze_datasets(
         self,

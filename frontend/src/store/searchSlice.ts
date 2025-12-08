@@ -21,20 +21,26 @@ export interface SearchState {
     query: string
     selectedModel: string
     datasetCount: number
+    rankingMultiplier: number
     results: AnalysisResult | null
     loading: boolean
     error: string | null
     expandedGeneId: string | null
+    useAiGeneMapping: boolean
+    geneMappingModel: string | null
 }
 
 const initialState: SearchState = {
     query: '',
     selectedModel: 'mistral',
     datasetCount: 10,
+    rankingMultiplier: 3,
     results: null,
     loading: false,
     error: null,
     expandedGeneId: null,
+    useAiGeneMapping: true,
+    geneMappingModel: null,
 }
 
 const searchSlice = createSlice({
@@ -49,6 +55,15 @@ const searchSlice = createSlice({
         },
         setDatasetCount: (state, action: PayloadAction<number>) => {
             state.datasetCount = action.payload
+        },
+        setRankingMultiplier: (state, action: PayloadAction<number>) => {
+            state.rankingMultiplier = action.payload
+        },
+        setUseAiGeneMapping: (state, action: PayloadAction<boolean>) => {
+            state.useAiGeneMapping = action.payload
+        },
+        setGeneMappingModel: (state, action: PayloadAction<string | null>) => {
+            state.geneMappingModel = action.payload
         },
         setLoading: (state, action: PayloadAction<boolean>) => {
             state.loading = action.payload
@@ -69,6 +84,9 @@ export const {
     setQuery,
     setSelectedModel,
     setDatasetCount,
+    setRankingMultiplier,
+    setUseAiGeneMapping,
+    setGeneMappingModel,
     setLoading,
     setResults,
     setError,

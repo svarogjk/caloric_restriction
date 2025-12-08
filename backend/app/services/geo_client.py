@@ -30,11 +30,16 @@ class GEODataset:
     last_update: str
     sample_count: int
     dataset_type: str
-    platform: str  # GPL number
+    platforms: List[str]  # List of GPL numbers (can have multiple platforms)
     pmid: Optional[str] = None
     supplementary_files: List[str] = field(default_factory=list)
     ftp_link: Optional[str] = None
     series_matrix_url: Optional[str] = None
+    
+    @property
+    def platform(self) -> Optional[str]:
+        """Get primary platform (for backwards compatibility)"""
+        return self.platforms[0] if self.platforms else None
 
 
 @dataclass
@@ -266,6 +271,10 @@ class GEOClient:
                 if not accession.startswith("GSE"):
                     continue
                 
+                # Parse platform IDs (can be semicolon-delimited for multiple platforms)
+                gpl_str = dataset_data.get("GPL", "")
+                platforms = [p.strip() for p in gpl_str.split(";") if p.strip()]
+                
                 dataset = GEODataset(
                     accession=accession,
                     title=dataset_data.get("title", ""),
@@ -275,7 +284,7 @@ class GEOClient:
                     last_update=dataset_data.get("suppFile", ""),
                     sample_count=int(dataset_data.get("n_samples", 0)),
                     dataset_type=dataset_data.get("gdsType", ""),
-                    platform=dataset_data.get("GPL", ""),
+                    platforms=platforms,
                     pmid=dataset_data.get("PubMedIds", None)
                 )
                 

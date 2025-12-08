@@ -33,5 +33,19 @@ class AnalysisRequest(BaseModel):
     )
     model: str = Field(
         default="mistral",
-        description="LLM model to use ('mistral' or 'claude')"
+        description="LLM model to use for analysis ('mistral' or 'claude')"
+    )
+    ranking_multiplier: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Multiplier for datasets to rank before analysis"
+    )
+    use_ai_gene_mapping: bool = Field(
+        default=True,
+        description="Whether to use AI agent for intelligent gene mapping (reads only necessary tokens)"
+    )
+    gene_mapping_model: Optional[str] = Field(
+        default=None,
+        description="Override model for gene mapping ('mistral' or 'claude'). If None, uses main model"
     )

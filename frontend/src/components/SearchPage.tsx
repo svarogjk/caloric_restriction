@@ -4,6 +4,9 @@ import {
   setQuery,
   setSelectedModel,
   setDatasetCount,
+  setRankingMultiplier,
+  setUseAiGeneMapping,
+  setGeneMappingModel,
   setLoading,
   setResults,
   setError,
@@ -13,12 +16,23 @@ import { searchDatasets, getAvailableModels } from '../services/api'
 import SearchBar from './SearchBar'
 import ModelSelector from './ModelSelector'
 import DatasetCountSelector from './DatasetCountSelector'
+import RankingMultiplierSelector from './RankingMultiplierSelector'
 import GeneList from './GeneList'
 import VolcanoPlot from './VolcanoPlot'
 
 const SearchPage: React.FC = () => {
   const dispatch = useDispatch()
-  const { query, selectedModel, datasetCount, results, loading, error } = useSelector(
+  const { 
+    query, 
+    selectedModel, 
+    datasetCount, 
+    rankingMultiplier, 
+    results, 
+    loading, 
+    error,
+    useAiGeneMapping,
+    geneMappingModel
+  } = useSelector(
     (state: RootState) => state.search
   )
   const [models, setModels] = React.useState<string[]>([])
@@ -46,7 +60,14 @@ const SearchPage: React.FC = () => {
     dispatch(setError(null))
 
     try {
-      const data = await searchDatasets(query, selectedModel, datasetCount)
+      const data = await searchDatasets(
+        query, 
+        selectedModel, 
+        datasetCount, 
+        rankingMultiplier,
+        useAiGeneMapping,
+        geneMappingModel || undefined
+      )
       dispatch(setResults(data))
     } catch (err) {
       dispatch(
@@ -57,7 +78,7 @@ const SearchPage: React.FC = () => {
     } finally {
       dispatch(setLoading(false))
     }
-  }, [query, selectedModel, datasetCount, dispatch])
+  }, [query, selectedModel, datasetCount, rankingMultiplier, useAiGeneMapping, geneMappingModel, dispatch])
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter') {
@@ -90,6 +111,49 @@ const SearchPage: React.FC = () => {
               value={datasetCount}
               onChange={(value) => dispatch(setDatasetCount(value))}
             />
+            <RankingMultiplierSelector
+              value={rankingMultiplier}
+              onChange={(value) => dispatch(setRankingMultiplier(value))}
+            />
+          </div>
+
+          {/* AI Gene Mapping Options */}
+          <div className="bg-blue-50 rounded-lg p-4 mb-6 border border-blue-200">
+            <div className="flex items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={useAiGeneMapping}
+                  onChange={(e) => dispatch(setUseAiGeneMapping(e.target.checked))}
+                  className="w-4 h-4 rounded border-gray-300"
+                />
+                <span className="text-sm font-medium text-gray-700">
+                  Use AI Agent for Gene Mapping
+                </span>
+              </label>
+              
+              {useAiGeneMapping && (
+                <select
+                  value={geneMappingModel || ''}
+                  onChange={(e) => dispatch(setGeneMappingModel(e.target.value || null))}
+                  className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+                >
+                  <option value="">Auto (use main model)</option>
+                  {models.map((model) => (
+                    <option key={model} value={model}>
+                      {model.charAt(0).toUpperCase() + model.slice(1)}
+                    </option>
+                  ))}
+                </select>
+              )}
+              
+              <span className="text-xs text-gray-500 italic">
+                {useAiGeneMapping 
+                  ? 'Uses AI to intelligently parse platform files with minimal token usage'
+                  : 'Standard gene mapping service'
+                }
+              </span>
+            </div>
           </div>
 
           <SearchBar

@@ -22,22 +22,28 @@ class GeneMappingService:
     
     CACHE_DIR = Path("/tmp/gpl_cache")
     MEMORY_CACHE_FILE = CACHE_DIR / ".memory_cache_index.json"
+    INVALID_PLATFORMS_FILE = CACHE_DIR / ".invalid_platforms.json"
     GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
-    MAX_RETRIES = 3
+    MAX_RETRIES = 1  # Reduced from 3 to 1 - single quick check is enough
     RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
     
     def __init__(self):
         """Initialize gene mapping service"""
         self.CACHE_DIR.mkdir(exist_ok=True)
-        # Reduced timeout for better responsiveness on large downloads
-        self.client = httpx.AsyncClient(timeout=120.0, follow_redirects=True)
+        # Large timeout for downloading potentially multi-GB platform files
+        # Will be overridden per-request with smart timeout calculation
+        self.client = httpx.AsyncClient(timeout=600.0, follow_redirects=True)
         # Cache only platform IDs, not the actual mappings (to save memory)
         self._cached_platform_ids: set = set()
         # Small in-memory cache for recently accessed mappings (LRU-like)
         self._mapping_cache: Dict[str, Dict[str, str]] = {}
         self.MAX_CACHE_SIZE = 3  # Only keep 3 platforms in memory
+        # Track known invalid platforms to avoid repeated failed attempts
+        self._invalid_platforms: set = set()
         # Load list of previously cached platforms on init
         self._load_memory_cache_index()
+        # Load list of known invalid platforms
+        self._load_invalid_platforms_cache()
     
     def _load_memory_cache_index(self) -> None:
         """Load index of cached platforms (not the actual data) to track what's cached on disk"""
@@ -51,6 +57,31 @@ class GeneMappingService:
                 logger.debug(f"Index loaded: {len(self._cached_platform_ids)} platforms available on disk")
         except Exception as e:
             logger.debug(f"Could not load memory cache index: {e}")
+    
+    def _load_invalid_platforms_cache(self) -> None:
+        """Load list of known invalid platforms to avoid repeated failed attempts"""
+        try:
+            if self.INVALID_PLATFORMS_FILE.exists():
+                with open(self.INVALID_PLATFORMS_FILE, 'r') as f:
+                    cache_data = json.load(f)
+                
+                self._invalid_platforms = set(cache_data.get('invalid_platforms', []))
+                if self._invalid_platforms:
+                    logger.debug(f"Loaded {len(self._invalid_platforms)} known invalid platforms")
+        except Exception as e:
+            logger.debug(f"Could not load invalid platforms cache: {e}")
+    
+    def _save_invalid_platforms_cache(self) -> None:
+        """Save list of invalid platforms to persistent storage"""
+        try:
+            cache_data = {
+                'invalid_platforms': list(self._invalid_platforms)
+            }
+            with open(self.INVALID_PLATFORMS_FILE, 'w') as f:
+                json.dump(cache_data, f)
+            logger.debug(f"Saved invalid platforms cache: {len(self._invalid_platforms)} platforms")
+        except Exception as e:
+            logger.debug(f"Failed to save invalid platforms cache: {e}")
     
     def _save_memory_cache_index(self) -> None:
         """Save index of cached platforms to persistent storage"""
@@ -207,6 +238,11 @@ class GeneMappingService:
         """
         logger.info(f"Fetching platform mapping for {platform_id}")
         
+        # Check if this platform is known to be invalid
+        if platform_id in self._invalid_platforms:
+            logger.warning(f"Platform {platform_id} is known to be invalid (404), skipping")
+            return None
+        
         # Normalize platform_id to GPL format
         if platform_id.startswith("GPL"):
             gpl_id = platform_id
@@ -239,7 +275,7 @@ class GeneMappingService:
         
         logger.debug(f"Calculated folder prefix for {gpl_id}: {folder_prefix}")
         
-        # Try with retry logic
+        # Try with minimal retry logic
         for attempt in range(self.MAX_RETRIES):
             try:
                 mapping = await self._fetch_with_retry(gpl_id, folder_prefix)
@@ -252,13 +288,17 @@ class GeneMappingService:
                     logger.debug(f"Retrying {gpl_id} in {wait_time:.1f}s...")
                     await asyncio.sleep(wait_time)
         
+        # Mark platform as invalid if we failed to fetch it
+        self._invalid_platforms.add(platform_id)
+        self._save_invalid_platforms_cache()
+        
         logger.warning(f"Failed to fetch mapping for {gpl_id} after {self.MAX_RETRIES} retries")
         return None
     
     async def _fetch_with_retry(self, gpl_id: str, folder_prefix: str) -> Optional[Dict[str, str]]:
         """
         Attempt to fetch platform mapping, trying both family and miniml formats.
-        Uses aggressive timeout to prevent hanging on large downloads.
+        Uses smart timeout that accounts for file size (can be several GB).
         
         Args:
             gpl_id: GPL ID
@@ -267,15 +307,33 @@ class GeneMappingService:
         Returns:
             Dictionary mapping probe_id -> gene_symbol, or None if both formats fail
         """
-        # Try family format first with 120 second timeout per request
+        # Try family format first with dynamic timeout based on file size
         family_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
         
         try:
             logger.debug(f"Downloading GPL file from: {family_url}")
-            response = await asyncio.wait_for(
-                self.client.get(family_url),
-                timeout=120.0  # 2 minute timeout for download
-            )
+            # First, get file size via HEAD request to determine timeout
+            try:
+                head_response = await self.client.head(family_url, timeout=10.0)
+                file_size = int(head_response.headers.get('content-length', 0))
+                
+                # Calculate timeout generously: ~10 MB/sec average download speed
+                # 41MB → 5 seconds, 2GB → 200+ seconds
+                # Double it for safety and add 30 second buffer for initial connection
+                if file_size > 0:
+                    timeout_seconds = (file_size / (1024 * 1024)) / 10.0 * 2.0 + 30.0
+                    logger.debug(f"File size: {file_size / (1024*1024):.1f}MB, timeout: {timeout_seconds:.1f}s")
+                else:
+                    timeout_seconds = 600.0  # 10 minutes default fallback
+            except Exception as e:
+                logger.debug(f"Could not determine file size, using default timeout: {e}")
+                timeout_seconds = 600.0  # 10 minute default timeout for unknown file sizes
+            
+            # Use httpx Timeout with separate connect and read timeouts
+            http_timeout = httpx.Timeout(timeout=timeout_seconds, connect=30.0)
+            
+            logger.debug(f"Downloading {gpl_id} with timeout: {timeout_seconds:.1f}s")
+            response = await self.client.get(family_url, timeout=http_timeout)
             
             if response.status_code == 200:
                 # Decompress and parse with timeout
@@ -337,21 +395,24 @@ class GeneMappingService:
                     table_started = True
                     headers = line.split('\t')
                     
-                    # Find column indices
+                    # Find column indices - strip '#' from headers for matching
                     for idx, header in enumerate(headers):
-                        if header.startswith('#ID'):
+                        header_clean = header.lstrip('#').upper()
+                        
+                        if header_clean.startswith('ID') or header_clean == 'ID_REF':
                             id_idx = idx
-                        elif any(x in header.upper() for x in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']):
+                        elif any(x in header_clean for x in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']):
                             symbol_idx = idx
                     
                     # Fallback: if no explicit gene symbol column, try other common names
                     if symbol_idx is None:
                         for idx, header in enumerate(headers):
-                            if any(x in header.upper() for x in ['GENE', 'NAME', 'DESCRIPTION']):
+                            header_clean = header.lstrip('#').upper()
+                            if any(x in header_clean for x in ['GENE', 'NAME', 'DESCRIPTION']):
                                 symbol_idx = idx
                                 break
                     
-                    logger.debug(f"Found table header at line {lines_processed}, ID col: {id_idx}, Symbol col: {symbol_idx}")
+                    logger.debug(f"Found table header at line {lines_processed}, ID col: {id_idx}, Symbol col: {symbol_idx}, Headers: {[h.lstrip('#') for h in headers[:5]]}")
                     continue
                 
                 # Skip lines before table starts or comment lines
@@ -419,7 +480,7 @@ class GeneMappingService:
             
             # Look for .xml.gz files in miniml directory
             # This is a simplified approach - in practice, miniml files may have different structure
-            logger.debug(f"Miniml directory exists but parsing miniml format not yet implemented")
+            logger.debug("Miniml directory exists but parsing miniml format not yet implemented")
             return None
             
         except Exception as e:
@@ -476,3 +537,50 @@ class GeneMappingService:
             symbol_index[symbol].append(probe_id)
         
         return symbol_index
+    
+    async def get_platform_size_mb(self, platform_id: str) -> Optional[float]:
+        """
+        Get the size of a platform file in MB by checking GEO FTP
+        
+        Args:
+            platform_id: Platform ID (e.g., "GPL1261" or "1261")
+        
+        Returns:
+            Size in MB, or None if unable to determine
+        """
+        try:
+            # Normalize platform_id to GPL format
+            if platform_id.startswith("GPL"):
+                gpl_id = platform_id
+                numeric_id = platform_id[3:]
+            else:
+                numeric_id = platform_id
+                gpl_id = f"GPL{platform_id}"
+            
+            # Calculate folder prefix (same logic as _fetch_platform_mapping)
+            if len(numeric_id) >= 4:
+                folder_prefix = f"GPL{numeric_id[:-3]}nnn"
+            elif len(numeric_id) == 3:
+                folder_prefix = f"GPL{numeric_id[0]}nnn"
+            elif len(numeric_id) == 2:
+                folder_prefix = f"GPL{numeric_id[0]}nnn"
+            else:
+                folder_prefix = f"GPL{numeric_id}nnn"
+            
+            family_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
+            
+            # Get file size via HEAD request
+            head_response = await self.client.head(family_url, timeout=10.0)
+            
+            if head_response.status_code == 200:
+                content_length = int(head_response.headers.get('content-length', 0))
+                size_mb = content_length / (1024 * 1024)
+                logger.debug(f"Platform {gpl_id} size: {size_mb:.1f}MB")
+                return size_mb
+            else:
+                logger.debug(f"Could not determine size for platform {gpl_id} (HTTP {head_response.status_code})")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Error getting platform size for {platform_id}: {e}")
+            return None

@@ -76,7 +76,16 @@ async def search_datasets(request: AnalysisRequest):
         if model == "claude":
             model = "anthropic"
         
-        logger.info(f"Received search request: {request.query} with model: {request.model} (mapped to {model})")
+        # Determine gene mapping model
+        gene_mapping_model = request.gene_mapping_model
+        if gene_mapping_model and gene_mapping_model == "claude":
+            gene_mapping_model = "anthropic"
+        elif not gene_mapping_model:
+            gene_mapping_model = model  # Use main model if not specified
+        
+        logger.info(f"Received search request: {request.query} with model: {request.model} (mapped to {model}), "
+                   f"AI gene mapping: {request.use_ai_gene_mapping}, "
+                   f"gene mapping model: {request.gene_mapping_model} (mapped to {gene_mapping_model})")
         
         # Run analysis with the search query and selected model
         result: CrossDatasetAnalysis = await orchestrator.analyze_query(
@@ -84,7 +93,9 @@ async def search_datasets(request: AnalysisRequest):
             max_datasets=request.max_datasets,
             organism=request.organism,
             min_occurrence=request.min_occurrence,
-            model=model
+            model=model,
+            ranking_multiplier=request.ranking_multiplier,
+            use_ai_gene_mapping=request.use_ai_gene_mapping
         )
         
         # Convert GeneOccurrence objects to response models
