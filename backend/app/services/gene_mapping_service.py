@@ -30,6 +30,8 @@ class GeneMappingService:
     def __init__(self):
         """Initialize gene mapping service"""
         self.CACHE_DIR.mkdir(exist_ok=True)
+        # Path to pre-created parquet files from platform loading
+        self.PREBUILT_PLATFORM_DIR = Path("platform_mappings")
         # Large timeout for downloading potentially multi-GB platform files
         # Will be overridden per-request with smart timeout calculation
         self.client = httpx.AsyncClient(timeout=600.0, follow_redirects=True)
@@ -95,6 +97,64 @@ class GeneMappingService:
         except Exception as e:
             logger.debug(f"Failed to save memory cache index: {e}")
     
+    def _get_prebuilt_parquet_path(self, platform_id: str) -> Optional[Path]:
+        """Check if a pre-built gene mapping parquet file exists for this platform.
+        
+        Pre-built parquet files are created from full platform downloads and stored
+        in the platform_mappings directory. They contain clean probe->gene mappings.
+        
+        Args:
+            platform_id: Platform ID (e.g., 'GPL23038')
+            
+        Returns:
+            Path to the parquet file if it exists, None otherwise
+        """
+        try:
+            # Look for {platform_id}_gene_mapping.parquet
+            prebuilt_path = self.PREBUILT_PLATFORM_DIR / f"{platform_id}_gene_mapping.parquet"
+            if prebuilt_path.exists() and prebuilt_path.stat().st_size > 0:
+                logger.info(f"Found pre-built parquet for {platform_id} at {prebuilt_path}")
+                return prebuilt_path
+        except Exception as e:
+            logger.warning(f"Error checking for pre-built parquet for {platform_id}: {e}")
+        
+        return None
+
+    def _load_from_prebuilt_parquet(self, platform_id: str, parquet_path: Path) -> Dict[str, str]:
+        """Load gene mappings from a pre-built parquet file.
+        
+        Args:
+            platform_id: Platform ID
+            parquet_path: Path to the parquet file
+            
+        Returns:
+            Dictionary mapping probe IDs to gene symbols
+        """
+        try:
+            import pandas as pd
+            
+            logger.info(f"Loading {platform_id} from pre-built parquet: {parquet_path}")
+            df = pd.read_parquet(parquet_path)
+            
+            # Create mapping from ID -> gene_symbol
+            mapping = {}
+            if "ID" in df.columns and "gene_symbol" in df.columns:
+                # Convert to dict, handling NaN values
+                for idx, row in df.iterrows():
+                    probe_id = str(row["ID"])
+                    gene_symbol = str(row["gene_symbol"])
+                    if gene_symbol and gene_symbol != "nan":
+                        mapping[probe_id] = gene_symbol
+            
+            logger.info(
+                f"Loaded {len(mapping)} probe->gene mappings from pre-built parquet for {platform_id}"
+            )
+            return mapping
+            
+        except Exception as e:
+            logger.error(f"Failed to load pre-built parquet for {platform_id}: {e}")
+            raise
+    
     async def close(self):
         """Close HTTP client"""
         await self.client.aclose()
@@ -149,6 +209,26 @@ class GeneMappingService:
         if platform_id in self._mapping_cache:
             logger.debug(f"Using in-memory cache for {platform_id}")
             return self._mapping_cache[platform_id]
+        
+        # Check for pre-built parquet files first (fast, local, pre-processed)
+        prebuilt_path = self._get_prebuilt_parquet_path(platform_id)
+        if prebuilt_path:
+            try:
+                mapping = self._load_from_prebuilt_parquet(platform_id, prebuilt_path)
+                
+                # Only keep small mappings in memory cache (< 100k entries)
+                if len(mapping) < 100000:
+                    self._mapping_cache[platform_id] = mapping
+                    # Enforce max cache size - remove oldest if over limit
+                    if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
+                        oldest = next(iter(self._mapping_cache))
+                        del self._mapping_cache[oldest]
+                        logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+                
+                return mapping
+            except Exception as e:
+                logger.warning(f"Failed to load pre-built parquet for {platform_id}: {e}")
+                # Fall through to try disk cache and then download
         
         # Try to load from disk cache (don't keep in memory for large files)
         cache_path = self.CACHE_DIR / f"{platform_id}.parquet"
