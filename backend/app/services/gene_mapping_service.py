@@ -317,12 +317,18 @@ class GeneMappingService:
                 head_response = await self.client.head(family_url, timeout=10.0)
                 file_size = int(head_response.headers.get('content-length', 0))
                 
-                # Calculate timeout generously: ~10 MB/sec average download speed
-                # 41MB → 5 seconds, 2GB → 200+ seconds
-                # Double it for safety and add 30 second buffer for initial connection
+                # Calculate timeout dynamically based on file size
+                # Estimate: ~10-15 MB/sec average download speed for large files
+                # Conservative: double the time + buffer for connection/parsing
+                # Can handle files up to 5GB+ without hard limits
                 if file_size > 0:
-                    timeout_seconds = (file_size / (1024 * 1024)) / 10.0 * 2.0 + 30.0
-                    logger.debug(f"File size: {file_size / (1024*1024):.1f}MB, timeout: {timeout_seconds:.1f}s")
+                    # Base calculation: bytes / (10 MB/sec) to seconds
+                    base_timeout = (file_size / (1024 * 1024)) / 10.0
+                    # Add multiplier for safety and connection overhead
+                    timeout_seconds = base_timeout * 2.0 + 60.0
+                    # Cap at 20 minutes for extremely large files
+                    timeout_seconds = min(timeout_seconds, 1200.0)
+                    logger.debug(f"File size: {file_size / (1024*1024*1024):.2f}GB, calculated timeout: {timeout_seconds:.1f}s")
                 else:
                     timeout_seconds = 600.0  # 10 minutes default fallback
             except Exception as e:
@@ -367,6 +373,7 @@ class GeneMappingService:
         """
         Parse GPL family file line-by-line and extract probe ID -> gene symbol mapping.
         Uses streaming approach to minimize memory usage.
+        Implements multiple fallback strategies for column detection.
         
         Args:
             content: Content of GPL family SOFT file
@@ -395,24 +402,45 @@ class GeneMappingService:
                     table_started = True
                     headers = line.split('\t')
                     
-                    # Find column indices - strip '#' from headers for matching
+                    logger.debug(f"Found header at line {lines_processed}: {[h.lstrip('#') for h in headers[:10]]}")
+                    
+                    # First pass: look for exact matches
                     for idx, header in enumerate(headers):
-                        header_clean = header.lstrip('#').upper()
+                        header_clean = header.lstrip('#').upper().strip()
                         
-                        if header_clean.startswith('ID') or header_clean == 'ID_REF':
+                        if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
                             id_idx = idx
-                        elif any(x in header_clean for x in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']):
+                        elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']:
                             symbol_idx = idx
                     
-                    # Fallback: if no explicit gene symbol column, try other common names
+                    # Second pass: flexible matching for ID column
+                    if id_idx is None:
+                        for idx, header in enumerate(headers):
+                            header_clean = header.lstrip('#').upper()
+                            if any(x in header_clean for x in ['ID', 'ACCESSION', 'PROBE']):
+                                id_idx = idx
+                                break
+                    
+                    # Third pass: flexible matching for gene symbol column
                     if symbol_idx is None:
                         for idx, header in enumerate(headers):
                             header_clean = header.lstrip('#').upper()
-                            if any(x in header_clean for x in ['GENE', 'NAME', 'DESCRIPTION']):
+                            # Check for gene-related columns (symbol, name, description, etc.)
+                            if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
+                                                                 'GENE', 'DESCRIPTION', 'PRODUCT']):
                                 symbol_idx = idx
                                 break
                     
-                    logger.debug(f"Found table header at line {lines_processed}, ID col: {id_idx}, Symbol col: {symbol_idx}, Headers: {[h.lstrip('#') for h in headers[:5]]}")
+                    # Fourth pass: use common aliases
+                    if symbol_idx is None:
+                        for idx, header in enumerate(headers):
+                            header_clean = header.lstrip('#').upper()
+                            if any(x == header_clean for x in ['NAME', 'TITLE', 'DEFINITION']):
+                                symbol_idx = idx
+                                break
+                    
+                    logger.debug(f"Detected columns - ID: {id_idx} ({headers[id_idx] if id_idx is not None else 'NOT FOUND'}), "
+                               f"Symbol: {symbol_idx} ({headers[symbol_idx] if symbol_idx is not None else 'NOT FOUND'})")
                     continue
                 
                 # Skip lines before table starts or comment lines
@@ -440,7 +468,7 @@ class GeneMappingService:
                     gene_symbol = gene_symbol.split('///')[0].strip()
                 
                 # Skip if no valid gene symbol
-                if not gene_symbol or gene_symbol == '' or gene_symbol.lower() == 'null' or gene_symbol.lower() == 'na':
+                if not gene_symbol or gene_symbol == '' or gene_symbol.lower() in ['null', 'na', 'n/a']:
                     continue
                 
                 mapping[probe_id] = gene_symbol
@@ -458,7 +486,8 @@ class GeneMappingService:
     
     async def _try_miniml_format(self, gpl_id: str, folder_prefix: str) -> Optional[Dict[str, str]]:
         """
-        Try alternative miniml format for platform data
+        Try alternative miniml format for platform data.
+        Miniml format is XML-based and provides structured gene annotation data.
         
         Args:
             gpl_id: Platform ID in GPL format
@@ -478,13 +507,127 @@ class GeneMappingService:
                 logger.debug(f"Miniml directory not available for {gpl_id}")
                 return None
             
-            # Look for .xml.gz files in miniml directory
-            # This is a simplified approach - in practice, miniml files may have different structure
-            logger.debug("Miniml directory exists but parsing miniml format not yet implemented")
-            return None
+            # Parse HTML directory listing to find XML file
+            import re
+            html_content = response.text
+            
+            # Look for .xml.gz file in directory listing
+            xml_files = re.findall(r'href=["\']([^"\']*\.xml\.gz)["\']', html_content)
+            
+            if not xml_files:
+                logger.debug(f"No XML files found in miniml directory for {gpl_id}")
+                return None
+            
+            # Use the first XML file found
+            xml_filename = xml_files[0].strip('/')
+            xml_url = f"{miniml_url}/{xml_filename}"
+            
+            logger.info(f"Found miniml XML file for {gpl_id}: {xml_filename}")
+            
+            # Download and decompress XML
+            xml_response = await self.client.get(xml_url)
+            if xml_response.status_code != 200:
+                logger.debug(f"Failed to download miniml XML for {gpl_id}")
+                return None
+            
+            # Decompress
+            xml_content = gzip.decompress(xml_response.content).decode('utf-8', errors='ignore')
+            
+            # Parse XML for gene mappings
+            return self._parse_miniml_xml(xml_content, gpl_id)
             
         except Exception as e:
             logger.debug(f"Error trying miniml format for {gpl_id}: {e}")
+            return None
+    
+    def _parse_miniml_xml(self, xml_content: str, platform_id: str) -> Optional[Dict[str, str]]:
+        """
+        Parse miniml XML format to extract probe ID -> gene symbol mappings.
+        Miniml XML typically contains Platform-Features with sequences and annotations.
+        
+        Args:
+            xml_content: XML content from miniml file
+            platform_id: Platform ID for logging
+        
+        Returns:
+            Dictionary mapping probe_id -> gene_symbol, or None if parsing fails
+        """
+        try:
+            import xml.etree.ElementTree as ET
+            
+            logger.debug(f"Parsing miniml XML for {platform_id}")
+            
+            mapping = {}
+            root = ET.fromstring(xml_content)
+            
+            # Remove namespace to simplify parsing
+            for elem in root.iter():
+                if '}' in elem.tag:
+                    elem.tag = elem.tag.split('}', 1)[1]
+            
+            # Find all Feature elements (contains probe info)
+            # Typical structure: Platform -> PlatformData -> Features -> Feature
+            features = root.findall('.//Feature')
+            
+            if not features:
+                logger.debug(f"No Feature elements found in miniml XML for {platform_id}")
+                return None
+            
+            logger.info(f"Found {len(features)} features in miniml XML for {platform_id}")
+            
+            for feature in features:
+                try:
+                    # Extract probe ID (usually 'accession' attribute)
+                    probe_id = feature.get('accession')
+                    if not probe_id:
+                        # Try alternative: ID element
+                        id_elem = feature.find('ID')
+                        probe_id = id_elem.text if id_elem is not None else None
+                    
+                    if not probe_id:
+                        continue
+                    
+                    # Extract gene information
+                    gene_symbol = None
+                    
+                    # Try to find gene symbol in various locations
+                    gene_elem = feature.find('.//Gene')
+                    if gene_elem is not None:
+                        symbol_elem = gene_elem.find('Symbol')
+                        if symbol_elem is not None and symbol_elem.text:
+                            gene_symbol = symbol_elem.text.strip()
+                    
+                    # Fallback: look for annotation with gene info
+                    if not gene_symbol:
+                        organism_assoc = feature.find('.//OrganismAssociation')
+                        if organism_assoc is not None:
+                            for annot in organism_assoc.findall('Annotation'):
+                                tag = annot.get('tag')
+                                if tag and any(x in tag.upper() for x in ['GENE', 'SYMBOL', 'NAME']):
+                                    gene_symbol = annot.text
+                                    if gene_symbol:
+                                        break
+                    
+                    # Use first gene if multiple are listed
+                    if gene_symbol and '///' in gene_symbol:
+                        gene_symbol = gene_symbol.split('///')[0].strip()
+                    
+                    # Add valid mapping
+                    if probe_id and gene_symbol and gene_symbol.lower() not in ['null', 'na', '']:
+                        mapping[probe_id] = gene_symbol
+                
+                except (AttributeError, TypeError):
+                    continue
+            
+            if mapping:
+                logger.info(f"Parsed miniml XML for {platform_id}: {len(mapping)} probes")
+                return mapping
+            else:
+                logger.debug(f"No valid mappings found in miniml XML for {platform_id}")
+                return None
+        
+        except Exception as e:
+            logger.error(f"Error parsing miniml XML for {platform_id}: {e}")
             return None
     
     def map_probes_to_genes(

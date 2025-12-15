@@ -191,17 +191,25 @@ class GEODataLoaderService:
             loaded_data = await self._try_supplementary_files(dataset)
         
         if loaded_data is None:
-            logger.error(f"Failed to load dataset {dataset.accession}")
+            logger.error(f"Failed to load dataset {dataset.accession}: Could not retrieve any data files")
             return None
         
-        # Validate data is not empty
+        # Validate data is not empty with detailed error reporting
         if loaded_data.expression_matrix.empty or len(loaded_data.expression_matrix) == 0:
-            logger.error(f"Dataset {dataset.accession} has no expression data (empty matrix)")
+            logger.error(f"Dataset {dataset.accession} has no expression data (empty matrix). "
+                        f"Shape: {loaded_data.expression_matrix.shape}")
             return None
         
         if len(loaded_data.expression_matrix.columns) < 2:
-            logger.error(f"Dataset {dataset.accession} has too few samples ({len(loaded_data.expression_matrix.columns)})")
+            logger.error(f"Dataset {dataset.accession} has too few samples ({len(loaded_data.expression_matrix.columns)}). "
+                        f"Minimum 2 samples required. Total genes: {len(loaded_data.expression_matrix)}")
             return None
+        
+        # Perform comprehensive data quality checks
+        quality_issues = self._validate_data_quality(loaded_data, dataset.accession)
+        if quality_issues:
+            logger.warning(f"Dataset {dataset.accession} quality issues: {quality_issues}")
+            # Don't reject - just warn, some issues may be acceptable
         
         # Normalize if requested
         if normalize:
@@ -416,6 +424,62 @@ Determine the optimal parsing strategy for this file."""
         }
         
         return metrics
+    
+    def _validate_data_quality(self, data: LoadedGEOData, accession: str) -> List[str]:
+        """
+        Perform comprehensive data quality checks.
+        
+        Args:
+            data: Loaded data to validate
+            accession: Dataset accession for logging
+        
+        Returns:
+            List of quality issues found (empty if all checks pass)
+        """
+        issues = []
+        expr = data.expression_matrix
+        
+        # Check for excessive missing values
+        missing_rate = expr.isna().sum().sum() / expr.size if expr.size > 0 else 0
+        if missing_rate > 0.5:
+            issues.append(f"High missing rate: {missing_rate:.1%} (>50%)")
+        elif missing_rate > 0.1:
+            issues.append(f"Moderate missing rate: {missing_rate:.1%} (>10%)")
+        
+        # Check for near-zero variance genes (potential issues)
+        gene_vars = expr.var(axis=1)
+        zero_var_count = (gene_vars < 1e-6).sum()
+        if zero_var_count > 0:
+            issues.append(f"Zero-variance genes: {zero_var_count} ({zero_var_count/len(expr)*100:.1f}%)")
+        
+        # Check for extreme value distributions
+        value_range = expr.max().max() - expr.min().min()
+        if value_range < 0.1:
+            issues.append(f"Very narrow value range: {value_range:.6f} (potential normalization issue)")
+        
+        # Check for potential outlier samples
+        sample_medians = expr.median(axis=0)
+        sample_mad = (sample_medians - sample_medians.median()).abs().median()
+        
+        if sample_mad > 0:
+            outlier_threshold = sample_medians.median() + 3 * sample_mad
+            outlier_samples = (sample_medians > outlier_threshold).sum()
+            if outlier_samples > len(expr.columns) * 0.1:  # More than 10% are outliers
+                issues.append(f"Potential outlier samples: {outlier_samples} ({outlier_samples/len(expr.columns)*100:.1f}%)")
+        
+        # Check for gene expression patterns
+        gene_means = expr.mean(axis=1)
+        if (gene_means < 1e-6).sum() > len(expr) * 0.5:
+            issues.append(f"More than 50% of genes have near-zero mean expression")
+        
+        # Log individual checks for debugging
+        logger.debug(f"{accession} quality metrics: "
+                    f"Missing: {missing_rate:.1%}, "
+                    f"Genes: {len(expr)}, "
+                    f"Samples: {len(expr.columns)}, "
+                    f"Value range: [{expr.min().min():.4f}, {expr.max().max():.4f}]")
+        
+        return issues
     
     def _save_to_cache(self, data: LoadedGEOData, cache_path: Path):
         """Save data to cache with comprehensive metadata for session reuse"""

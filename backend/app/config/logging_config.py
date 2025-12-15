@@ -9,8 +9,8 @@ from pathlib import Path
 from datetime import datetime
 
 # Create logs directory
-LOGS_DIR = Path("/home/ykorkodi/projects/caloric_restriction/backend/geo_logs")
-LOGS_DIR.mkdir(exist_ok=True)
+LOGS_DIR = Path(__file__).parent.parent.parent / "geo_logs"
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Log file path
 LOG_FILE = LOGS_DIR / "geo_analysis.log"

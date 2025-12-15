@@ -19,7 +19,6 @@ from app.services.differential_expression_service import (
     DifferentialExpressionService,
     DifferentialExpressionResult
 )
-from app.services.gene_mapping_ai_agent import GeneMappingAIAgent
 from app.config.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -96,11 +95,7 @@ class GEOWorkflowOrchestrator:
             p_value_threshold=0.01,
             model=model
         )
-        # Initialize AI agent for gene mapping if requested
-        self.use_ai_gene_mapping = use_ai_gene_mapping
-        self.gene_mapping_agent = GeneMappingAIAgent(
-            model_type="claude" if model == "claude" else "mistral"
-        ) if use_ai_gene_mapping else None
+        # Use standard gene mapping service (AI agent was redundant)
         self.current_model = model
     
     async def analyze_query(
@@ -140,16 +135,7 @@ class GEOWorkflowOrchestrator:
             self.ranking_service.set_model(model)
             self.loader_service.set_model(model)
             self.de_service.set_model(model)
-            # Update AI agent if needed
-            if use_ai_gene_mapping and self.gene_mapping_agent:
-                ai_model_type = "claude" if model == "claude" else "mistral"
-                self.gene_mapping_agent = GeneMappingAIAgent(model_type=ai_model_type)
             self.current_model = model
-        
-        # Update AI gene mapping preference
-        if use_ai_gene_mapping and not self.gene_mapping_agent:
-            ai_model_type = "claude" if use_model == "claude" else "mistral"
-            self.gene_mapping_agent = GeneMappingAIAgent(model_type=ai_model_type)
         
         # Step 1: Search GEO
         search_result = await self._search_geo(query, organism, max_datasets)
@@ -280,66 +266,19 @@ class GEOWorkflowOrchestrator:
             return
         
         platform_ids = list(platform_ids)
-        logger.info(f"Pre-loading {len(platform_ids)} platform mappings: {platform_ids}, "
-                   f"using AI agent: {self.gene_mapping_agent is not None}")
+        logger.info(f"Pre-loading {len(platform_ids)} platform mappings: {platform_ids}")
         
         try:
-            if self.gene_mapping_agent:
-                # Use AI agent for smarter mapping (reads only necessary tokens)
-                await self._preload_platforms_with_ai(platform_ids)
-            else:
-                # Batch load all platforms concurrently using standard service
-                await self.loader_service.gene_mapping_service.get_batch_probe_to_gene_mappings(
-                    platform_ids=platform_ids,
-                    use_cache=True
-                )
+            # Use standard gene mapping service (AI agent was redundant)
+            await self.loader_service.gene_mapping_service.get_batch_probe_to_gene_mappings(
+                platform_ids=platform_ids,
+                use_cache=True
+            )
             logger.info("Successfully pre-loaded platform mappings")
         except Exception as e:
             logger.warning(f"Error pre-loading platforms: {e}. Continuing with analysis anyway.")
     
-    async def _preload_platforms_with_ai(self, platform_ids: List[str]) -> None:
-        """
-        Pre-load platform mappings using AI agent for efficient parsing.
-        
-        Args:
-            platform_ids: List of platform IDs to load
-        """
-        logger.info(f"Using AI agent to pre-load {len(platform_ids)} platform mappings")
-        
-        for platform_id in platform_ids:
-            try:
-                # Construct URL for the platform
-                # Ensure platform_id has GPL prefix
-                gpl_id = platform_id if platform_id.startswith("GPL") else f"GPL{platform_id}"
-                numeric_id = gpl_id.replace("GPL", "")
-                
-                if len(numeric_id) >= 4:
-                    folder_prefix = f"GPL{numeric_id[:-3]}nnn"
-                elif len(numeric_id) == 3:
-                    folder_prefix = f"GPL{numeric_id[0]}nnn"
-                else:
-                    folder_prefix = f"GPL{numeric_id[0] if numeric_id else '1'}nnn"
-                
-                # Use GPL-prefixed ID in URL
-                url = f"https://ftp.ncbi.nlm.nih.gov/geo/platforms/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
-                
-                # Use AI agent to fetch and parse with smart timeout
-                logger.debug(f"Fetching {gpl_id} using AI agent from {url}")
-                result = await self.gene_mapping_agent.process_gpl_file_from_url(
-                    url=url,
-                    platform_id=gpl_id,
-                    timeout_seconds=120.0
-                )
-                
-                if result.success:
-                    logger.info(f"AI agent successfully loaded {gpl_id}: {result.mapping_count} mappings")
-                else:
-                    logger.warning(f"AI agent failed to load {gpl_id}")
-                    
-            except Exception as e:
-                logger.warning(f"Error loading {platform_id} with AI agent: {e}")
 
-    
     async def _analyze_datasets(
         self,
         datasets: List[GEODataset]
