@@ -230,11 +230,11 @@ class GeneMappingService:
                 logger.warning(f"Failed to load pre-built parquet for {platform_id}: {e}")
                 # Fall through to try disk cache and then download
         
-        # Try to load from disk cache (don't keep in memory for large files)
-        cache_path = self.CACHE_DIR / f"{platform_id}.parquet"
-        if use_cache and cache_path.exists():
+        # Try to load from platform mappings directory (don't keep in memory for large files)
+        mapping_path = self.PREBUILT_PLATFORM_DIR / f"{platform_id}_gene_mapping.parquet"
+        if use_cache and mapping_path.exists():
             try:
-                mapping_df = pd.read_parquet(cache_path)
+                mapping_df = pd.read_parquet(mapping_path)
                 mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
                 
                 # Only keep small mappings in memory cache (< 100k entries)
@@ -246,10 +246,10 @@ class GeneMappingService:
                         del self._mapping_cache[oldest]
                         logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
                 
-                logger.info(f"Loaded mapping for {platform_id} from disk: {len(mapping)} probes")
+                logger.info(f"Loaded mapping for {platform_id} from platform_mappings: {len(mapping)} probes")
                 return mapping
             except Exception as e:
-                logger.warning(f"Failed to load cached mapping for {platform_id}: {e}")
+                logger.warning(f"Failed to load mapping for {platform_id}: {e}")
                 pass
         
         # Fetch from GEO with timeout protection
@@ -283,13 +283,13 @@ class GeneMappingService:
     
     async def _save_mapping_to_parquet(self, platform_id: str, mapping: Dict[str, str]) -> None:
         """
-        Save mapping to parquet file asynchronously to avoid blocking
+        Save mapping to parquet file in platform_mappings directory
         
         Args:
             platform_id: Platform ID
             mapping: Probe ID to gene symbol mapping
         """
-        cache_path = self.CACHE_DIR / f"{platform_id}.parquet"
+        mapping_path = self.PREBUILT_PLATFORM_DIR / f"{platform_id}_gene_mapping.parquet"
         
         # Convert to DataFrame and save with compression
         mapping_df = pd.DataFrame([
@@ -298,13 +298,13 @@ class GeneMappingService:
         ])
         
         # Save with snappy compression for better performance
-        mapping_df.to_parquet(cache_path, compression='snappy', index=False)
+        mapping_df.to_parquet(mapping_path, compression='snappy', index=False)
         
         # Track this platform as cached
         self._cached_platform_ids.add(platform_id)
         self._save_memory_cache_index()
         
-        logger.info(f"Saved mapping for {platform_id} to cache: {len(mapping)} probes, {cache_path.stat().st_size / (1024*1024):.1f}MB")
+        logger.info(f"Saved mapping for {platform_id} to platform_mappings: {len(mapping)} probes, {mapping_path.stat().st_size / (1024*1024):.1f}MB")
     
     async def _fetch_platform_mapping(self, platform_id: str) -> Optional[Dict[str, str]]:
         """

@@ -147,13 +147,13 @@ class GEOWorkflowOrchestrator:
         logger.info(f"Found {len(search_result.datasets)} datasets")
         
         # Step 2: Rank datasets by DE potential with ranking multiplier for better scoring
-        # Request multiplier*max_datasets for ranking, then analyze only top 2
+        # Request multiplier*max_datasets for ranking, then analyze up to max_datasets
         datasets_for_ranking = min(len(search_result.datasets), max_datasets * ranking_multiplier)
         ranked_datasets = await self._rank_datasets(search_result.datasets, query, datasets_for_ranking)
         
-        # Limit analysis to top 2 datasets only for speed
-        top_datasets_for_analysis = ranked_datasets[:2]
-        logger.info(f"Ranked {datasets_for_ranking} datasets, analyzing top {len(top_datasets_for_analysis)} for speed")
+        # Analyze all ranked datasets up to max_datasets limit
+        top_datasets_for_analysis = ranked_datasets[:max_datasets]
+        logger.info(f"Ranked {datasets_for_ranking} datasets, analyzing top {len(top_datasets_for_analysis)} datasets")
         
         # Step 3: Pre-load all platform mappings before DE analysis to avoid timeouts
         await self._preload_platforms(top_datasets_for_analysis)
@@ -341,6 +341,14 @@ class GEOWorkflowOrchestrator:
                     if n_genes < 100:
                         logger.warning(f"Dataset {dataset.accession} has too few genes ({n_genes})")
                         return None
+                    
+                    # Critical quality check: gene mapping
+                    if not loaded_data.probe_to_gene_mapping or len(loaded_data.probe_to_gene_mapping) == 0:
+                        logger.error(f"Dataset {dataset.accession} - gene mapping failed. Cannot perform analysis without gene symbols.")
+                        return None
+                    
+                    mapping_rate = 100.0 * len(loaded_data.probe_to_gene_mapping) / n_genes
+                    logger.info(f"Gene mapping for {dataset.accession}: {len(loaded_data.probe_to_gene_mapping)}/{n_genes} probes ({mapping_rate:.1f}%)")
                     
                     # Perform DE analysis
                     de_result = await self.de_service.analyze_differential_expression(

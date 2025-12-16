@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException
 from app.models.request_models import AnalysisRequest
 from app.models.response_models import AnalysisResponse, HealthResponse, GeneOccurrenceResponse
 from app.services.geo_workflow_orchestrator import CrossDatasetAnalysis
-from app.services.cache_manager import CacheManager
 
 logger = logging.getLogger(__name__)
 
@@ -126,77 +125,5 @@ async def search_datasets(request: AnalysisRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Search failed: {str(e)}"
-        )
-
-
-@router.get("/cache/info")
-async def get_cache_info():
-    """
-    Get information about cached datasets for session reuse
-    
-    Returns:
-        Dictionary with cache status and cached dataset information
-    """
-    return CacheManager.get_cache_info()
-
-
-@router.get("/cache/platforms")
-async def get_platform_cache_info():
-    """
-    Get information about cached platform gene mappings
-    
-    Returns:
-        Dictionary with platform cache status
-    """
-    return CacheManager.get_platform_cache_info()
-
-
-@router.get("/cache/speedup")
-async def get_cache_speedup():
-    """
-    Get estimated performance improvement from cache
-    
-    Returns:
-        Dictionary with speedup estimates
-    """
-    return CacheManager.estimate_analysis_speedup()
-
-
-@router.delete("/cache/{dataset_id}")
-async def clear_dataset_cache(dataset_id: str):
-    """
-    Clear cache for a specific dataset
-    
-    Args:
-        dataset_id: GEO dataset ID (e.g., GSE272329)
-    
-    Returns:
-        Success status
-    """
-    success = CacheManager.clear_dataset_cache(dataset_id)
-    if success:
-        return {"message": f"Cache cleared for {dataset_id}"}
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to clear cache for {dataset_id}"
-        )
-
-
-@router.delete("/cache")
-async def clear_all_cache():
-    """
-    Clear entire local cache (use with caution)
-    
-    Returns:
-        Summary of cleared cache
-    """
-    result = CacheManager.clear_all_cache()
-    if result.get("success"):
-        return result
-    else:
-        raise HTTPException(
-            status_code=500,
-            detail=result.get("error", "Unknown error")
         )
 
