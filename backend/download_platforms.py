@@ -209,7 +209,7 @@ def parse_platform(platform_id: str, file_path: Path) -> Optional[Dict[str, str]
     return mappings if mappings or mappings == {} else None
 
 def save_mappings(platform_id: str, mappings: Dict[str, str]):
-    """Save mappings to a TSV file."""
+    """Save mappings to a TSV file and clean up the .gz file."""
     if not mappings:  # Empty dict means sequencing platform
         return
     
@@ -221,6 +221,13 @@ def save_mappings(platform_id: str, mappings: Dict[str, str]):
             f.write(f"{probe_id}\t{gene_symbol}\n")
     
     print(f"💾 Saved {len(mappings):,} mappings to {output_file}")
+    
+    # Clean up the .gz file now that we have the TSV
+    gz_file = CACHE_DIR / f"GPL{platform_id}_family.soft.gz"
+    if gz_file.exists():
+        file_size_mb = gz_file.stat().st_size / 1024 / 1024
+        gz_file.unlink()
+        print(f"🗑️  Deleted GPL{platform_id}_family.soft.gz ({file_size_mb:.1f}MB)")
 
 def main():
     """Main processing function."""
@@ -280,6 +287,24 @@ def main():
         print(f"{emoji} GPL{platform_id}: {status}")
     
     print(f"\n💾 All mappings saved to: {CACHE_DIR.absolute()}")
+    
+    # Final cleanup: remove any remaining .gz files
+    cleanup_gz_files()
+
+def cleanup_gz_files():
+    """Remove all .soft.gz files from the platform_mappings directory."""
+    gz_files = list(CACHE_DIR.glob("*.soft.gz"))
+    if gz_files:
+        print(f"\n🗑️  Cleaning up {len(gz_files)} .soft.gz files...")
+        total_size = 0
+        for gz_file in gz_files:
+            file_size = gz_file.stat().st_size
+            total_size += file_size
+            gz_file.unlink()
+            print(f"   Deleted {gz_file.name} ({file_size / 1024 / 1024:.1f}MB)")
+        print(f"✓ Freed {total_size / 1024 / 1024:.1f}MB of disk space")
+    else:
+        print(f"\n✓ No .soft.gz files to clean up")
 
 if __name__ == "__main__":
     main()
