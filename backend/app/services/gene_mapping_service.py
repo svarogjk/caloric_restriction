@@ -7,6 +7,8 @@ import logging
 import gzip
 import asyncio
 import json
+import os
+import io
 from typing import Dict, Optional, List
 from pathlib import Path
 import pandas as pd
@@ -23,15 +25,20 @@ class GeneMappingService:
     CACHE_DIR = Path("/tmp/gpl_cache")
     MEMORY_CACHE_FILE = CACHE_DIR / ".memory_cache_index.json"
     INVALID_PLATFORMS_FILE = CACHE_DIR / ".invalid_platforms.json"
+    PARTIAL_DOWNLOADS_DIR = CACHE_DIR / ".partial_downloads"
     GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
-    MAX_RETRIES = 1  # Reduced from 3 to 1 - single quick check is enough
-    RETRY_BACKOFF = 1.5  # Exponential backoff multiplier
+    MAX_RETRIES = 3  # Increased for better reliability with large files
+    RETRY_BACKOFF = 2.0  # Exponential backoff multiplier
+    CHUNK_SIZE = 200 * 1024 * 1024  # 200MB chunks for optimal throughput on large files
     
     def __init__(self):
         """Initialize gene mapping service"""
         self.CACHE_DIR.mkdir(exist_ok=True)
-        # Path to pre-created parquet files from platform loading
-        self.PREBUILT_PLATFORM_DIR = Path("platform_mappings")
+        self.PARTIAL_DOWNLOADS_DIR.mkdir(exist_ok=True)
+        # Path to pre-created mapping files from platform loading
+        # Go up to backend directory, then to platform_mappings
+        self.PREBUILT_PLATFORM_DIR = Path(__file__).parent.parent.parent / "platform_mappings"
+        self.PREBUILT_PLATFORM_DIR.mkdir(exist_ok=True)
         # Large timeout for downloading potentially multi-GB platform files
         # Will be overridden per-request with smart timeout calculation
         self.client = httpx.AsyncClient(timeout=600.0, follow_redirects=True)
@@ -41,11 +48,12 @@ class GeneMappingService:
         self._mapping_cache: Dict[str, Dict[str, str]] = {}
         self.MAX_CACHE_SIZE = 3  # Only keep 3 platforms in memory
         # Track known invalid platforms to avoid repeated failed attempts
+        # NOTE: Disabled persistent caching to allow retry of failed platforms in new sessions
         self._invalid_platforms: set = set()
         # Load list of previously cached platforms on init
         self._load_memory_cache_index()
-        # Load list of known invalid platforms
-        self._load_invalid_platforms_cache()
+        # NOTE: Skip loading persistent invalid platforms cache to allow retries
+        # self._load_invalid_platforms_cache()
     
     def _load_memory_cache_index(self) -> None:
         """Load index of cached platforms (not the actual data) to track what's cached on disk"""
@@ -61,7 +69,11 @@ class GeneMappingService:
             logger.debug(f"Could not load memory cache index: {e}")
     
     def _load_invalid_platforms_cache(self) -> None:
-        """Load list of known invalid platforms to avoid repeated failed attempts"""
+        """Load list of known invalid platforms to avoid repeated failed attempts
+        
+        NOTE: This is now disabled because it prevents retries in new sessions.
+        Instead, we rely on in-memory caching during a single session.
+        """
         try:
             if self.INVALID_PLATFORMS_FILE.exists():
                 with open(self.INVALID_PLATFORMS_FILE, 'r') as f:
@@ -97,63 +109,131 @@ class GeneMappingService:
         except Exception as e:
             logger.debug(f"Failed to save memory cache index: {e}")
     
-    def _get_prebuilt_parquet_path(self, platform_id: str) -> Optional[Path]:
-        """Check if a pre-built gene mapping parquet file exists for this platform.
+    def _get_prebuilt_mapping_path(self, platform_id: str) -> Optional[Path]:
+        """Check if a pre-built gene mapping file exists for this platform.
         
-        Pre-built parquet files are created from full platform downloads and stored
-        in the platform_mappings directory. They contain clean probe->gene mappings.
+        Looks for TSV files first (from download_platforms.py), then parquet files.
+        Files are in the platform_mappings directory with clean probe->gene mappings.
         
         Args:
-            platform_id: Platform ID (e.g., 'GPL23038')
+            platform_id: Platform ID (e.g., 'GPL23038' or '23038')
             
         Returns:
-            Path to the parquet file if it exists, None otherwise
+            Path to the mapping file if it exists, None otherwise
         """
         try:
-            # Look for {platform_id}_gene_mapping.parquet
-            prebuilt_path = self.PREBUILT_PLATFORM_DIR / f"{platform_id}_gene_mapping.parquet"
-            if prebuilt_path.exists() and prebuilt_path.stat().st_size > 0:
-                logger.info(f"Found pre-built parquet for {platform_id} at {prebuilt_path}")
-                return prebuilt_path
+            # Normalize platform ID to GPL format
+            if not platform_id.startswith('GPL'):
+                platform_id = f'GPL{platform_id}'
+            
+            # Look for TSV file first (preferred format from download_platforms.py)
+            tsv_path = self.PREBUILT_PLATFORM_DIR / f"{platform_id}_mappings.tsv"
+            if tsv_path.exists() and tsv_path.stat().st_size > 0:
+                logger.info(f"Found pre-built TSV for {platform_id} at {tsv_path}")
+                return tsv_path
+            
+            # Fallback to parquet
+            parquet_path = self.PREBUILT_PLATFORM_DIR / f"{platform_id}_gene_mapping.parquet"
+            if parquet_path.exists() and parquet_path.stat().st_size > 0:
+                logger.info(f"Found pre-built parquet for {platform_id} at {parquet_path}")
+                return parquet_path
         except Exception as e:
-            logger.warning(f"Error checking for pre-built parquet for {platform_id}: {e}")
+            logger.warning(f"Error checking for pre-built mappings for {platform_id}: {e}")
         
         return None
 
-    def _load_from_prebuilt_parquet(self, platform_id: str, parquet_path: Path) -> Dict[str, str]:
-        """Load gene mappings from a pre-built parquet file.
+    def _load_from_prebuilt_file(self, platform_id: str, file_path: Path) -> Dict[str, str]:
+        """Load gene mappings from a pre-built file (TSV or parquet).
         
         Args:
             platform_id: Platform ID
-            parquet_path: Path to the parquet file
+            file_path: Path to the mapping file
             
         Returns:
             Dictionary mapping probe IDs to gene symbols
         """
         try:
-            import pandas as pd
+            logger.info(f"Loading {platform_id} from pre-built file: {file_path}")
             
-            logger.info(f"Loading {platform_id} from pre-built parquet: {parquet_path}")
-            df = pd.read_parquet(parquet_path)
+            # Handle TSV files
+            if file_path.suffix == '.tsv':
+                mapping = {}
+                with open(file_path, 'r') as f:
+                    # Skip header
+                    header = f.readline().strip().split('\t')
+                    
+                    # Find column indices
+                    probe_col = None
+                    gene_col = None
+                    for i, col in enumerate(header):
+                        col_lower = col.lower()
+                        if col_lower in ['probe_id', 'id', 'probeset_id', 'probe']:
+                            probe_col = i
+                        elif col_lower in ['gene_symbol', 'symbol', 'gene', 'gene_name']:
+                            gene_col = i
+                    
+                    if probe_col is None or gene_col is None:
+                        logger.error(f"Could not find required columns in {file_path}. Header: {header}")
+                        return {}
+                    
+                    # Read mappings
+                    for line in f:
+                        parts = line.strip().split('\t')
+                        if len(parts) > max(probe_col, gene_col):
+                            probe_id = parts[probe_col].strip()
+                            gene_symbol = parts[gene_col].strip()
+                            
+                            # Skip invalid entries
+                            if probe_id and gene_symbol and gene_symbol.lower() not in ['', 'na', 'null', 'n/a']:
+                                mapping[probe_id] = gene_symbol
+                
+                logger.info(f"Loaded {len(mapping)} probe->gene mappings from TSV for {platform_id}")
+                return mapping
             
-            # Create mapping from ID -> gene_symbol
-            mapping = {}
-            if "ID" in df.columns and "gene_symbol" in df.columns:
-                # Convert to dict, handling NaN values
-                for idx, row in df.iterrows():
-                    probe_id = str(row["ID"])
-                    gene_symbol = str(row["gene_symbol"])
-                    if gene_symbol and gene_symbol != "nan":
-                        mapping[probe_id] = gene_symbol
+            # Handle parquet files
+            elif file_path.suffix == '.parquet':
+                import pandas as pd
+                
+                df = pd.read_parquet(file_path)
+                
+                # Create mapping from ID -> gene_symbol
+                mapping = {}
+                # Try different column name combinations
+                id_cols = ['probe_id', 'ID', 'id', 'probeset_id']
+                symbol_cols = ['gene_symbol', 'symbol', 'gene', 'gene_name']
+                
+                id_col = None
+                symbol_col = None
+                
+                for col in id_cols:
+                    if col in df.columns:
+                        id_col = col
+                        break
+                
+                for col in symbol_cols:
+                    if col in df.columns:
+                        symbol_col = col
+                        break
+                
+                if id_col and symbol_col:
+                    for idx, row in df.iterrows():
+                        probe_id = str(row[id_col])
+                        gene_symbol = str(row[symbol_col])
+                        if gene_symbol and gene_symbol != "nan":
+                            mapping[probe_id] = gene_symbol
+                
+                logger.info(f"Loaded {len(mapping)} probe->gene mappings from parquet for {platform_id}")
+                return mapping
             
-            logger.info(
-                f"Loaded {len(mapping)} probe->gene mappings from pre-built parquet for {platform_id}"
-            )
-            return mapping
+            else:
+                logger.error(f"Unsupported file format: {file_path.suffix}")
+                return {}
             
         except Exception as e:
-            logger.error(f"Failed to load pre-built parquet for {platform_id}: {e}")
-            raise
+            logger.error(f"Failed to load pre-built file for {platform_id}: {e}")
+            import traceback
+            traceback.print_exc()
+            return {}
     
     async def close(self):
         """Close HTTP client"""
@@ -166,6 +246,7 @@ class GeneMappingService:
     ) -> Dict[str, Optional[Dict[str, str]]]:
         """
         Get mappings for multiple platforms in parallel (much faster than sequential calls).
+        Limited to 4 concurrent downloads to avoid resource exhaustion.
         
         Args:
             platform_ids: List of GEO platform IDs
@@ -174,16 +255,24 @@ class GeneMappingService:
         Returns:
             Dictionary mapping platform_id -> mapping (or None if failed)
         """
-        logger.info(f"Fetching mappings for {len(platform_ids)} platforms in parallel")
+        logger.info(f"Fetching mappings for {len(platform_ids)} platforms (max 4 concurrent)")
         
-        # Use asyncio.gather to fetch all mappings concurrently
+        # Limit concurrent downloads to 4 to avoid resource exhaustion
+        semaphore = asyncio.Semaphore(4)
+        
+        async def fetch_with_limit(pid: str) -> tuple:
+            async with semaphore:
+                result = await self.get_probe_to_gene_mapping(pid, use_cache)
+                return pid, result
+        
+        # Use asyncio.gather with limited concurrency
         results = await asyncio.gather(
-            *[self.get_probe_to_gene_mapping(pid, use_cache) for pid in platform_ids],
+            *[fetch_with_limit(pid) for pid in platform_ids],
             return_exceptions=False
         )
         
         # Return as dict mapping platform_id to result
-        mappings = {pid: result for pid, result in zip(platform_ids, results)}
+        mappings = {pid: result for pid, result in results}
         successful = sum(1 for m in mappings.values() if m is not None)
         logger.info(f"Successfully loaded {successful}/{len(platform_ids)} platform mappings")
         
@@ -210,44 +299,57 @@ class GeneMappingService:
             logger.debug(f"Using in-memory cache for {platform_id}")
             return self._mapping_cache[platform_id]
         
-        # Check for pre-built parquet files first (fast, local, pre-processed)
-        prebuilt_path = self._get_prebuilt_parquet_path(platform_id)
+        # Normalize platform ID
+        normalized_id = platform_id if platform_id.startswith('GPL') else f'GPL{platform_id}'
+        
+        # Check for pre-built mapping files first (TSV or parquet from download_platforms.py)
+        prebuilt_path = self._get_prebuilt_mapping_path(platform_id)
         if prebuilt_path:
             try:
-                mapping = self._load_from_prebuilt_parquet(platform_id, prebuilt_path)
+                mapping = self._load_from_prebuilt_file(platform_id, prebuilt_path)
                 
-                # Only keep small mappings in memory cache (< 100k entries)
-                if len(mapping) < 100000:
-                    self._mapping_cache[platform_id] = mapping
-                    # Enforce max cache size - remove oldest if over limit
-                    if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
-                        oldest = next(iter(self._mapping_cache))
-                        del self._mapping_cache[oldest]
-                        logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
-                
-                return mapping
+                if mapping:
+                    # Only keep small mappings in memory cache (< 100k entries)
+                    if len(mapping) < 100000:
+                        self._mapping_cache[normalized_id] = mapping
+                        # Enforce max cache size - remove oldest if over limit
+                        if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
+                            oldest = next(iter(self._mapping_cache))
+                            del self._mapping_cache[oldest]
+                            logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+                    
+                    return mapping
+                else:
+                    logger.warning(f"Pre-built file for {platform_id} exists but is empty")
             except Exception as e:
-                logger.warning(f"Failed to load pre-built parquet for {platform_id}: {e}")
+                logger.warning(f"Failed to load pre-built file for {platform_id}: {e}")
                 # Fall through to try disk cache and then download
         
-        # Try to load from platform mappings directory (don't keep in memory for large files)
-        mapping_path = self.PREBUILT_PLATFORM_DIR / f"{platform_id}_gene_mapping.parquet"
+        # This block is now redundant since we check for pre-built files above
+        # Kept for backwards compatibility with old parquet files
+        mapping_path = self.PREBUILT_PLATFORM_DIR / f"{normalized_id}_gene_mapping.parquet"
         if use_cache and mapping_path.exists():
             try:
                 mapping_df = pd.read_parquet(mapping_path)
-                mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
                 
-                # Only keep small mappings in memory cache (< 100k entries)
-                if len(mapping) < 100000:
-                    self._mapping_cache[platform_id] = mapping
-                    # Enforce max cache size - remove oldest if over limit
-                    if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
-                        oldest = next(iter(self._mapping_cache))
-                        del self._mapping_cache[oldest]
-                        logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+                # Try different column names
+                id_col = 'probe_id' if 'probe_id' in mapping_df.columns else 'ID'
+                symbol_col = 'gene_symbol' if 'gene_symbol' in mapping_df.columns else 'symbol'
                 
-                logger.info(f"Loaded mapping for {platform_id} from platform_mappings: {len(mapping)} probes")
-                return mapping
+                if id_col in mapping_df.columns and symbol_col in mapping_df.columns:
+                    mapping = dict(zip(mapping_df[id_col], mapping_df[symbol_col]))
+                    
+                    # Only keep small mappings in memory cache (< 100k entries)
+                    if len(mapping) < 100000:
+                        self._mapping_cache[normalized_id] = mapping
+                        # Enforce max cache size - remove oldest if over limit
+                        if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
+                            oldest = next(iter(self._mapping_cache))
+                            del self._mapping_cache[oldest]
+                            logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+                    
+                    logger.info(f"Loaded mapping for {platform_id} from platform_mappings: {len(mapping)} probes")
+                    return mapping
             except Exception as e:
                 logger.warning(f"Failed to load mapping for {platform_id}: {e}")
                 pass
@@ -256,7 +358,7 @@ class GeneMappingService:
         try:
             mapping = await asyncio.wait_for(
                 self._fetch_platform_mapping(platform_id),
-                timeout=180  # 3 minute timeout per platform
+                timeout=18000  # 5 hour timeout per platform (allows download of multi-GB files)
             )
         except asyncio.TimeoutError:
             logger.error(f"Platform mapping download timed out for {platform_id}")
@@ -368,17 +470,131 @@ class GeneMappingService:
                     logger.debug(f"Retrying {gpl_id} in {wait_time:.1f}s...")
                     await asyncio.sleep(wait_time)
         
-        # Mark platform as invalid if we failed to fetch it
-        self._invalid_platforms.add(platform_id)
-        self._save_invalid_platforms_cache()
+        # NOTE: Disabled persistent invalid marking to allow retries in new sessions
+        # Only mark as invalid in-memory for this session
+        # self._invalid_platforms.add(platform_id)
+        # self._save_invalid_platforms_cache()
         
         logger.warning(f"Failed to fetch mapping for {gpl_id} after {self.MAX_RETRIES} retries")
         return None
     
+    async def _download_with_chunks_and_resume(self, url: str, gpl_id: str) -> Optional[bytes]:
+        """
+        Download file with chunked streaming and resume capability.
+        Validates Content-Length before and after download.
+        
+        Args:
+            url: URL to download
+            gpl_id: GPL ID for cache file naming
+        
+        Returns:
+            File content as bytes, or None if download failed
+        """
+        partial_file = self.PARTIAL_DOWNLOADS_DIR / f"{gpl_id}.partial"
+        content_file = self.PARTIAL_DOWNLOADS_DIR / f"{gpl_id}.content_length"
+        
+        try:
+            # Get file size via HEAD request
+            try:
+                head_response = await self.client.head(url, timeout=60.0)
+                if head_response.status_code != 200:
+                    logger.debug(f"HEAD request failed for {gpl_id}: {head_response.status_code}")
+                    return None
+                
+                expected_size = int(head_response.headers.get('content-length', 0))
+                if expected_size <= 0:
+                    logger.debug(f"No valid Content-Length for {gpl_id}")
+                    return None
+                
+                # Store expected size for validation
+                with open(content_file, 'w') as f:
+                    f.write(str(expected_size))
+                
+                file_size_mb = expected_size / (1024 * 1024)
+                logger.debug(f"Starting download for {gpl_id}: {file_size_mb:.1f}MB")
+                
+            except Exception as e:
+                logger.debug(f"Could not determine file size for {gpl_id}: {e}")
+                return None
+            
+            # Calculate timeout based on file size
+            # Conservative estimate: 5-10 MB/sec (accounting for network variability)
+            base_timeout = (expected_size / (1024 * 1024)) / 5.0
+            timeout_seconds = base_timeout * 2.0 + 120.0  # 2x multiplier + 2 min buffer
+            timeout_seconds = min(timeout_seconds, 1800.0)  # Cap at 30 minutes
+            
+            http_timeout = httpx.Timeout(timeout=timeout_seconds, connect=30.0, read=300.0)
+            
+            # Check if we have a partial download to resume
+            resume_header = {}
+            bytes_downloaded = 0
+            if partial_file.exists():
+                bytes_downloaded = partial_file.stat().st_size
+                if bytes_downloaded < expected_size:
+                    logger.debug(f"Resuming download for {gpl_id}: {bytes_downloaded}/{expected_size} bytes")
+                    resume_header = {'Range': f'bytes={bytes_downloaded}-'}
+                else:
+                    # Partial file is complete, remove it
+                    partial_file.unlink()
+                    bytes_downloaded = 0
+            
+            # Download with chunked streaming
+            downloaded_data = bytearray()
+            async with self.client.stream('GET', url, timeout=http_timeout, headers=resume_header) as response:
+                if response.status_code not in [200, 206]:  # 206 = Partial Content (resume)
+                    logger.debug(f"Download failed with status {response.status_code} for {gpl_id}")
+                    return None
+                
+                # For resumed downloads, validate Content-Range
+                if resume_header and 'content-range' in response.headers:
+                    logger.debug(f"Resumed download for {gpl_id}: {response.headers['content-range']}")
+                
+                # Stream download in chunks
+                async for chunk in response.aiter_bytes(chunk_size=self.CHUNK_SIZE):
+                    downloaded_data.extend(chunk)
+                    bytes_downloaded += len(chunk)
+                    
+                    # Log progress for large files
+                    if expected_size > 100 * 1024 * 1024:  # Only log for files > 100MB
+                        progress_pct = (bytes_downloaded / expected_size) * 100
+                        if bytes_downloaded % (10 * 1024 * 1024) == 0:  # Log every 10MB
+                            logger.debug(f"{gpl_id} download progress: {progress_pct:.1f}%")
+            
+            # Validate Content-Length after download
+            actual_size = len(downloaded_data)
+            if actual_size != expected_size:
+                logger.warning(f"Content-Length mismatch for {gpl_id}: expected {expected_size}, got {actual_size}")
+                # Try to save partial data in case we want to resume
+                if actual_size > 0:
+                    with open(partial_file, 'wb') as f:
+                        f.write(downloaded_data)
+                return None
+            
+            logger.info(f"Successfully downloaded {gpl_id}: {actual_size / (1024*1024):.1f}MB")
+            
+            # Clean up partial file if it exists (download completed)
+            if partial_file.exists():
+                partial_file.unlink()
+            if content_file.exists():
+                content_file.unlink()
+            
+            return bytes(downloaded_data)
+            
+        except asyncio.TimeoutError:
+            logger.error(f"Download timeout for {gpl_id} from {url}")
+            # Save what we have so far for resume
+            if len(downloaded_data) > 0:
+                with open(partial_file, 'wb') as f:
+                    f.write(downloaded_data)
+            return None
+        except Exception as e:
+            logger.error(f"Download error for {gpl_id}: {e}")
+            return None
+    
     async def _fetch_with_retry(self, gpl_id: str, folder_prefix: str) -> Optional[Dict[str, str]]:
         """
         Attempt to fetch platform mapping, trying both family and miniml formats.
-        Uses smart timeout that accounts for file size (can be several GB).
+        Uses chunked downloads with resume capability and Content-Length validation.
         
         Args:
             gpl_id: GPL ID
@@ -387,67 +603,177 @@ class GeneMappingService:
         Returns:
             Dictionary mapping probe_id -> gene_symbol, or None if both formats fail
         """
-        # Try family format first with dynamic timeout based on file size
+        # Try family format first with chunked download
         family_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
         
-        try:
-            logger.debug(f"Downloading GPL file from: {family_url}")
-            # First, get file size via HEAD request to determine timeout
+        retry_count = 0
+        while retry_count < self.MAX_RETRIES:
             try:
-                head_response = await self.client.head(family_url, timeout=10.0)
-                file_size = int(head_response.headers.get('content-length', 0))
+                logger.debug(f"Attempting to download {gpl_id} (attempt {retry_count + 1}/{self.MAX_RETRIES})")
                 
-                # Calculate timeout dynamically based on file size
-                # Estimate: ~10-15 MB/sec average download speed for large files
-                # Conservative: double the time + buffer for connection/parsing
-                # Can handle files up to 5GB+ without hard limits
-                if file_size > 0:
-                    # Base calculation: bytes / (10 MB/sec) to seconds
-                    base_timeout = (file_size / (1024 * 1024)) / 10.0
-                    # Add multiplier for safety and connection overhead
-                    timeout_seconds = base_timeout * 2.0 + 60.0
-                    # Cap at 20 minutes for extremely large files
-                    timeout_seconds = min(timeout_seconds, 1200.0)
-                    logger.debug(f"File size: {file_size / (1024*1024*1024):.2f}GB, calculated timeout: {timeout_seconds:.1f}s")
+                # Download with chunked streaming and resume
+                file_data = await self._download_with_chunks_and_resume(family_url, gpl_id)
+                
+                if file_data:
+                    # Decompress and parse with streaming to minimize memory
+                    try:
+                        logger.debug(f"Decompressing and parsing {gpl_id}...")
+                        mapping = self._parse_gpl_file_streaming(file_data, gpl_id)
+                        
+                        if mapping:
+                            logger.info(f"Successfully fetched mapping for {gpl_id}: {len(mapping)} probes")
+                            return mapping
+                    except Exception as e:
+                        logger.debug(f"Error decompressing/parsing {gpl_id}: {e}")
+                        retry_count += 1
+                        if retry_count < self.MAX_RETRIES:
+                            wait_time = 2 ** retry_count  # Exponential backoff
+                            logger.debug(f"Retrying in {wait_time}s...")
+                            await asyncio.sleep(wait_time)
+                        continue
                 else:
-                    timeout_seconds = 600.0  # 10 minutes default fallback
-            except Exception as e:
-                logger.debug(f"Could not determine file size, using default timeout: {e}")
-                timeout_seconds = 600.0  # 10 minute default timeout for unknown file sizes
-            
-            # Use httpx Timeout with separate connect and read timeouts
-            http_timeout = httpx.Timeout(timeout=timeout_seconds, connect=30.0)
-            
-            logger.debug(f"Downloading {gpl_id} with timeout: {timeout_seconds:.1f}s")
-            response = await self.client.get(family_url, timeout=http_timeout)
-            
-            if response.status_code == 200:
-                # Decompress and parse with timeout
-                try:
-                    logger.debug(f"Decompressing and parsing {gpl_id}...")
-                    content = gzip.decompress(response.content).decode('utf-8', errors='ignore')
-                    mapping = self._parse_gpl_file(content, gpl_id)
+                    # Download failed, retry with backoff
+                    retry_count += 1
+                    if retry_count < self.MAX_RETRIES:
+                        wait_time = 2 ** retry_count  # Exponential backoff
+                        logger.debug(f"Download failed, retrying in {wait_time}s...")
+                        await asyncio.sleep(wait_time)
+                    continue
                     
-                    if mapping:
-                        logger.info(f"Successfully fetched mapping for {gpl_id}: {len(mapping)} probes")
-                        return mapping
-                except asyncio.TimeoutError:
-                    logger.error(f"Timeout decompressing/parsing {gpl_id}")
-                    return None
-        
-        except asyncio.TimeoutError:
-            logger.error(f"Download timeout for {gpl_id} from {family_url}")
-            return None
-        except Exception as e:
-            logger.debug(f"Error fetching family format for {gpl_id}: {e}")
+            except Exception as e:
+                logger.debug(f"Error fetching family format for {gpl_id}: {e}")
+                retry_count += 1
+                if retry_count < self.MAX_RETRIES:
+                    wait_time = 2 ** retry_count
+                    logger.debug(f"Retrying in {wait_time}s...")
+                    await asyncio.sleep(wait_time)
         
         # Try miniml format as fallback (only if family format failed)
-        logger.debug(f"Trying miniml format for {gpl_id}...")
+        logger.debug(f"Family format failed, trying miniml format for {gpl_id}...")
         miniml_result = await self._try_miniml_format(gpl_id, folder_prefix)
         if miniml_result:
             return miniml_result
         
         return None
+    
+    def _parse_gpl_file_streaming(self, compressed_data: bytes, platform_id: str) -> Optional[Dict[str, str]]:
+        """
+        Parse GPL family file with streaming decompression to minimize memory usage.
+        Processes file line-by-line without loading entire decompressed content into memory.
+        
+        Args:
+            compressed_data: Gzipped compressed file data
+            platform_id: Platform ID for logging
+        
+        Returns:
+            Dictionary mapping probe_id -> gene_symbol
+        """
+        try:
+            mapping = {}
+            lines_processed = 0
+            table_started = False
+            id_idx = None
+            symbol_idx = None
+            
+            # Use gzip stream reader for chunked decompression
+            with gzip.GzipFile(fileobj=io.BytesIO(compressed_data)) as gz:
+                for line_bytes in gz:
+                    line = line_bytes.decode('utf-8', errors='ignore').rstrip('\n')
+                    lines_processed += 1
+                    
+                    # Skip empty lines and comment-only lines
+                    if not line or line.startswith('#!') or line.startswith('##'):
+                        continue
+                    
+                    # Find table header line (starts with #ID)
+                    if line.startswith('#ID') and not table_started:
+                        table_started = True
+                        headers = line.split('\t')
+                        
+                        logger.debug(f"Found header at line {lines_processed}: {[h.lstrip('#') for h in headers[:10]]}")
+                        
+                        # First pass: look for exact matches
+                        for idx, header in enumerate(headers):
+                            header_clean = header.lstrip('#').upper().strip()
+                            
+                            if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
+                                id_idx = idx
+                            elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']:
+                                symbol_idx = idx
+                        
+                        # Second pass: flexible matching for ID column
+                        if id_idx is None:
+                            for idx, header in enumerate(headers):
+                                header_clean = header.lstrip('#').upper()
+                                if any(x in header_clean for x in ['ID', 'ACCESSION', 'PROBE']):
+                                    id_idx = idx
+                                    break
+                        
+                        # Third pass: flexible matching for gene symbol column
+                        if symbol_idx is None:
+                            for idx, header in enumerate(headers):
+                                header_clean = header.lstrip('#').upper()
+                                if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
+                                                                     'GENE', 'DESCRIPTION', 'PRODUCT']):
+                                    symbol_idx = idx
+                                    break
+                        
+                        # Fourth pass: use common aliases
+                        if symbol_idx is None:
+                            for idx, header in enumerate(headers):
+                                header_clean = header.lstrip('#').upper()
+                                if any(x == header_clean for x in ['NAME', 'TITLE', 'DEFINITION']):
+                                    symbol_idx = idx
+                                    break
+                        
+                        logger.debug(f"Detected columns - ID: {id_idx} ({headers[id_idx] if id_idx is not None else 'NOT FOUND'}), "
+                                   f"Symbol: {symbol_idx} ({headers[symbol_idx] if symbol_idx is not None else 'NOT FOUND'})")
+                        continue
+                    
+                    # Skip lines before table starts or comment lines
+                    if not table_started or line.startswith('#'):
+                        continue
+                    
+                    # Parse data rows
+                    parts = line.split('\t')
+                    if id_idx is None or len(parts) <= id_idx:
+                        continue
+                    
+                    probe_id = parts[id_idx].strip()
+                    
+                    # Skip empty or invalid probe IDs
+                    if not probe_id or probe_id.startswith('#'):
+                        continue
+                    
+                    # Extract gene symbol
+                    gene_symbol = None
+                    if symbol_idx is not None and len(parts) > symbol_idx:
+                        gene_symbol = parts[symbol_idx].strip()
+                    
+                    # Use first gene if multiple are listed (separated by ///)
+                    if gene_symbol and '///' in gene_symbol:
+                        gene_symbol = gene_symbol.split('///')[0].strip()
+                    
+                    # Skip if no valid gene symbol
+                    if not gene_symbol or gene_symbol == '' or gene_symbol.lower() in ['null', 'na', 'n/a']:
+                        continue
+                    
+                    mapping[probe_id] = gene_symbol
+                    
+                    # Log progress every 100k lines
+                    if lines_processed % 100000 == 0:
+                        logger.debug(f"{platform_id}: Processed {lines_processed} lines, found {len(mapping)} mappings")
+            
+            if mapping:
+                logger.info(f"Parsed GPL file for {platform_id}: {len(mapping)} probes from {lines_processed} lines")
+            else:
+                logger.warning(f"No valid mappings found in GPL file for {platform_id} ({lines_processed} lines processed)")
+            
+            return mapping if mapping else None
+        
+        except Exception as e:
+            logger.error(f"Error parsing GPL file (streaming) for {platform_id}: {e}")
+            return None
     
     def _parse_gpl_file(self, content: str, platform_id: str) -> Optional[Dict[str, str]]:
         """

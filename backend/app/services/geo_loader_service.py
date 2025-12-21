@@ -533,6 +533,80 @@ Determine the optimal parsing strategy for this file."""
         except Exception as e:
             logger.warning(f"Failed to save to storage: {e}")
     
+    def _save_to_storage(self, data: LoadedGEOData) -> None:
+        """Save processed data to disk for quick reloading"""
+        try:
+            # Validate data before saving
+            if data is None:
+                logger.warning("Cannot save None data to storage")
+                return
+            
+            if not hasattr(data, 'expression_matrix') or data.expression_matrix is None:
+                logger.warning("Cannot save data without expression_matrix")
+                return
+            
+            storage_path = Path("datasets") / f"{data.accession}.parquet"
+            
+            # Save expression matrix
+            data.expression_matrix.to_parquet(storage_path)
+            logger.debug(f"Saved expression matrix to: {storage_path}")
+            
+            # Save sample metadata
+            meta_path = storage_path.with_name(f"{storage_path.stem}.metadata.parquet")
+            meta_list = []
+            for sample_id, values in data.sample_metadata.items():
+                if isinstance(values, dict):
+                    row = {'sample_id': sample_id}
+                    row.update(values)
+                    meta_list.append(row)
+                else:
+                    meta_list.append({'sample_id': sample_id, 'metadata': str(values)})
+            
+            if meta_list:
+                meta_df = pd.DataFrame(meta_list)
+                meta_df.to_parquet(meta_path, index=False)
+                logger.debug(f"Saved sample metadata to: {meta_path}")
+            
+            # Save loading strategy
+            strategy_path = storage_path.with_name(f"{storage_path.stem}.strategy.json")
+            strategy_dict = {
+                'accession': data.accession,
+                'file_format': data.loading_strategy.file_format,
+                'separator': data.loading_strategy.separator,
+                'skip_rows': data.loading_strategy.skip_rows,
+                'sample_id_column': data.loading_strategy.sample_id_column,
+                'expression_start_row': data.loading_strategy.expression_start_row,
+                'has_header': data.loading_strategy.has_header,
+                'notes': data.loading_strategy.notes
+            }
+            with open(strategy_path, 'w') as f:
+                json.dump(strategy_dict, f, indent=2)
+            logger.debug(f"Saved loading strategy to: {strategy_path}")
+            
+            # Save quality metrics
+            metrics_path = storage_path.with_name(f"{storage_path.stem}.metrics.json")
+            with open(metrics_path, 'w') as f:
+                json.dump(data.quality_metrics, f, indent=2)
+            logger.debug(f"Saved quality metrics to: {metrics_path}")
+            
+            # Save gene mapping if available
+            if data.probe_to_gene_mapping:
+                mapping_path = storage_path.with_name(f"{storage_path.stem}.gene_mapping.parquet")
+                mapping_df = pd.DataFrame([
+                    {'probe_id': k, 'gene_symbol': v}
+                    for k, v in data.probe_to_gene_mapping.items()
+                ])
+                mapping_df.to_parquet(mapping_path, index=False)
+                logger.debug(f"Saved gene mapping to: {mapping_path}")
+            
+            logger.info(f"Successfully stored dataset {data.accession} to {storage_path}")
+        except Exception as e:
+            logger.warning(f"Failed to save to storage: {e}")
+    
+    def _old_save_to_storage(self, data: LoadedGEOData) -> None:
+        """OLD UNUSED - DO NOT USE"""
+        pass
+    
     def _load_from_storage(self, storage_path: Path, dataset: GEODataset) -> LoadedGEOData:
         """Load data from datasets folder with metadata restoration"""
         try:

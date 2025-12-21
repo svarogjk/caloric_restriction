@@ -328,6 +328,11 @@ class GEOWorkflowOrchestrator:
                         logger.warning(f"Failed to load {dataset.accession}")
                         return None
                     
+                    # Validate loaded data structure
+                    if not hasattr(loaded_data, 'expression_matrix') or loaded_data.expression_matrix is None:
+                        logger.warning(f"Dataset {dataset.accession} has invalid data structure (no expression_matrix)")
+                        return None
+                    
                     logger.info(f"Loaded data for {dataset.accession} {dataset.title}")
                     
                     # Quality check: minimum sample size
