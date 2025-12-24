@@ -252,8 +252,8 @@ class DifferentialExpressionService:
         n_genes = len(expr_matrix.index)
         
         # Early stopping for extremely large datasets to avoid timeout
-        # With 22K+ genes, parallel t-tests can take 20+ minutes
-        if n_genes > 25000:
+        # With vectorized operations, 50K genes is manageable
+        if n_genes > 50000:
             logger.warning(f"Dataset too large ({n_genes} genes) for practical DE analysis. "
                           f"Skipping to avoid timeout. Consider using pre-filtered probe sets.")
             return None

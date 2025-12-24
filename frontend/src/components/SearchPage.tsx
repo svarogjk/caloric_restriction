@@ -5,11 +5,11 @@ import {
   setSelectedModel,
   setDatasetCount,
   setRankingMultiplier,
-  setUseAiGeneMapping,
-  setGeneMappingModel,
+  setOrganism,
   setLoading,
   setResults,
   setError,
+  GeneSurvival,
 } from '../store/searchSlice'
 import { RootState } from '../store/store'
 import { searchDatasets, getAvailableModels } from '../services/api'
@@ -19,6 +19,7 @@ import DatasetCountSelector from './DatasetCountSelector'
 import RankingMultiplierSelector from './RankingMultiplierSelector'
 import GeneList from './GeneList'
 import VolcanoPlot from './VolcanoPlot'
+import KaplanMeierPlot from './KaplanMeierPlot'
 
 const SearchPage: React.FC = () => {
   const dispatch = useDispatch()
@@ -27,15 +28,15 @@ const SearchPage: React.FC = () => {
     selectedModel, 
     datasetCount, 
     rankingMultiplier, 
+    organism,
     results, 
     loading, 
     error,
-    useAiGeneMapping,
-    geneMappingModel
   } = useSelector(
     (state: RootState) => state.search
   )
   const [models, setModels] = React.useState<string[]>([])
+  const [selectedGene, setSelectedGene] = React.useState<GeneSurvival | null>(null)
 
   React.useEffect(() => {
     const fetchModels = async () => {
@@ -65,8 +66,7 @@ const SearchPage: React.FC = () => {
         selectedModel, 
         datasetCount, 
         rankingMultiplier,
-        useAiGeneMapping,
-        geneMappingModel || undefined
+        organism
       )
       dispatch(setResults(data))
     } catch (err) {
@@ -78,7 +78,7 @@ const SearchPage: React.FC = () => {
     } finally {
       dispatch(setLoading(false))
     }
-  }, [query, selectedModel, datasetCount, rankingMultiplier, useAiGeneMapping, geneMappingModel, dispatch])
+  }, [query, selectedModel, datasetCount, rankingMultiplier, organism, dispatch])
 
   const handleKeyPress = (e: React.KeyboardEvent<HTMLDivElement>) => {
     if (e.key === 'Enter') {
@@ -90,11 +90,10 @@ const SearchPage: React.FC = () => {
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-8">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold text-gray-800 mb-2">
-          Genomic Data Search
+          Survival Analysis Search
         </h1>
         <p className="text-gray-600 mb-8">
-          Explore differential expression datasets and analyze gene expression
-          data
+          Analyze gene expression datasets to identify survival-associated genes
         </p>
 
         <div
@@ -117,41 +116,23 @@ const SearchPage: React.FC = () => {
             />
           </div>
 
-          {/* AI Gene Mapping Options */}
+          {/* Organism Selection */}
           <div className="bg-blue-50 rounded-lg p-4 mb-6 border border-blue-200">
             <div className="flex items-center gap-4">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={useAiGeneMapping}
-                  onChange={(e) => dispatch(setUseAiGeneMapping(e.target.checked))}
-                  className="w-4 h-4 rounded border-gray-300"
-                />
-                <span className="text-sm font-medium text-gray-700">
-                  Use AI Agent for Gene Mapping
-                </span>
+              <label className="text-sm font-medium text-gray-700">
+                Organism:
               </label>
-              
-              {useAiGeneMapping && (
-                <select
-                  value={geneMappingModel || ''}
-                  onChange={(e) => dispatch(setGeneMappingModel(e.target.value || null))}
-                  className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
-                >
-                  <option value="">Auto (use main model)</option>
-                  {models.map((model) => (
-                    <option key={model} value={model}>
-                      {model.charAt(0).toUpperCase() + model.slice(1)}
-                    </option>
-                  ))}
-                </select>
-              )}
-              
+              <select
+                value={organism || ''}
+                onChange={(e) => dispatch(setOrganism(e.target.value || null))}
+                className="px-3 py-2 border border-gray-300 rounded-md text-sm bg-white"
+              >
+                <option value="">Any organism</option>
+                <option value="Homo sapiens">Human (Homo sapiens)</option>
+                <option value="Mus musculus">Mouse (Mus musculus)</option>
+              </select>
               <span className="text-xs text-gray-500 italic">
-                {useAiGeneMapping 
-                  ? 'Uses AI to intelligently parse platform files with minimal token usage'
-                  : 'Standard gene mapping service'
-                }
+                Select organism to filter datasets
               </span>
             </div>
           </div>
@@ -190,7 +171,7 @@ const SearchPage: React.FC = () => {
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                   ></path>
                 </svg>
-                Searching...
+                Analyzing survival data...
               </>
             ) : (
               'Search'
@@ -208,7 +189,7 @@ const SearchPage: React.FC = () => {
           <div>
             <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
               <h2 className="text-2xl font-bold text-gray-800 mb-4">
-                Analysis Results
+                Survival Analysis Results
               </h2>
               <div className="grid grid-cols-3 gap-4 mb-6">
                 <div className="bg-blue-50 p-4 rounded-lg">
@@ -221,15 +202,15 @@ const SearchPage: React.FC = () => {
                 </div>
                 <div className="bg-green-50 p-4 rounded-lg">
                   <p className="text-gray-600 text-sm font-medium">
-                    With DEGs
+                    With Survival Data
                   </p>
                   <p className="text-3xl font-bold text-green-600">
-                    {results.n_datasets_with_degs}
+                    {results.n_datasets_with_survival}
                   </p>
                 </div>
                 <div className="bg-purple-50 p-4 rounded-lg">
                   <p className="text-gray-600 text-sm font-medium">
-                    Common Genes
+                    Survival Genes
                   </p>
                   <p className="text-3xl font-bold text-purple-600">
                     {results.common_genes.length}
@@ -243,26 +224,34 @@ const SearchPage: React.FC = () => {
 
             {results.common_genes.length > 0 && (
               <div>
-                <h2 className="text-2xl font-bold text-gray-800 mb-4">
-                  Volcano Plot
-                </h2>
+                {/* Volcano Plot Section */}
                 <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
-                  <VolcanoPlot 
-                    data={results.common_genes.map((gene: any) => ({
-                      gene: gene.gene_id,
-                      log2FoldChange: gene.avg_log_fc,
-                      pValue: gene.avg_adj_p_value
-                    }))}
+                  <VolcanoPlot
+                    data={results.common_genes}
+                    onGeneClick={(gene) => setSelectedGene(gene)}
+                    selectedGeneId={selectedGene?.gene_id}
                   />
                 </div>
 
                 <h2 className="text-2xl font-bold text-gray-800 mb-4">
-                  Common Genes ({results.common_genes.length})
+                  Survival-Associated Genes ({results.common_genes.length})
                 </h2>
+                <p className="text-gray-600 mb-4">
+                  Genes significantly associated with survival outcomes across multiple datasets.
+                  Higher hazard ratios indicate increased risk with higher expression.
+                </p>
                 <GeneList genes={results.common_genes} />
               </div>
             )}
           </div>
+        )}
+
+        {/* Kaplan-Meier Plot Modal */}
+        {selectedGene && (
+          <KaplanMeierPlot
+            gene={selectedGene}
+            onClose={() => setSelectedGene(null)}
+          />
         )}
 
         {!loading && !results && !error && (
@@ -281,8 +270,43 @@ const SearchPage: React.FC = () => {
               />
             </svg>
             <p className="text-gray-500 text-lg mt-4">
-              Enter a search query to begin
+              Enter a search query to find survival-associated genes
             </p>
+            <div className="text-gray-400 text-sm mt-4 space-y-2">
+              <p className="font-medium text-gray-500">Example queries:</p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                <button 
+                  onClick={() => dispatch(setQuery('breast cancer survival prognosis'))}
+                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
+                >
+                  breast cancer survival prognosis
+                </button>
+                <button 
+                  onClick={() => dispatch(setQuery('lung cancer overall survival'))}
+                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
+                >
+                  lung cancer overall survival
+                </button>
+                <button 
+                  onClick={() => dispatch(setQuery('hepatocellular carcinoma patient outcome'))}
+                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
+                >
+                  hepatocellular carcinoma outcome
+                </button>
+                <button 
+                  onClick={() => dispatch(setQuery('gastric cancer survival analysis'))}
+                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
+                >
+                  gastric cancer survival
+                </button>
+                <button 
+                  onClick={() => dispatch(setQuery('colorectal cancer prognosis biomarker'))}
+                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
+                >
+                  colorectal cancer prognosis
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>

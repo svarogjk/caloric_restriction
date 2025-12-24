@@ -108,9 +108,19 @@ class GEOClient:
         organism: Optional[str] = None,
         dataset_type: Optional[str] = None,
         date_from: Optional[str] = None,
-        date_to: Optional[str] = None
+        date_to: Optional[str] = None,
+        min_samples: int = 30
     ) -> str:
-        """Build GEO search query"""
+        """Build GEO search query optimized for finding survival studies
+        
+        Args:
+            keywords: Search keywords
+            organism: Filter by organism
+            dataset_type: Filter by dataset type (microarray, RNA-seq)
+            date_from: Start date filter
+            date_to: End date filter
+            min_samples: Minimum number of samples (survival analysis needs adequate n)
+        """
         query_parts = []
         
         if keywords:
@@ -126,10 +136,14 @@ class GEOClient:
         if date_from and date_to:
             query_parts.append(f'("{date_from}"[Publication Date] : "{date_to}"[Publication Date])')
         
+        # Require minimum sample count for survival analysis
+        if min_samples > 0:
+            query_parts.append(f'{min_samples}:5000[Number of Samples]')
+        
         query_parts.append('"gse"[Entry Type]')
         
         final_query = " AND ".join(query_parts)
-        logger.debug(f"Built GEO query: {final_query}")
+        logger.info(f"Built GEO query: {final_query}")
         return final_query
     
     async def search(
@@ -139,9 +153,20 @@ class GEOClient:
         organism: Optional[str] = None,
         dataset_type: Optional[str] = None,
         date_from: Optional[str] = None,
-        date_to: Optional[str] = None
+        date_to: Optional[str] = None,
+        min_samples: int = 30
     ) -> GEOSearchResult:
-        """Search GEO for datasets with retry logic"""
+        """Search GEO for datasets with retry logic
+        
+        Args:
+            keywords: Search keywords
+            max_results: Maximum number of results to return
+            organism: Filter by organism (e.g., "Homo sapiens")
+            dataset_type: Filter by dataset type
+            date_from: Start date for publication filter
+            date_to: End date for publication filter
+            min_samples: Minimum number of samples (default 30 for survival analysis)
+        """
         await self._rate_limit()
         
         search_query = self._build_geo_query(
@@ -149,7 +174,8 @@ class GEOClient:
             organism=organism,
             dataset_type=dataset_type,
             date_from=date_from,
-            date_to=date_to
+            date_to=date_to,
+            min_samples=min_samples
         )
         
         search_params = self._build_params(
@@ -244,6 +270,59 @@ class GEOClient:
             
             except Exception as e:
                 logger.error(f"Error fetching datasets batch {i//batch_size}: {e}")
+                continue
+        
+        return all_datasets
+    
+    async def fetch_datasets_by_accession(self, accessions: List[str]) -> List[GEODataset]:
+        """
+        Fetch datasets by their GSE accession numbers.
+        
+        Args:
+            accessions: List of GSE accession numbers (e.g., ["GSE62254", "GSE17536"])
+            
+        Returns:
+            List of GEODataset objects
+        """
+        if not accessions:
+            return []
+        
+        await self._rate_limit()
+        
+        # First, search for each accession to get its internal ID
+        all_datasets = []
+        
+        for accession in accessions:
+            try:
+                # Search for the specific accession
+                search_params = self._build_params(
+                    db=self.GEO_DB,
+                    term=f"{accession}[Accession] AND gse[Entry Type]",
+                    retmax=1,
+                    retmode="json"
+                )
+                
+                response = await self.client.get(
+                    f"{self.BASE_URL}/esearch.fcgi",
+                    params=search_params
+                )
+                response.raise_for_status()
+                search_data = response.json()
+                
+                ids = search_data.get("esearchresult", {}).get("idlist", [])
+                
+                if ids:
+                    # Fetch the dataset details
+                    datasets = await self.fetch_datasets(ids)
+                    all_datasets.extend(datasets)
+                    logger.info(f"Fetched {accession}: found {len(datasets)} datasets")
+                else:
+                    logger.warning(f"Dataset {accession} not found in GEO")
+                
+                await self._rate_limit()
+                
+            except Exception as e:
+                logger.error(f"Error fetching {accession}: {e}")
                 continue
         
         return all_datasets

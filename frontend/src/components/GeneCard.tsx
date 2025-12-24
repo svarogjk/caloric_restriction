@@ -1,22 +1,33 @@
 import React from 'react'
-import { GeneOccurrence } from '../store/searchSlice'
+import { GeneSurvival } from '../store/searchSlice'
 
 interface GeneCardProps {
-  gene: GeneOccurrence
+  gene: GeneSurvival
   isExpanded: boolean
   onToggle: () => void
 }
 
 const GeneCard: React.FC<GeneCardProps> = ({ gene, isExpanded, onToggle }) => {
-  const getDirectionColor = (consistency: number) => {
+  const getRiskColor = (risk: string) => {
+    if (risk === 'high_risk') return 'text-red-600 bg-red-50'
+    return 'text-green-600 bg-green-50'
+  }
+
+  const getConsistencyColor = (consistency: number) => {
     if (consistency > 0.7) return 'text-green-600'
-    if (consistency > 0.3) return 'text-yellow-600'
+    if (consistency > 0.5) return 'text-yellow-600'
     return 'text-orange-600'
   }
 
-  const getLogFcColor = (logFc: number) => {
-    if (logFc > 0) return 'text-red-600'
-    return 'text-blue-600'
+  const getHazardRatioColor = (hr: number) => {
+    if (hr > 1.5) return 'text-red-600'
+    if (hr < 0.67) return 'text-blue-600'
+    return 'text-gray-600'
+  }
+
+  const formatPValue = (p: number) => {
+    if (p < 0.001) return p.toExponential(2)
+    return p.toFixed(4)
   }
 
   return (
@@ -30,26 +41,32 @@ const GeneCard: React.FC<GeneCardProps> = ({ gene, isExpanded, onToggle }) => {
             <div className="flex items-center gap-4">
               <div>
                 <h3 className="text-lg font-semibold text-gray-800">
-                  {gene.gene_id}
+                  {gene.gene_symbol || gene.gene_id}
                 </h3>
+                {gene.gene_symbol && gene.gene_symbol !== gene.gene_id && (
+                  <p className="text-gray-500 text-xs">{gene.gene_id}</p>
+                )}
                 <p className="text-gray-600 text-sm mt-1">
                   Found in {gene.n_datasets} dataset{gene.n_datasets !== 1 ? 's' : ''}
                 </p>
               </div>
               <div className="flex gap-6 ml-4">
                 <div className="text-center">
-                  <p className="text-gray-600 text-xs font-medium">Avg Log FC</p>
-                  <p className={`text-lg font-bold ${getLogFcColor(gene.avg_log_fc)}`}>
-                    {gene.avg_log_fc.toFixed(2)}
+                  <p className="text-gray-600 text-xs font-medium">Hazard Ratio</p>
+                  <p className={`text-lg font-bold ${getHazardRatioColor(gene.avg_hazard_ratio)}`}>
+                    {gene.avg_hazard_ratio.toFixed(2)}
                   </p>
                 </div>
                 <div className="text-center">
-                  <p className="text-gray-600 text-xs font-medium">
-                    Consistency
+                  <p className="text-gray-600 text-xs font-medium">Cox P-value</p>
+                  <p className="text-lg font-bold text-gray-800">
+                    {formatPValue(gene.avg_cox_p_value)}
                   </p>
-                  <p className={`text-lg font-bold ${getDirectionColor(gene.direction_consistency)}`}>
-                    {(gene.direction_consistency * 100).toFixed(0)}%
-                  </p>
+                </div>
+                <div className="text-center">
+                  <span className={`px-3 py-1 rounded-full text-sm font-medium ${getRiskColor(gene.predominant_risk)}`}>
+                    {gene.predominant_risk === 'high_risk' ? '↑ High Risk' : '↓ Low Risk'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -91,32 +108,55 @@ const GeneCard: React.FC<GeneCardProps> = ({ gene, isExpanded, onToggle }) => {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 pt-4 border-t border-gray-200">
+            <div className="grid grid-cols-4 gap-4 pt-4 border-t border-gray-200">
               <div>
                 <p className="text-gray-600 text-xs font-medium mb-1">
-                  Average Log2 Fold Change
+                  Average Hazard Ratio
                 </p>
-                <p className={`text-2xl font-bold ${getLogFcColor(gene.avg_log_fc)}`}>
-                  {gene.avg_log_fc.toFixed(4)}
+                <p className={`text-2xl font-bold ${getHazardRatioColor(gene.avg_hazard_ratio)}`}>
+                  {gene.avg_hazard_ratio.toFixed(3)}
                 </p>
                 <p className="text-gray-500 text-xs mt-1">
-                  {gene.avg_log_fc > 0 ? 'Upregulated' : 'Downregulated'}
+                  {gene.avg_hazard_ratio > 1 ? 'Increased risk' : 'Decreased risk'}
                 </p>
               </div>
               <div>
                 <p className="text-gray-600 text-xs font-medium mb-1">
-                  Direction Consistency
+                  Cox Regression P-value
                 </p>
-                <p className={`text-2xl font-bold ${getDirectionColor(gene.direction_consistency)}`}>
-                  {(gene.direction_consistency * 100).toFixed(1)}%
+                <p className="text-2xl font-bold text-gray-800">
+                  {formatPValue(gene.avg_cox_p_value)}
                 </p>
                 <p className="text-gray-500 text-xs mt-1">
-                  {gene.direction_consistency > 0.7
+                  {gene.avg_cox_p_value < 0.001 ? 'Highly significant' : 
+                   gene.avg_cox_p_value < 0.01 ? 'Very significant' : 'Significant'}
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-600 text-xs font-medium mb-1">
+                  Log-rank P-value
+                </p>
+                <p className="text-2xl font-bold text-gray-800">
+                  {formatPValue(gene.avg_log_rank_p_value)}
+                </p>
+                <p className="text-gray-500 text-xs mt-1">
+                  Kaplan-Meier test
+                </p>
+              </div>
+              <div>
+                <p className="text-gray-600 text-xs font-medium mb-1">
+                  Risk Consistency
+                </p>
+                <p className={`text-2xl font-bold ${getConsistencyColor(gene.risk_direction_consistency)}`}>
+                  {(gene.risk_direction_consistency * 100).toFixed(0)}%
+                </p>
+                <p className="text-gray-500 text-xs mt-1">
+                  {gene.risk_direction_consistency > 0.7
                     ? 'Consistent'
-                    : gene.direction_consistency > 0.3
+                    : gene.risk_direction_consistency > 0.5
                       ? 'Mixed'
                       : 'Variable'}
-                  {' direction'}
+                  {' across datasets'}
                 </p>
               </div>
             </div>

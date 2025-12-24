@@ -21,8 +21,18 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
         onChange={(e) => onChange(e.target.value)}
         className="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white transition"
       >
-        <option value="mistral">Mistral</option>
-        <option value="claude">Claude</option>
+        {models.length > 0 ? (
+          models.map((model) => (
+            <option key={model} value={model}>
+              {model.charAt(0).toUpperCase() + model.slice(1)}
+            </option>
+          ))
+        ) : (
+          <>
+            <option value="mistral">Mistral</option>
+            <option value="claude">Claude</option>
+          </>
+        )}
       </select>
     </div>
   )

@@ -1,11 +1,11 @@
 import React from 'react'
 import { useDispatch, useSelector } from 'react-redux'
-import { GeneOccurrence, expandGene } from '../store/searchSlice'
+import { GeneSurvival, expandGene } from '../store/searchSlice'
 import { RootState } from '../store/store'
 import GeneCard from './GeneCard'
 
 interface GeneListProps {
-  genes: GeneOccurrence[]
+  genes: GeneSurvival[]
 }
 
 const GeneList: React.FC<GeneListProps> = ({ genes }) => {
@@ -14,8 +14,13 @@ const GeneList: React.FC<GeneListProps> = ({ genes }) => {
     (state: RootState) => state.search.expandedGeneId
   )
 
-  // Sort genes by number of datasets in descending order
-  const sortedGenes = [...genes].sort((a, b) => b.n_datasets - a.n_datasets)
+  // Sort genes by number of datasets in descending order, then by p-value
+  const sortedGenes = [...genes].sort((a, b) => {
+    if (b.n_datasets !== a.n_datasets) {
+      return b.n_datasets - a.n_datasets
+    }
+    return a.avg_cox_p_value - b.avg_cox_p_value
+  })
 
   return (
     <div className="space-y-4">

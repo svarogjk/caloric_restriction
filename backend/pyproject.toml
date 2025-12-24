@@ -1,7 +1,7 @@
 [project]
 name = "caloric_restriction"
 version = "0.1.0"
-description = "Caloric Restriction Project"
+description = "Caloric Restriction Project - GEO Survival Analysis"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.109.0",
@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-ai>=1.14.0",
     "scipy>=1.16.3",
     "statsmodels>=0.14.5",
+    "lifelines>=0.29.0",
 ]
 
 [build-system]

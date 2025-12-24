@@ -6,6 +6,7 @@ Each dataset may have different format - AI agent handles this
 
 import logging
 import asyncio
+import json
 from typing import Optional, Dict, Any, List, Tuple
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,6 +78,8 @@ class LoadedGEOData:
     """Container for loaded GEO expression data"""
     
     accession: str
+    title: str  # Dataset title
+    platform: str  # Platform ID
     expression_matrix: pd.DataFrame  # Genes x Samples
     sample_metadata: pd.DataFrame  # Sample info
     platform_info: Dict[str, Any]
@@ -227,7 +230,7 @@ class GEODataLoaderService:
         loaded_data = await self.apply_gene_mapping(loaded_data)
         
         # Save to datasets folder
-        self._save_to_storage(loaded_data, dataset_path)
+        self._save_to_storage(loaded_data)
         
         logger.info(f"Successfully loaded {dataset.accession}: "
                    f"{loaded_data.expression_matrix.shape[0]} genes, "
@@ -370,6 +373,8 @@ Determine the optimal parsing strategy for this file."""
             
             return LoadedGEOData(
                 accession=dataset.accession,
+                title=dataset.title,
+                platform=dataset.platform,
                 expression_matrix=expr_df,
                 sample_metadata=meta_df,
                 platform_info={"platform": dataset.platform},
@@ -485,54 +490,6 @@ Determine the optimal parsing strategy for this file."""
         
         return issues
     
-    def _save_to_storage(self, data: LoadedGEOData, storage_path: Path):
-        """Save data to datasets folder in parquet format with metadata"""
-        try:
-            # Save expression matrix
-            data.expression_matrix.to_parquet(storage_path)
-            logger.debug(f"Saved expression matrix to: {storage_path}")
-            
-            # Save sample metadata
-            meta_path = storage_path.with_name(f"{storage_path.stem}.metadata.parquet")
-            data.sample_metadata.to_parquet(meta_path)
-            logger.debug(f"Saved sample metadata to: {meta_path}")
-            
-            # Save loading strategy as JSON for reproducibility
-            strategy_path = storage_path.with_name(f"{storage_path.stem}.strategy.json")
-            import json
-            strategy_dict = {
-                'file_format': data.loading_strategy.file_format,
-                'separator': data.loading_strategy.separator,
-                'skip_rows': data.loading_strategy.skip_rows,
-                'sample_id_column': data.loading_strategy.sample_id_column,
-                'expression_start_row': data.loading_strategy.expression_start_row,
-                'has_header': data.loading_strategy.has_header,
-                'notes': data.loading_strategy.notes
-            }
-            with open(strategy_path, 'w') as f:
-                json.dump(strategy_dict, f, indent=2)
-            logger.debug(f"Saved loading strategy to: {strategy_path}")
-            
-            # Save quality metrics
-            metrics_path = storage_path.with_name(f"{storage_path.stem}.metrics.json")
-            with open(metrics_path, 'w') as f:
-                json.dump(data.quality_metrics, f, indent=2)
-            logger.debug(f"Saved quality metrics to: {metrics_path}")
-            
-            # Save gene mapping if available
-            if data.probe_to_gene_mapping:
-                mapping_path = storage_path.with_name(f"{storage_path.stem}.gene_mapping.parquet")
-                mapping_df = pd.DataFrame([
-                    {'probe_id': k, 'gene_symbol': v}
-                    for k, v in data.probe_to_gene_mapping.items()
-                ])
-                mapping_df.to_parquet(mapping_path, index=False)
-                logger.debug(f"Saved gene mapping to: {mapping_path}")
-            
-            logger.info(f"Successfully stored dataset {data.accession} to {storage_path}")
-        except Exception as e:
-            logger.warning(f"Failed to save to storage: {e}")
-    
     def _save_to_storage(self, data: LoadedGEOData) -> None:
         """Save processed data to disk for quick reloading"""
         try:
@@ -551,20 +508,10 @@ Determine the optimal parsing strategy for this file."""
             data.expression_matrix.to_parquet(storage_path)
             logger.debug(f"Saved expression matrix to: {storage_path}")
             
-            # Save sample metadata
+            # Save sample metadata - save DataFrame directly preserving index (sample IDs)
             meta_path = storage_path.with_name(f"{storage_path.stem}.metadata.parquet")
-            meta_list = []
-            for sample_id, values in data.sample_metadata.items():
-                if isinstance(values, dict):
-                    row = {'sample_id': sample_id}
-                    row.update(values)
-                    meta_list.append(row)
-                else:
-                    meta_list.append({'sample_id': sample_id, 'metadata': str(values)})
-            
-            if meta_list:
-                meta_df = pd.DataFrame(meta_list)
-                meta_df.to_parquet(meta_path, index=False)
+            if data.sample_metadata is not None and not data.sample_metadata.empty:
+                data.sample_metadata.to_parquet(meta_path, index=True)
                 logger.debug(f"Saved sample metadata to: {meta_path}")
             
             # Save loading strategy
@@ -664,6 +611,8 @@ Determine the optimal parsing strategy for this file."""
             
             loaded_data = LoadedGEOData(
                 accession=dataset.accession,
+                title=dataset.title,
+                platform=dataset.platform,
                 expression_matrix=expr_df,
                 sample_metadata=meta_df,
                 platform_info={"platform": dataset.platform},
@@ -719,10 +668,13 @@ Determine the optimal parsing strategy for this file."""
                 
                 if mapping:
                     combined_mapping.update(mapping)
-                    mapped_count = sum(1 for probe_id in data.expression_matrix.index if probe_id in mapping)
+                    # Convert probe IDs to string for matching (mapping keys are strings)
+                    mapped_count = sum(1 for probe_id in data.expression_matrix.index if str(probe_id) in mapping)
                     logger.info(f"Platform {platform_id}: Mapped {mapped_count}/{len(data.expression_matrix)} probes")
             
             if combined_mapping:
+                # Convert expression matrix index to string to match mapping keys
+                data.expression_matrix.index = data.expression_matrix.index.astype(str)
                 data.probe_to_gene_mapping = combined_mapping
                 total_mapped = sum(1 for probe_id in data.expression_matrix.index if probe_id in combined_mapping)
                 mapping_rate = 100.0 * total_mapped / len(data.expression_matrix) if data.expression_matrix.shape[0] > 0 else 0

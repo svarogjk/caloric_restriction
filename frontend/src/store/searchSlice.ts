@@ -1,20 +1,56 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit'
 
-export interface GeneOccurrence {
+export interface KMCurveData {
+    times: number[]
+    survival_probabilities: number[]
+    ci_lower: number[] | null
+    ci_upper: number[] | null
+    n_samples: number
+    n_events: number
+}
+
+export interface GeneDatasetResult {
+    dataset_id: string
+    dataset_title: string
+    hazard_ratio: number
+    hazard_ratio_ci_lower: number
+    hazard_ratio_ci_upper: number
+    cox_p_value: number
+    log_rank_p_value: number
+    risk_direction: 'high_risk' | 'low_risk'
+    n_samples: number
+    median_survival_high: number | null
+    median_survival_low: number | null
+    km_curve_high: KMCurveData | null
+    km_curve_low: KMCurveData | null
+}
+
+export interface GeneSurvival {
     gene_id: string
+    gene_symbol: string | null
     n_datasets: number
-    avg_log_fc: number
-    direction_consistency: number
+    avg_hazard_ratio: number
+    avg_cox_p_value: number
+    avg_log_rank_p_value: number
+    predominant_risk: 'high_risk' | 'low_risk'
+    risk_direction_consistency: number
     datasets: string[]
+    per_dataset_results: GeneDatasetResult[] | null
 }
 
 export interface AnalysisResult {
     query: string
     n_datasets_analyzed: number
-    n_datasets_with_degs: number
-    common_genes: GeneOccurrence[]
+    n_datasets_with_survival: number
+    common_genes: GeneSurvival[]
     processing_time: number
     timestamp: string
+}
+
+export interface Dataset {
+    id: string
+    title: string
+    accession: string
 }
 
 export interface SearchState {
@@ -22,12 +58,11 @@ export interface SearchState {
     selectedModel: string
     datasetCount: number
     rankingMultiplier: number
+    organism: string | null
     results: AnalysisResult | null
     loading: boolean
     error: string | null
     expandedGeneId: string | null
-    useAiGeneMapping: boolean
-    geneMappingModel: string | null
 }
 
 const initialState: SearchState = {
@@ -35,12 +70,11 @@ const initialState: SearchState = {
     selectedModel: 'mistral',
     datasetCount: 10,
     rankingMultiplier: 3,
+    organism: null,  // null means any organism
     results: null,
     loading: false,
     error: null,
     expandedGeneId: null,
-    useAiGeneMapping: true,
-    geneMappingModel: null,
 }
 
 const searchSlice = createSlice({
@@ -59,11 +93,8 @@ const searchSlice = createSlice({
         setRankingMultiplier: (state, action: PayloadAction<number>) => {
             state.rankingMultiplier = action.payload
         },
-        setUseAiGeneMapping: (state, action: PayloadAction<boolean>) => {
-            state.useAiGeneMapping = action.payload
-        },
-        setGeneMappingModel: (state, action: PayloadAction<string | null>) => {
-            state.geneMappingModel = action.payload
+        setOrganism: (state, action: PayloadAction<string | null>) => {
+            state.organism = action.payload
         },
         setLoading: (state, action: PayloadAction<boolean>) => {
             state.loading = action.payload
@@ -85,8 +116,7 @@ export const {
     setSelectedModel,
     setDatasetCount,
     setRankingMultiplier,
-    setUseAiGeneMapping,
-    setGeneMappingModel,
+    setOrganism,
     setLoading,
     setResults,
     setError,

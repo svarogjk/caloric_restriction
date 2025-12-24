@@ -25,9 +25,10 @@ class GeneMappingService:
     CACHE_DIR = Path("/tmp/gpl_cache")
     MEMORY_CACHE_FILE = CACHE_DIR / ".memory_cache_index.json"
     INVALID_PLATFORMS_FILE = CACHE_DIR / ".invalid_platforms.json"
+    EMPTY_MAPPING_PLATFORMS_FILE = CACHE_DIR / ".empty_mapping_platforms.json"
     PARTIAL_DOWNLOADS_DIR = CACHE_DIR / ".partial_downloads"
     GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
-    MAX_RETRIES = 3  # Increased for better reliability with large files
+    MAX_RETRIES = 2  # Reduced retries to prevent long delays
     RETRY_BACKOFF = 2.0  # Exponential backoff multiplier
     CHUNK_SIZE = 200 * 1024 * 1024  # 200MB chunks for optimal throughput on large files
     
@@ -47,13 +48,15 @@ class GeneMappingService:
         # Small in-memory cache for recently accessed mappings (LRU-like)
         self._mapping_cache: Dict[str, Dict[str, str]] = {}
         self.MAX_CACHE_SIZE = 3  # Only keep 3 platforms in memory
-        # Track known invalid platforms to avoid repeated failed attempts
-        # NOTE: Disabled persistent caching to allow retry of failed platforms in new sessions
+        # Track known invalid platforms (404 errors) to avoid repeated failed attempts
         self._invalid_platforms: set = set()
+        # Track platforms that downloaded successfully but have NO gene mappings
+        # These should NOT be retried since the file is valid but has no usable data
+        self._empty_mapping_platforms: set = set()
         # Load list of previously cached platforms on init
         self._load_memory_cache_index()
-        # NOTE: Skip loading persistent invalid platforms cache to allow retries
-        # self._load_invalid_platforms_cache()
+        # Load empty mapping platforms cache (this prevents infinite retry loops)
+        self._load_empty_mapping_platforms_cache()
     
     def _load_memory_cache_index(self) -> None:
         """Load index of cached platforms (not the actual data) to track what's cached on disk"""
@@ -67,6 +70,39 @@ class GeneMappingService:
                 logger.debug(f"Index loaded: {len(self._cached_platform_ids)} platforms available on disk")
         except Exception as e:
             logger.debug(f"Could not load memory cache index: {e}")
+    
+    def _load_empty_mapping_platforms_cache(self) -> None:
+        """Load list of platforms that have been downloaded but contain no gene mappings.
+        
+        These platforms should NOT be retried since:
+        1. The file downloads successfully (no 404)
+        2. The file parses successfully (valid format)
+        3. But there are no probe->gene_symbol mappings in the data
+        
+        Examples: GPL16791, GPL17021 - methylation arrays with no gene symbols
+        """
+        try:
+            if self.EMPTY_MAPPING_PLATFORMS_FILE.exists():
+                with open(self.EMPTY_MAPPING_PLATFORMS_FILE, 'r') as f:
+                    cache_data = json.load(f)
+                
+                self._empty_mapping_platforms = set(cache_data.get('empty_mapping_platforms', []))
+                if self._empty_mapping_platforms:
+                    logger.info(f"Loaded {len(self._empty_mapping_platforms)} platforms known to have no gene mappings (will skip)")
+        except Exception as e:
+            logger.debug(f"Could not load empty mapping platforms cache: {e}")
+    
+    def _save_empty_mapping_platforms_cache(self) -> None:
+        """Save list of platforms that have no gene mappings to persistent storage"""
+        try:
+            cache_data = {
+                'empty_mapping_platforms': list(self._empty_mapping_platforms)
+            }
+            with open(self.EMPTY_MAPPING_PLATFORMS_FILE, 'w') as f:
+                json.dump(cache_data, f)
+            logger.info(f"Saved empty mapping platforms cache: {len(self._empty_mapping_platforms)} platforms")
+        except Exception as e:
+            logger.debug(f"Failed to save empty mapping platforms cache: {e}")
     
     def _load_invalid_platforms_cache(self) -> None:
         """Load list of known invalid platforms to avoid repeated failed attempts
@@ -302,6 +338,11 @@ class GeneMappingService:
         # Normalize platform ID
         normalized_id = platform_id if platform_id.startswith('GPL') else f'GPL{platform_id}'
         
+        # Check if this platform is known to have no gene mappings (skip download entirely)
+        if normalized_id in self._empty_mapping_platforms or platform_id in self._empty_mapping_platforms:
+            logger.warning(f"Platform {platform_id} is known to have no gene mappings (methylation/other array), skipping")
+            return None
+        
         # Check for pre-built mapping files first (TSV or parquet from download_platforms.py)
         prebuilt_path = self._get_prebuilt_mapping_path(platform_id)
         if prebuilt_path:
@@ -438,22 +479,18 @@ class GeneMappingService:
         # Examples:
         # - GPL1261 -> /geo/platforms/GPL1nnn/GPL1261/soft/GPL1261_family.soft.gz
         # - GPL13912 -> /geo/platforms/GPL13nnn/GPL13912/soft/GPL13912_family.soft.gz
-        # - GPL81 -> /geo/platforms/GPL8nnn/GPL81/soft/GPL81_family.soft.gz (edge case!)
-        # - GPL6246 -> /geo/platforms/GPL6nnn/GPL6246/soft/GPL6246_family.soft.gz
-        # Pattern: remove last 3 digits and append "nnn"
+        # - GPL570 -> /geo/platforms/GPLnnn/GPL570/soft/GPL570_family.soft.gz
+        # - GPL96 -> /geo/platforms/GPLnnn/GPL96/soft/GPL96_family.soft.gz
+        # Pattern: Platforms with ID < 1000 go to GPLnnn, otherwise remove last 3 digits and append "nnn"
         
-        if len(numeric_id) >= 4:
-            # Standard case: 4 or more digits (e.g., 1261, 13912, 6246)
-            folder_prefix = f"GPL{numeric_id[:-3]}nnn"
-        elif len(numeric_id) == 3:
-            # 3 digits (e.g., 081 from GPL81 padded, or 100)
-            folder_prefix = f"GPL{numeric_id[0]}nnn"
-        elif len(numeric_id) == 2:
-            # 2 digits (e.g., 81 from GPL81) - map to GPL8nnn
-            folder_prefix = f"GPL{numeric_id[0]}nnn"
+        numeric_value = int(numeric_id)
+        if numeric_value < 1000:
+            # All platforms with IDs < 1000 (1-999) are in GPLnnn folder
+            folder_prefix = "GPLnnn"
         else:
-            # 1 digit fallback
-            folder_prefix = f"GPL{numeric_id}nnn"
+            # Standard case: 4 or more digits (e.g., 1261, 13912, 6246)
+            # Remove last 3 digits and append "nnn"
+            folder_prefix = f"GPL{numeric_id[:-3]}nnn"
         
         logger.debug(f"Calculated folder prefix for {gpl_id}: {folder_prefix}")
         
@@ -593,7 +630,8 @@ class GeneMappingService:
     
     async def _fetch_with_retry(self, gpl_id: str, folder_prefix: str) -> Optional[Dict[str, str]]:
         """
-        Attempt to fetch platform mapping, trying both family and miniml formats.
+        Attempt to fetch platform mapping, trying annotation file first (small), 
+        then family format as fallback.
         Uses chunked downloads with resume capability and Content-Length validation.
         
         Args:
@@ -601,9 +639,23 @@ class GeneMappingService:
             folder_prefix: Folder prefix for FTP path
         
         Returns:
-            Dictionary mapping probe_id -> gene_symbol, or None if both formats fail
+            Dictionary mapping probe_id -> gene_symbol, or None if all formats fail
         """
-        # Try family format first with chunked download
+        # Track if we successfully downloaded but got no mappings (vs download failure)
+        downloaded_successfully = False
+        
+        # Try annotation file first (much smaller, typically 1-10MB vs 1-70GB for family files)
+        annot_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/annot/{gpl_id}.annot.gz"
+        try:
+            logger.debug(f"Trying annotation file first for {gpl_id}...")
+            annot_result = await self._try_annotation_file(gpl_id, annot_url)
+            if annot_result:
+                logger.info(f"Successfully loaded {gpl_id} from annotation file: {len(annot_result)} probes")
+                return annot_result
+        except Exception as e:
+            logger.debug(f"Annotation file not available for {gpl_id}: {e}")
+        
+        # Try family format (can be very large - 1MB to 70GB+)
         family_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
         
         retry_count = 0
@@ -615,6 +667,7 @@ class GeneMappingService:
                 file_data = await self._download_with_chunks_and_resume(family_url, gpl_id)
                 
                 if file_data:
+                    downloaded_successfully = True
                     # Decompress and parse with streaming to minimize memory
                     try:
                         logger.debug(f"Decompressing and parsing {gpl_id}...")
@@ -623,6 +676,13 @@ class GeneMappingService:
                         if mapping:
                             logger.info(f"Successfully fetched mapping for {gpl_id}: {len(mapping)} probes")
                             return mapping
+                        else:
+                            # File parsed but no mappings found - this platform has no gene symbols
+                            # Cache this so we don't retry (e.g., methylation arrays)
+                            logger.warning(f"Platform {gpl_id} downloaded and parsed but has NO gene mappings - caching to skip future attempts")
+                            self._empty_mapping_platforms.add(gpl_id)
+                            self._save_empty_mapping_platforms_cache()
+                            return None
                     except Exception as e:
                         logger.debug(f"Error decompressing/parsing {gpl_id}: {e}")
                         retry_count += 1
@@ -649,13 +709,168 @@ class GeneMappingService:
                     await asyncio.sleep(wait_time)
         
         # Try miniml format as fallback (only if family format failed)
-        logger.debug(f"Family format failed, trying miniml format for {gpl_id}...")
-        miniml_result = await self._try_miniml_format(gpl_id, folder_prefix)
-        if miniml_result:
-            return miniml_result
+        if not downloaded_successfully:
+            logger.debug(f"Family format failed, trying miniml format for {gpl_id}...")
+            miniml_result = await self._try_miniml_format(gpl_id, folder_prefix)
+            if miniml_result:
+                return miniml_result
         
         return None
     
+    async def _try_annotation_file(self, gpl_id: str, annot_url: str) -> Optional[Dict[str, str]]:
+        """
+        Try to download and parse the annotation file (much smaller than family files).
+        Annotation files are typically 1-10MB vs family files which can be 1-70GB+.
+        
+        Args:
+            gpl_id: Platform ID
+            annot_url: URL to annotation file
+        
+        Returns:
+            Dictionary mapping probe_id -> gene_symbol, or None if failed
+        """
+        try:
+            # Check if file exists first
+            head_response = await self.client.head(annot_url, follow_redirects=True)
+            if head_response.status_code != 200:
+                logger.debug(f"Annotation file not found for {gpl_id}")
+                return None
+            
+            file_size = int(head_response.headers.get('content-length', 0))
+            if file_size == 0:
+                logger.debug(f"Annotation file empty for {gpl_id}")
+                return None
+            
+            logger.info(f"Downloading annotation file for {gpl_id}: {file_size / (1024*1024):.1f}MB")
+            
+            # Download the annotation file
+            response = await self.client.get(annot_url, follow_redirects=True, timeout=300.0)
+            if response.status_code != 200:
+                return None
+            
+            # Parse the annotation file
+            return self._parse_annotation_file(response.content, gpl_id)
+            
+        except Exception as e:
+            logger.debug(f"Error downloading annotation file for {gpl_id}: {e}")
+            return None
+    
+    def _parse_annotation_file(self, compressed_data: bytes, platform_id: str) -> Optional[Dict[str, str]]:
+        """
+        Parse GPL annotation file (tab-separated with headers).
+        Format is similar to family files but much smaller and focused on annotations.
+        
+        Args:
+            compressed_data: Gzipped compressed file data
+            platform_id: Platform ID for logging
+        
+        Returns:
+            Dictionary mapping probe_id -> gene_symbol
+        """
+        import gzip
+        import io
+        
+        try:
+            # Decompress
+            decompressed = gzip.decompress(compressed_data)
+            text_stream = io.StringIO(decompressed.decode('utf-8', errors='replace'))
+            
+            mapping = {}
+            headers = None
+            id_idx = None
+            symbol_idx = None
+            in_table = False
+            
+            for line in text_stream:
+                line = line.strip()
+                
+                # Skip empty lines
+                if not line:
+                    continue
+                
+                # Look for the start of the data table
+                if line == '!platform_table_begin':
+                    in_table = True
+                    continue
+                elif line == '!platform_table_end':
+                    break
+                
+                # Skip metadata lines (before table starts)
+                if not in_table:
+                    continue
+                
+                parts = line.split('\t')
+                
+                # First line in table is the header
+                if headers is None:
+                    headers = parts
+                    
+                    # Find ID and Gene Symbol columns
+                    for idx, header in enumerate(headers):
+                        header_upper = header.upper().strip()
+                        
+                        # Look for ID column
+                        if header_upper in ['ID', 'PROBE_ID', 'ID_REF', 'PROBESET_ID']:
+                            id_idx = idx
+                        # Look for Gene Symbol column
+                        elif header_upper in ['GENE SYMBOL', 'GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 
+                                               'GENE ASSIGNMENT', 'GENE_ASSIGNMENT']:
+                            symbol_idx = idx
+                    
+                    # Fallback: look for columns containing 'gene' and 'symbol'
+                    if symbol_idx is None:
+                        for idx, header in enumerate(headers):
+                            header_upper = header.upper()
+                            if 'GENE' in header_upper and 'SYMBOL' in header_upper:
+                                symbol_idx = idx
+                                break
+                    
+                    # Try 'gene' column as last resort
+                    if symbol_idx is None:
+                        for idx, header in enumerate(headers):
+                            if header.upper() == 'GENE':
+                                symbol_idx = idx
+                                break
+                    
+                    logger.debug(f"Annotation file headers for {platform_id}: ID col={id_idx}, Symbol col={symbol_idx}")
+                    if id_idx is None or symbol_idx is None:
+                        logger.warning(f"Could not find required columns in annotation file for {platform_id}. Headers: {headers[:15]}")
+                        return None
+                    continue
+                
+                # Parse data row
+                if id_idx is not None and len(parts) > id_idx:
+                    probe_id = parts[id_idx].strip()
+                    
+                    if not probe_id:
+                        continue
+                    
+                    gene_symbol = None
+                    if symbol_idx is not None and len(parts) > symbol_idx:
+                        gene_symbol = parts[symbol_idx].strip()
+                    
+                    # Handle multiple genes separated by ///
+                    if gene_symbol and '///' in gene_symbol:
+                        gene_symbol = gene_symbol.split('///')[0].strip()
+                    
+                    # Also handle // separator sometimes used
+                    if gene_symbol and ' // ' in gene_symbol:
+                        gene_symbol = gene_symbol.split(' // ')[0].strip()
+                    
+                    if gene_symbol and gene_symbol.lower() not in ['', 'null', 'na', 'n/a', '---']:
+                        mapping[probe_id] = gene_symbol
+            
+            if mapping:
+                logger.info(f"Parsed annotation file for {platform_id}: {len(mapping)} probes")
+                return mapping
+            else:
+                logger.debug(f"No mappings found in annotation file for {platform_id}")
+                return None
+                
+        except Exception as e:
+            logger.debug(f"Error parsing annotation file for {platform_id}: {e}")
+            return None
+
     def _parse_gpl_file_streaming(self, compressed_data: bytes, platform_id: str) -> Optional[Dict[str, str]]:
         """
         Parse GPL family file with streaming decompression to minimize memory usage.
@@ -672,6 +887,7 @@ class GeneMappingService:
             mapping = {}
             lines_processed = 0
             table_started = False
+            in_table_section = False  # Track if we've passed !platform_table_begin
             id_idx = None
             symbol_idx = None
             
@@ -685,26 +901,38 @@ class GeneMappingService:
                     if not line or line.startswith('#!') or line.startswith('##'):
                         continue
                     
-                    # Find table header line (starts with #ID)
-                    if line.startswith('#ID') and not table_started:
+                    # Check for platform_table_begin marker
+                    if '!platform_table_begin' in line.lower():
+                        in_table_section = True
+                        continue
+                    
+                    # Skip column description lines (e.g., "#ID = Description text")
+                    # These are single-column descriptions, not the actual header
+                    if line.startswith('#') and '=' in line and '\t' not in line:
+                        continue
+                    
+                    # Find table header line - can start with #ID OR be first line after !platform_table_begin
+                    if not table_started and (line.startswith('#ID') or (in_table_section and (line.startswith('ID') or line.upper().startswith('ID')))):
                         table_started = True
                         headers = line.split('\t')
                         
                         logger.debug(f"Found header at line {lines_processed}: {[h.lstrip('#') for h in headers[:10]]}")
                         
                         # First pass: look for exact matches
+                        # Clean headers by removing #, =, and extra spaces
                         for idx, header in enumerate(headers):
-                            header_clean = header.lstrip('#').upper().strip()
+                            # Remove # prefix and any " = " suffix pattern (e.g., "#ID = " -> "ID")
+                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
                             
                             if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
                                 id_idx = idx
-                            elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']:
+                            elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
                                 symbol_idx = idx
                         
                         # Second pass: flexible matching for ID column
                         if id_idx is None:
                             for idx, header in enumerate(headers):
-                                header_clean = header.lstrip('#').upper()
+                                header_clean = header.lstrip('#').split('=')[0].strip().upper()
                                 if any(x in header_clean for x in ['ID', 'ACCESSION', 'PROBE']):
                                     id_idx = idx
                                     break
@@ -712,16 +940,16 @@ class GeneMappingService:
                         # Third pass: flexible matching for gene symbol column
                         if symbol_idx is None:
                             for idx, header in enumerate(headers):
-                                header_clean = header.lstrip('#').upper()
+                                header_clean = header.lstrip('#').split('=')[0].strip().upper()
                                 if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
-                                                                     'GENE', 'DESCRIPTION', 'PRODUCT']):
+                                                                     'ORF', 'GENE', 'DESCRIPTION', 'PRODUCT']):
                                     symbol_idx = idx
                                     break
                         
                         # Fourth pass: use common aliases
                         if symbol_idx is None:
                             for idx, header in enumerate(headers):
-                                header_clean = header.lstrip('#').upper()
+                                header_clean = header.lstrip('#').split('=')[0].strip().upper()
                                 if any(x == header_clean for x in ['NAME', 'TITLE', 'DEFINITION']):
                                     symbol_idx = idx
                                     break
@@ -792,6 +1020,7 @@ class GeneMappingService:
             mapping = {}
             lines_processed = 0
             table_started = False
+            in_table_section = False  # Track if we've passed !platform_table_begin
             id_idx = None
             symbol_idx = None
             
@@ -803,26 +1032,38 @@ class GeneMappingService:
                 if not line or line.startswith('#!') or line.startswith('##'):
                     continue
                 
-                # Find table header line (starts with #ID)
-                if line.startswith('#ID') and not table_started:
+                # Check for platform_table_begin marker
+                if '!platform_table_begin' in line.lower():
+                    in_table_section = True
+                    continue
+                
+                # Skip column description lines (e.g., "#ID = Description text")
+                # These are single-column descriptions, not the actual header
+                if line.startswith('#') and '=' in line and '\t' not in line:
+                    continue
+                
+                # Find table header line - can start with #ID OR be first line after !platform_table_begin
+                if not table_started and (line.startswith('#ID') or (in_table_section and (line.startswith('ID') or line.upper().startswith('ID')))):
                     table_started = True
                     headers = line.split('\t')
                     
                     logger.debug(f"Found header at line {lines_processed}: {[h.lstrip('#') for h in headers[:10]]}")
                     
+                    
                     # First pass: look for exact matches
+                    # Clean headers by removing #, =, and extra spaces (e.g., "#ID = " -> "ID")
                     for idx, header in enumerate(headers):
-                        header_clean = header.lstrip('#').upper().strip()
+                        header_clean = header.lstrip('#').split('=')[0].strip().upper()
                         
                         if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
                             id_idx = idx
-                        elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME']:
+                        elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
                             symbol_idx = idx
                     
                     # Second pass: flexible matching for ID column
                     if id_idx is None:
                         for idx, header in enumerate(headers):
-                            header_clean = header.lstrip('#').upper()
+                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
                             if any(x in header_clean for x in ['ID', 'ACCESSION', 'PROBE']):
                                 id_idx = idx
                                 break
@@ -830,17 +1071,17 @@ class GeneMappingService:
                     # Third pass: flexible matching for gene symbol column
                     if symbol_idx is None:
                         for idx, header in enumerate(headers):
-                            header_clean = header.lstrip('#').upper()
+                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
                             # Check for gene-related columns (symbol, name, description, etc.)
                             if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
-                                                                 'GENE', 'DESCRIPTION', 'PRODUCT']):
+                                                                 'ORF', 'GENE', 'DESCRIPTION', 'PRODUCT']):
                                 symbol_idx = idx
                                 break
                     
                     # Fourth pass: use common aliases
                     if symbol_idx is None:
                         for idx, header in enumerate(headers):
-                            header_clean = header.lstrip('#').upper()
+                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
                             if any(x == header_clean for x in ['NAME', 'TITLE', 'DEFINITION']):
                                 symbol_idx = idx
                                 break

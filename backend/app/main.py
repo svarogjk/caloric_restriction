@@ -1,6 +1,6 @@
 """
-FastAPI application for GEO Analysis Workflow
-Provides REST API endpoints for GEO data analysis
+FastAPI application for GEO Survival Analysis Workflow
+Provides REST API endpoints for survival analysis on GEO data
 """
 
 import logging
@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.services.geo_workflow_orchestrator import GEOWorkflowOrchestrator
+from app.services.geo_survival_workflow_orchestrator import GEOSurvivalWorkflowOrchestrator
 from app.api import routes
 from app.config.logging_config import setup_logging, get_logger
 
@@ -19,7 +19,7 @@ setup_logging(level=logging.DEBUG)
 logger = get_logger(__name__)
 
 # Global orchestrator instance
-orchestrator: Optional[GEOWorkflowOrchestrator] = None
+orchestrator: Optional[GEOSurvivalWorkflowOrchestrator] = None
 
 
 @asynccontextmanager
@@ -28,9 +28,9 @@ async def lifespan(app: FastAPI):
     Manage application lifespan - initialize and cleanup services
     """
     global orchestrator
-    logger.info("Starting GEO Analysis API...")
+    logger.info("Starting GEO Survival Analysis API...")
     
-    orchestrator = GEOWorkflowOrchestrator(
+    orchestrator = GEOSurvivalWorkflowOrchestrator(
         email="svarogjk1989@gmail.com",
         model="mistral"
     )
@@ -40,15 +40,15 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    logger.info("Shutting down GEO Analysis API...")
+    logger.info("Shutting down GEO Survival Analysis API...")
     await orchestrator.close()
 
 
 # Create FastAPI app
 app = FastAPI(
-    title="GEO Analysis API",
-    description="REST API for Gene Expression Omnibus (GEO) analysis workflow",
-    version="1.0.0",
+    title="GEO Survival Analysis API",
+    description="REST API for survival analysis on Gene Expression Omnibus (GEO) data",
+    version="2.0.0",
     lifespan=lifespan
 )
 

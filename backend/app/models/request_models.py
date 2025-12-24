@@ -7,11 +7,11 @@ from typing import Optional
 
 
 class AnalysisRequest(BaseModel):
-    """Request model for GEO analysis"""
+    """Request model for GEO survival analysis"""
     
     query: str = Field(
         ...,
-        description="Search query (e.g., 'caloric restriction aging')",
+        description="Search query (e.g., 'cancer survival prognosis')",
         min_length=1,
         max_length=500
     )
@@ -22,8 +22,8 @@ class AnalysisRequest(BaseModel):
         description="Maximum number of datasets to analyze"
     )
     organism: Optional[str] = Field(
-        default="Mus musculus",
-        description="Filter by organism"
+        default=None,
+        description="Filter by organism (e.g., 'Homo sapiens', 'Mus musculus')"
     )
     min_occurrence: int = Field(
         default=2,
@@ -40,12 +40,4 @@ class AnalysisRequest(BaseModel):
         ge=1,
         le=10,
         description="Multiplier for datasets to rank before analysis"
-    )
-    use_ai_gene_mapping: bool = Field(
-        default=True,
-        description="Whether to use AI agent for intelligent gene mapping (reads only necessary tokens)"
-    )
-    gene_mapping_model: Optional[str] = Field(
-        default=None,
-        description="Override model for gene mapping ('mistral' or 'claude'). If None, uses main model"
     )
