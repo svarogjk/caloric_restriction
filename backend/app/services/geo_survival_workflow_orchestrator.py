@@ -238,16 +238,46 @@ class GEOSurvivalWorkflowOrchestrator:
             )
     
     def _extract_keywords(self, query: str) -> List[str]:
-        """Extract search keywords from query and add survival-related terms"""
-        common_words = {'the', 'a', 'an', 'in', 'on', 'at', 'for', 'to', 'of', 'and', 'or'}
-        words = query.lower().split()
+        """Extract search keywords from query and add survival-related terms based on query type"""
+        common_words = {'the', 'a', 'an', 'in', 'on', 'at', 'for', 'to', 'of', 'and', 'or', 
+                       'what', 'which', 'how', 'does', 'do', 'is', 'are', 'genes', 'gene',
+                       'predict', 'affect', 'associated', 'with'}
+        query_lower = query.lower()
+        words = query_lower.split()
         keywords = [w for w in words if w not in common_words and len(w) > 2]
         
-        # Check if this is a mouse/aging study vs clinical study
-        is_mouse_study = any(w in query.lower() for w in ['mouse', 'mice', 'lifespan', 'aging', 'longevity'])
+        # Detect query type: cancer, aging/CR, or other
+        is_mouse_study = any(w in query_lower for w in ['mouse', 'mice', 'lifespan', 'aging', 'longevity', 'caloric restriction'])
+        
+        # Detect specific cancer types for better search targeting
+        cancer_types = {
+            'breast': ['breast cancer', 'breast carcinoma', 'breast tumor'],
+            'lung': ['lung cancer', 'lung carcinoma', 'lung adenocarcinoma', 'NSCLC', 'SCLC'],
+            'colorectal': ['colorectal cancer', 'colon cancer', 'rectal cancer', 'CRC'],
+            'hepatocellular': ['hepatocellular carcinoma', 'liver cancer', 'HCC'],
+            'gastric': ['gastric cancer', 'stomach cancer', 'gastric carcinoma'],
+            'pancreatic': ['pancreatic cancer', 'pancreatic adenocarcinoma', 'PDAC'],
+            'ovarian': ['ovarian cancer', 'ovarian carcinoma'],
+            'prostate': ['prostate cancer', 'prostate carcinoma'],
+            'glioma': ['glioma', 'glioblastoma', 'GBM', 'brain tumor'],
+            'leukemia': ['leukemia', 'AML', 'CLL', 'ALL'],
+            'lymphoma': ['lymphoma', 'DLBCL', 'hodgkin'],
+            'melanoma': ['melanoma', 'skin cancer'],
+        }
+        
+        detected_cancer = None
+        for cancer_key, cancer_terms in cancer_types.items():
+            for term in cancer_terms:
+                if term.lower() in query_lower:
+                    detected_cancer = cancer_key
+                    break
+            if detected_cancer:
+                break
+        
+        is_cancer_study = detected_cancer is not None or 'cancer' in query_lower or 'carcinoma' in query_lower
         
         if is_mouse_study:
-            # For mouse studies, look for lifespan/longevity data
+            # For mouse/aging studies, look for lifespan/longevity data
             survival_keywords = [
                 "lifespan",
                 "longevity", 
@@ -255,20 +285,39 @@ class GEOSurvivalWorkflowOrchestrator:
                 "median survival",
                 "age at death",
             ]
-        else:
-            # For clinical studies, look for patient survival data
+            logger.info(f"Query type: mouse/aging study")
+        elif is_cancer_study:
+            # For cancer studies, prioritize datasets with ACTUAL survival data
+            # Key insight: Include terms that indicate the dataset CONTAINS survival metadata
             survival_keywords = [
                 "overall survival",
-                "Kaplan-Meier",
-                "prognostic",
-                "patient outcome",
+                "survival time",    # More specific - indicates actual time data
+                "survival data",    # Explicit mention of data
+                "patient cohort",   # Cohort studies typically have follow-up
+                "clinical cohort",  # Clinical cohorts more likely to have survival
+                "follow-up",        # Indicates longitudinal data collection
+                "prognosis",
+            ]
+            # Add specific cancer terms to ensure we get the right cancer type
+            if detected_cancer:
+                cancer_search_terms = cancer_types[detected_cancer][:2]  # Top 2 terms for this cancer
+                keywords = cancer_search_terms + keywords  # Put cancer type first
+            logger.info(f"Query type: cancer study (detected: {detected_cancer or 'general'})")
+        else:
+            # General clinical studies
+            survival_keywords = [
+                "overall survival",
+                "survival time",
                 "clinical outcome",
+                "patient cohort",
+                "follow-up",
                 "survival analysis",
             ]
+            logger.info(f"Query type: general clinical study")
         
         # Combine user keywords with survival keywords
-        # User keywords first, then survival keywords
-        combined = keywords[:3] + survival_keywords
+        # User keywords first (especially cancer type), then survival keywords
+        combined = keywords[:4] + survival_keywords
         
         # Remove duplicates while preserving order
         seen = set()
@@ -278,7 +327,7 @@ class GEOSurvivalWorkflowOrchestrator:
                 seen.add(kw.lower())
                 unique_keywords.append(kw)
         
-        logger.info(f"Query type: {'mouse/aging study' if is_mouse_study else 'clinical study'}")
+        logger.info(f"Search keywords: {unique_keywords[:8]}")
         return unique_keywords[:8]
     
     async def _rank_datasets(

@@ -93,7 +93,7 @@ const SearchPage: React.FC = () => {
           Survival Analysis Search
         </h1>
         <p className="text-gray-600 mb-8">
-          Analyze gene expression datasets to identify survival-associated genes
+          Discover survival-associated genes from GEO datasets for cancer prognosis, aging, and caloric restriction studies
         </p>
 
         <div
@@ -272,40 +272,8 @@ const SearchPage: React.FC = () => {
             <p className="text-gray-500 text-lg mt-4">
               Enter a search query to find survival-associated genes
             </p>
-            <div className="text-gray-400 text-sm mt-4 space-y-2">
-              <p className="font-medium text-gray-500">Example queries:</p>
-              <div className="flex flex-wrap gap-2 justify-center">
-                <button 
-                  onClick={() => dispatch(setQuery('breast cancer survival prognosis'))}
-                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
-                >
-                  breast cancer survival prognosis
-                </button>
-                <button 
-                  onClick={() => dispatch(setQuery('lung cancer overall survival'))}
-                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
-                >
-                  lung cancer overall survival
-                </button>
-                <button 
-                  onClick={() => dispatch(setQuery('hepatocellular carcinoma patient outcome'))}
-                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
-                >
-                  hepatocellular carcinoma outcome
-                </button>
-                <button 
-                  onClick={() => dispatch(setQuery('gastric cancer survival analysis'))}
-                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
-                >
-                  gastric cancer survival
-                </button>
-                <button 
-                  onClick={() => dispatch(setQuery('colorectal cancer prognosis biomarker'))}
-                  className="px-3 py-1 bg-gray-100 rounded-full hover:bg-indigo-100 transition text-xs"
-                >
-                  colorectal cancer prognosis
-                </button>
-              </div>
+            <div className="text-gray-400 text-sm mt-4">
+              <p className="font-medium text-gray-500">Click one of the example questions above or type your own query</p>
             </div>
           </div>
         )}

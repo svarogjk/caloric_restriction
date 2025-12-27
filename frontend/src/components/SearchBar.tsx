@@ -8,11 +8,16 @@ interface SearchBarProps {
 }
 
 const EXAMPLE_QUESTIONS = [
+  // Cancer survival examples
+  "What genes predict survival in breast cancer patients?",
+  "Which biomarkers are associated with lung cancer prognosis?",
+  "What genes affect overall survival in colorectal cancer?",
+  "Which genes predict hepatocellular carcinoma patient outcome?",
+  "What genes are prognostic in gastric cancer survival?",
+  // Caloric restriction / aging examples  
   "Does caloric restriction extend lifespan in mice?",
   "What genes are affected by caloric restriction in aging?",
   "How does caloric restriction impact mitochondrial function?",
-  "What is the role of mTOR in caloric restriction response?",
-  "How does caloric restriction affect metabolic pathways?",
 ]
 
 const SearchBar: React.FC<SearchBarProps> = ({
@@ -31,7 +36,7 @@ const SearchBar: React.FC<SearchBarProps> = ({
         value={query}
         onChange={(e) => onChange(e.target.value)}
         onKeyPress={(e) => e.key === 'Enter' && onSearch()}
-        placeholder="e.g., Does caloric restriction extend lifespan in mice?"
+        placeholder="e.g., What genes predict survival in breast cancer? or Does caloric restriction extend lifespan in mice?"
         disabled={loading}
         className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:bg-gray-100 disabled:cursor-not-allowed transition"
       />
