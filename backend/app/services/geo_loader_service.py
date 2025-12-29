@@ -242,7 +242,10 @@ class GEODataLoaderService:
         """Try loading from series matrix file"""
         url = dataset.series_matrix_url
         if not url:
-            return None
+            # Generate the URL from accession
+            accession = dataset.accession
+            folder_prefix = accession[:-3] + "nnn"  # GSE19188 -> GSE19nnn
+            url = f"https://ftp.ncbi.nlm.nih.gov/geo/series/{folder_prefix}/{accession}/matrix/{accession}_series_matrix.txt.gz"
         
         logger.info(f"Trying series matrix: {url}")
         
@@ -326,6 +329,7 @@ Determine the optimal parsing strategy for this file."""
         
         # Extract metadata and find data boundaries
         sample_metadata = {}
+        characteristics_list = []  # Collect all characteristics_ch1 rows
         data_start = None
         data_end = None
         
@@ -336,7 +340,13 @@ Determine the optimal parsing strategy for this file."""
                 if len(parts) > 1:
                     key = parts[0].replace('!Sample_', '').strip()
                     values = [p.strip('"') for p in parts[1:]]
-                    sample_metadata[key] = values
+                    
+                    # Handle multiple characteristics_ch1 rows - they contain different fields
+                    # Each row has format: "field_name: value" for each sample
+                    if key == 'characteristics_ch1':
+                        characteristics_list.append(values)
+                    else:
+                        sample_metadata[key] = values
             # Find data section markers
             elif line.startswith('!series_matrix_table_begin'):
                 data_start = i + 1  # Data starts on next line
@@ -370,6 +380,33 @@ Determine the optimal parsing strategy for this file."""
                 meta_df.index = expr_df.columns
             else:
                 meta_df = pd.DataFrame(index=expr_df.columns)
+            
+            # Process characteristics_ch1 - expand "field_name: value" into separate columns
+            if characteristics_list:
+                for char_values in characteristics_list:
+                    if not char_values:
+                        continue
+                    # Extract field name from first non-empty value
+                    field_name = None
+                    for val in char_values:
+                        if val and ':' in val:
+                            field_name = val.split(':')[0].strip().lower().replace(' ', '_')
+                            break
+                    
+                    if field_name:
+                        # Extract values for each sample
+                        parsed_values = []
+                        for val in char_values:
+                            if val and ':' in val:
+                                parsed_values.append(val.split(':', 1)[1].strip())
+                            else:
+                                parsed_values.append(val)
+                        
+                        if len(parsed_values) == len(meta_df):
+                            meta_df[field_name] = parsed_values
+                            logger.debug(f"Extracted characteristic: {field_name}")
+                
+                logger.info(f"Expanded {len(characteristics_list)} characteristics into separate columns")
             
             return LoadedGEOData(
                 accession=dataset.accession,

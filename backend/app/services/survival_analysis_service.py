@@ -226,7 +226,8 @@ class SurvivalAnalysisService:
             'survival', 'os_time', 'os_event', 'pfs', 'rfs', 'dfs',
             'death', 'deceased', 'vital_status', 'alive', 'dead',
             'follow_up', 'followup', 'time_to', 'event', 'censor',
-            'lifespan', 'longevity', 'age_at_death', 'days_survived'
+            'lifespan', 'longevity', 'age_at_death', 'days_survived',
+            'overall_survival', 'status', 'recurrence', 'relapse'
         ]
         
         potential_survival_cols = []
