@@ -136,7 +136,7 @@ class GEOSurvivalWorkflowOrchestrator:
             self.current_model = model
         
         # Step 1: Search GEO for datasets with survival/clinical data
-        search_result = await self._search_geo(query, organism, max_datasets)
+        search_result = await self._search_geo(query, organism, max_datasets, ranking_multiplier)
         
         if not search_result.datasets:
             logger.warning("No datasets found from search")
@@ -180,7 +180,8 @@ class GEOSurvivalWorkflowOrchestrator:
         self,
         query: str,
         organism: Optional[str],
-        max_results: int
+        max_results: int,
+        search_multiplier: int = 3
     ) -> GEOSearchResult:
         """Search GEO for datasets with survival/clinical data"""
         
@@ -191,18 +192,19 @@ class GEOSurvivalWorkflowOrchestrator:
             logger.info(f"Searching GEO with keywords: {survival_keywords}")
             
             # Search for both microarray and RNA-seq datasets
-            # First try expression profiling by array (microarray)
+            # First try expression profiling by array (microarray) - more reliable for series matrix
+            # Request more results than needed since many won't have actual survival data
             result_array = await self.geo_client.search(
                 keywords=survival_keywords,
-                max_results=max_results,
+                max_results=max_results * search_multiplier,
                 organism=organism,
                 dataset_type="Expression profiling by array"
             )
             
-            # Also search for RNA-seq datasets
+            # Also search for RNA-seq datasets (fewer as they often need supplementary files)
             result_rnaseq = await self.geo_client.search(
                 keywords=survival_keywords,
-                max_results=max_results // 2,
+                max_results=max_results,
                 organism=organism,
                 dataset_type="Expression profiling by high throughput sequencing"
             )
@@ -289,14 +291,15 @@ class GEOSurvivalWorkflowOrchestrator:
         elif is_cancer_study:
             # For cancer studies, prioritize datasets with ACTUAL survival data
             # Key insight: Include terms that indicate the dataset CONTAINS survival metadata
+            # These terms are more likely to appear in datasets with actual clinical follow-up
             survival_keywords = [
                 "overall survival",
-                "survival time",    # More specific - indicates actual time data
-                "survival data",    # Explicit mention of data
-                "patient cohort",   # Cohort studies typically have follow-up
-                "clinical cohort",  # Clinical cohorts more likely to have survival
-                "follow-up",        # Indicates longitudinal data collection
-                "prognosis",
+                "survival analysis",  # Datasets that did survival analysis likely have data
+                "clinical outcome",   # Clinical outcome data typically includes survival
+                "patient outcome",    # Patient outcomes = survival/events
+                "prognostic",         # Prognostic studies have survival data
+                "clinical data",      # General clinical data inclusion
+                "follow-up",          # Indicates longitudinal data collection
             ]
             # Add specific cancer terms to ensure we get the right cancer type
             if detected_cancer:

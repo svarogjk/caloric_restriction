@@ -519,16 +519,29 @@ Determine if this dataset contains survival data and identify the relevant colum
         try:
             kmf = KaplanMeierFitter()
             
+            # Helper function to sanitize values for JSON serialization
+            def sanitize_value(val):
+                """Convert NaN and inf to None for JSON serialization"""
+                if val is None or pd.isna(val) or np.isinf(val):
+                    return None
+                return float(val)
+            
+            def sanitize_list(lst):
+                """Sanitize a list of values for JSON serialization"""
+                if lst is None:
+                    return None
+                return [sanitize_value(v) for v in lst]
+            
             # Fit high expression group
             kmf.fit(high_group['time'], event_observed=high_group['event'])
             median_high = kmf.median_survival_time_
             
             # Extract KM curve data for high expression group
             km_curve_high = KMCurveData(
-                times=kmf.survival_function_.index.tolist(),
-                survival_probabilities=kmf.survival_function_['KM_estimate'].tolist(),
-                ci_lower=kmf.confidence_interval_['KM_estimate_lower_0.95'].tolist() if hasattr(kmf, 'confidence_interval_') else None,
-                ci_upper=kmf.confidence_interval_['KM_estimate_upper_0.95'].tolist() if hasattr(kmf, 'confidence_interval_') else None,
+                times=sanitize_list(kmf.survival_function_.index.tolist()),
+                survival_probabilities=sanitize_list(kmf.survival_function_['KM_estimate'].tolist()),
+                ci_lower=sanitize_list(kmf.confidence_interval_['KM_estimate_lower_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
+                ci_upper=sanitize_list(kmf.confidence_interval_['KM_estimate_upper_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
                 n_samples=int(n_high),
                 n_events=int(high_group['event'].sum())
             )
@@ -539,10 +552,10 @@ Determine if this dataset contains survival data and identify the relevant colum
             
             # Extract KM curve data for low expression group
             km_curve_low = KMCurveData(
-                times=kmf.survival_function_.index.tolist(),
-                survival_probabilities=kmf.survival_function_['KM_estimate'].tolist(),
-                ci_lower=kmf.confidence_interval_['KM_estimate_lower_0.95'].tolist() if hasattr(kmf, 'confidence_interval_') else None,
-                ci_upper=kmf.confidence_interval_['KM_estimate_upper_0.95'].tolist() if hasattr(kmf, 'confidence_interval_') else None,
+                times=sanitize_list(kmf.survival_function_.index.tolist()),
+                survival_probabilities=sanitize_list(kmf.survival_function_['KM_estimate'].tolist()),
+                ci_lower=sanitize_list(kmf.confidence_interval_['KM_estimate_lower_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
+                ci_upper=sanitize_list(kmf.confidence_interval_['KM_estimate_upper_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
                 n_samples=int(n_low),
                 n_events=int(low_group['event'].sum())
             )
@@ -561,6 +574,13 @@ Determine if this dataset contains survival data and identify the relevant colum
         # Determine expression direction
         expression_direction = "high_risk" if hazard_ratio > 1 else "low_risk"
         
+        # Convert infinity and NaN values to None for JSON serialization
+        def safe_float(value):
+            """Convert NaN and inf to None"""
+            if value is None or pd.isna(value) or np.isinf(value):
+                return None
+            return float(value)
+        
         return GeneSurvivalResult(
             gene_id=gene_id,
             gene_symbol=gene_symbol,
@@ -569,8 +589,8 @@ Determine if this dataset contains survival data and identify the relevant colum
             hazard_ratio_ci_upper=hr_ci_upper,
             log_rank_p_value=log_rank_p,
             cox_p_value=cox_p,
-            median_survival_high=median_high if not pd.isna(median_high) else None,
-            median_survival_low=median_low if not pd.isna(median_low) else None,
+            median_survival_high=safe_float(median_high),
+            median_survival_low=safe_float(median_low),
             is_significant=is_significant,
             expression_direction=expression_direction,
             n_samples_high=n_high,
