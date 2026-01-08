@@ -234,28 +234,40 @@ class GeneMappingService:
                 
                 # Create mapping from ID -> gene_symbol
                 mapping = {}
-                # Try different column name combinations
+                # Try different column name combinations (case-insensitive)
                 id_cols = ['probe_id', 'ID', 'id', 'probeset_id']
-                symbol_cols = ['gene_symbol', 'symbol', 'gene', 'gene_name']
+                symbol_cols = ['gene_symbol', 'symbol', 'gene', 'gene_name', 'GENE_SYMBOL', 'SYMBOL', 'GENE', 'GENE_NAME']
                 
                 id_col = None
                 symbol_col = None
                 
-                for col in id_cols:
-                    if col in df.columns:
+                # Find ID column (case-insensitive)
+                for col in df.columns:
+                    col_upper = col.upper()
+                    if col_upper in [c.upper() for c in id_cols]:
                         id_col = col
                         break
                 
-                for col in symbol_cols:
-                    if col in df.columns:
+                # Find gene symbol column (case-insensitive, prioritize GENE_SYMBOL)
+                for col in df.columns:
+                    col_upper = col.upper()
+                    if col_upper == 'GENE_SYMBOL':
                         symbol_col = col
                         break
                 
+                # If GENE_SYMBOL not found, try other variations
+                if not symbol_col:
+                    for col in df.columns:
+                        col_upper = col.upper()
+                        if col_upper in [c.upper() for c in symbol_cols]:
+                            symbol_col = col
+                            break
+                
                 if id_col and symbol_col:
                     for idx, row in df.iterrows():
-                        probe_id = str(row[id_col])
-                        gene_symbol = str(row[symbol_col])
-                        if gene_symbol and gene_symbol != "nan":
+                        probe_id = str(row[id_col]).strip()
+                        gene_symbol = str(row[symbol_col]).strip() if pd.notna(row[symbol_col]) else None
+                        if probe_id and gene_symbol and gene_symbol != "nan" and gene_symbol:
                             mapping[probe_id] = gene_symbol
                 
                 logger.info(f"Loaded {len(mapping)} probe->gene mappings from parquet for {platform_id}")
@@ -812,10 +824,12 @@ class GeneMappingService:
                         # Look for ID column
                         if header_upper in ['ID', 'PROBE_ID', 'ID_REF', 'PROBESET_ID']:
                             id_idx = idx
-                        # Look for Gene Symbol column
+                        # Look for Gene Symbol column (exclude GENE_ID which contains numeric Entrez IDs)
                         elif header_upper in ['GENE SYMBOL', 'GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 
                                                'GENE ASSIGNMENT', 'GENE_ASSIGNMENT']:
-                            symbol_idx = idx
+                            # Make sure it's not GENE_ID column
+                            if 'GENE_ID' not in header_upper and 'GENEID' not in header_upper:
+                                symbol_idx = idx
                     
                     # Fallback: look for columns containing 'gene' and 'symbol'
                     if symbol_idx is None:
@@ -926,8 +940,11 @@ class GeneMappingService:
                             
                             if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
                                 id_idx = idx
+                            # Prioritize GENE_SYMBOL over GENE_ID (numeric Entrez IDs)
                             elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
-                                symbol_idx = idx
+                                # Make sure it's not GENE_ID column (we want symbols, not numeric IDs)
+                                if 'GENE_ID' not in header_clean and 'GENEID' not in header_clean:
+                                    symbol_idx = idx
                         
                         # Second pass: flexible matching for ID column
                         if id_idx is None:
@@ -941,10 +958,12 @@ class GeneMappingService:
                         if symbol_idx is None:
                             for idx, header in enumerate(headers):
                                 header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                                if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
-                                                                     'ORF', 'GENE', 'DESCRIPTION', 'PRODUCT']):
-                                    symbol_idx = idx
-                                    break
+                                # Exclude GENE_ID - we want gene symbols, not numeric Entrez IDs
+                                if 'GENE_ID' not in header_clean and 'GENEID' not in header_clean:
+                                    if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
+                                                                         'ORF', 'GENE', 'DESCRIPTION', 'PRODUCT']):
+                                        symbol_idx = idx
+                                        break
                         
                         # Fourth pass: use common aliases
                         if symbol_idx is None:

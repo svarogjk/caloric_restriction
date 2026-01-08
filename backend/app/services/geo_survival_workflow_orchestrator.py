@@ -483,6 +483,11 @@ class GEOSurvivalWorkflowOrchestrator:
                         'per_dataset_results': [],
                     }
                 
+                # Skip if this dataset has already been processed for this gene (prevents duplicates)
+                if result.accession in gene_data[gene_identifier]['datasets']:
+                    logger.warning(f"Duplicate entry detected for gene {gene_identifier} in dataset {result.accession} - skipping")
+                    continue
+                
                 gene_data[gene_identifier]['datasets'].append(result.accession)
                 gene_data[gene_identifier]['hazard_ratios'].append(gene.hazard_ratio)
                 gene_data[gene_identifier]['cox_p_values'].append(gene.cox_p_value)
