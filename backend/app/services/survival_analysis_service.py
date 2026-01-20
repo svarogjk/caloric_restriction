@@ -298,16 +298,17 @@ Determine if this dataset contains survival data and identify the relevant colum
         # Auto-detect survival columns if not provided
         if survival_time_col is None or event_col is None:
             detection = await self.detect_survival_data(loaded_data)
-            
-            if detection is None or not detection.has_survival_data:
+
+            if detection is None or not detection.has_survival_data or \
+               detection.survival_time_column is None or detection.event_column is None:
                 logger.warning(f"No survival data detected in {loaded_data.accession}")
                 return None
-            
+
             survival_time_col = detection.survival_time_column
             event_col = detection.event_column
             time_unit = detection.survival_time_unit
             event_type = detection.event_type
-            
+
             logger.info(f"Detected survival columns: time={survival_time_col}, event={event_col}")
         else:
             event_type = "death"

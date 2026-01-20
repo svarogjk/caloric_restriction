@@ -8,16 +8,17 @@ interface SearchBarProps {
 }
 
 const EXAMPLE_QUESTIONS = [
-  // Cancer survival examples
+  // High-yield cancer survival queries (100+ datasets expected)
   "What genes predict survival in breast cancer patients?",
   "Which biomarkers are associated with lung cancer prognosis?",
-  "What genes affect overall survival in colorectal cancer?",
-  "Which genes predict hepatocellular carcinoma patient outcome?",
-  "What genes are prognostic in gastric cancer survival?",
-  // Caloric restriction / aging examples  
+  // Moderate-yield cancer survival queries (20-50 datasets expected)
+  "What genes affect overall survival in ovarian cancer?",
+  "Which genes predict gastric cancer patient outcome?",
+  "What genes are prognostic in colorectal cancer survival?",
+  "Which biomarkers predict glioblastoma prognosis?",
+  // Caloric restriction / aging examples
   "Does caloric restriction extend lifespan in mice?",
   "What genes are affected by caloric restriction in aging?",
-  "How does caloric restriction impact mitochondrial function?",
 ]
 
 const SearchBar: React.FC<SearchBarProps> = ({
