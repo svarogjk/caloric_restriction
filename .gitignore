@@ -32,3 +32,4 @@ backend/app/services/mistral_key.txt
 backend/geo_logs/geo_analysis.log
 backend/platform_mappings/*
 backend/datasets/*
+presentations/*
