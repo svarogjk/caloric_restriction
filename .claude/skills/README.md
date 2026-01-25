@@ -10,6 +10,7 @@ This directory contains skills for Claude Code. Skills provide specialized knowl
 | [geo-data](geo-data.md) | GEO database, expression data, probe mapping | Fetching or parsing GEO data |
 | [api-development](api-development.md) | FastAPI, Pydantic, async services | Creating or modifying API endpoints |
 | [react-frontend](react-frontend.md) | React, Redux, Tailwind, Recharts | Building frontend components |
+| [git](git.md) | Conventional commits, tags, branching | Git operations, commits, releases |
 
 ## How to Use Skills
 
@@ -44,5 +45,6 @@ Each skill file contains:
 ## Related Files
 
 - [CLAUDE.md](../../CLAUDE.md) - Main project instructions for Claude Code
+- [.claude/agents/](../agents/) - Claude Code custom agents
 - [.github/copilot-instructions.md](../../.github/copilot-instructions.md) - General AI assistant guidelines
 - [.github/skills/](../../.github/skills/) - GitHub Copilot skills (similar content)
