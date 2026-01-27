@@ -1,0 +1,94 @@
+name: geo_data_skill
+version: "1.0"
+description: Domain knowledge for NCBI GEO database
+
+dataset_types:
+  gse:
+    name: GEO Series
+    description: Collection of samples from an experiment
+    primary_target: true
+    example: GSE12345
+
+  gsm:
+    name: GEO Sample
+    description: Individual sample with expression values
+    example: GSM123456
+
+  gpl:
+    name: GEO Platform
+    description: Microarray platform with probe annotations
+    example: GPL570
+
+  gds:
+    name: GEO Dataset
+    description: Curated dataset (subset of GSE)
+    example: GDS1234
+
+data_quality:
+  required_metadata:
+    - survival_time: Overall survival, RFS, PFS, etc.
+    - event_status: Death, recurrence, progression
+    - sample_ids: Must match expression data
+
+  common_issues:
+    - name: Missing survival data
+      frequency: Very common
+      solution: Filter datasets without survival info
+
+    - name: Inconsistent time units
+      frequency: Common
+      solution: Check metadata for days/months/years
+
+    - name: Ambiguous event coding
+      frequency: Common
+      solution: Verify 1=event, 0=censored
+
+platform_considerations:
+  expression_platforms:
+    - GPL570: Affymetrix Human Genome U133 Plus 2.0
+    - GPL96: Affymetrix Human Genome U133A
+    - GPL571: Affymetrix Human Genome U133A 2.0
+    - GPL6244: Affymetrix Human Gene 1.0 ST
+
+  methylation_platforms:
+    - GPL13534: Illumina HumanMethylation450
+    - GPL21145: Illumina MethylationEPIC
+    note: Not suitable for gene expression survival analysis
+
+probe_to_gene_mapping:
+  steps:
+    - Download platform annotation
+    - Extract probe-to-gene mapping
+    - Handle multiple probes per gene (aggregate)
+    - Handle missing mappings
+
+  aggregation_methods:
+    - mean: Average expression across probes
+    - max: Maximum expression (captures dominant signal)
+    - first: Use first probe (simplest)
+
+cancer_types_with_good_data:
+  - breast_cancer:
+      keywords: ["breast cancer", "breast carcinoma", "BRCA"]
+      expected_datasets: 50+
+  - lung_cancer:
+      keywords: ["lung cancer", "NSCLC", "lung adenocarcinoma"]
+      expected_datasets: 30+
+  - colorectal_cancer:
+      keywords: ["colorectal cancer", "colon cancer", "CRC"]
+      expected_datasets: 20+
+  - ovarian_cancer:
+      keywords: ["ovarian cancer", "ovarian carcinoma"]
+      expected_datasets: 20+
+  - glioblastoma:
+      keywords: ["glioblastoma", "GBM", "brain tumor"]
+      expected_datasets: 15+
+
+rate_limiting:
+  without_api_key:
+    requests_per_second: 3
+    delay: 0.34s
+  with_api_key:
+    requests_per_second: 10
+    delay: 0.1s
+  recommendation: Always use appropriate delays between requests

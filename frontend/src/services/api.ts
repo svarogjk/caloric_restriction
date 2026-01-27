@@ -1,5 +1,6 @@
-import axios from 'axios'
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios'
 import { Dataset } from '../store/searchSlice'
+import { getStoredToken, removeStoredToken } from './authApi'
 
 const API_BASE_URL = '/api'
 
@@ -9,6 +10,33 @@ const apiClient = axios.create({
         'Content-Type': 'application/json',
     },
 })
+
+// Request interceptor: Add auth token to requests
+apiClient.interceptors.request.use(
+    (config: InternalAxiosRequestConfig) => {
+        const token = getStoredToken()
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`
+        }
+        return config
+    },
+    (error) => {
+        return Promise.reject(error)
+    }
+)
+
+// Response interceptor: Handle 401 errors
+apiClient.interceptors.response.use(
+    (response) => response,
+    (error: AxiosError) => {
+        if (error.response?.status === 401) {
+            removeStoredToken()
+            // Optionally redirect to login or dispatch logout action
+            window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+        }
+        return Promise.reject(error)
+    }
+)
 
 export interface KMCurveData {
     times: number[]

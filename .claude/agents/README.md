@@ -6,6 +6,9 @@ This directory contains custom agents for Claude Code. Agents are specialized su
 
 | Agent | Description | Model | When to Use |
 |-------|-------------|-------|-------------|
+| [auth-developer](auth-developer.md) | OAuth2 JWT authentication | sonnet | User registration, login, protected routes |
+| [ai-chat-developer](ai-chat-developer.md) | LangChain chat system | sonnet | Chat features, streaming, conversation management |
+| [postgres-manager](postgres-manager.md) | PostgreSQL operations | haiku | Database setup, migrations, troubleshooting |
 | [code-reviewer](code-reviewer.md) | Reviews code quality and conventions | sonnet | Before commits, during PR reviews |
 | [api-debugger](api-debugger.md) | Debugs API issues and errors | sonnet | When API endpoints fail or return errors |
 | [survival-analysis-planner](survival-analysis-planner.md) | Plans statistical analysis strategies | sonnet | Designing new survival analyses |

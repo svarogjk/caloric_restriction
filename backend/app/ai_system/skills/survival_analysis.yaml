@@ -1,0 +1,105 @@
+name: survival_analysis_skill
+version: "1.0"
+description: Domain knowledge for survival analysis in genomics
+
+concepts:
+  kaplan_meier:
+    definition: Non-parametric estimator of survival function
+    key_points:
+      - Shows probability of surviving past a given time
+      - Accounts for censored observations
+      - Used for comparing survival between groups
+    code_example: |
+      from lifelines import KaplanMeierFitter
+      kmf = KaplanMeierFitter()
+      kmf.fit(time, event_observed=event, label="Group")
+
+  cox_proportional_hazards:
+    definition: Semi-parametric model relating covariates to hazard
+    key_points:
+      - Assumes proportional hazards
+      - Returns hazard ratios with confidence intervals
+      - Can include multiple covariates
+    assumptions:
+      - Proportional hazards (constant HR over time)
+      - Log-linear relationship between covariates and hazard
+    code_example: |
+      from lifelines import CoxPHFitter
+      cph = CoxPHFitter()
+      cph.fit(df, duration_col='time', event_col='event')
+
+  hazard_ratio:
+    definition: Ratio of hazard rates between groups
+    interpretation:
+      hr_greater_than_1:
+        meaning: Higher risk (worse survival)
+        example: "HR=2.0 means 2x higher risk of event"
+      hr_less_than_1:
+        meaning: Lower risk (better survival / protective)
+        example: "HR=0.5 means 50% lower risk of event"
+      hr_equal_to_1:
+        meaning: No difference in risk
+    confidence_intervals:
+      significance: CI not crossing 1.0 indicates statistical significance
+
+  log_rank_test:
+    definition: Compares survival distributions between groups
+    key_points:
+      - Non-parametric test
+      - Tests null hypothesis that survival curves are identical
+      - Sensitive to late differences in survival
+    code_example: |
+      from lifelines.statistics import logrank_test
+      result = logrank_test(T1, T2, E1, E2)
+
+gene_expression_analysis:
+  workflow:
+    - step: 1
+      name: Data preparation
+      actions:
+        - Load expression matrix
+        - Map probes to gene symbols
+        - Merge with clinical data
+
+    - step: 2
+      name: Expression dichotomization
+      methods:
+        - median: Split at median expression
+        - tertile: Compare top vs bottom third
+        - optimal: Find optimal cutpoint
+
+    - step: 3
+      name: Survival analysis
+      methods:
+        - Cox regression for hazard ratio
+        - Kaplan-Meier for visualization
+        - Log-rank test for significance
+
+    - step: 4
+      name: Multiple testing correction
+      methods:
+        - Benjamini-Hochberg FDR
+        - Bonferroni (more conservative)
+
+common_questions:
+  - question: What does a high hazard ratio mean for a gene?
+    answer: |
+      A hazard ratio > 1 indicates that higher expression of the gene
+      is associated with increased risk (worse survival). For example,
+      HR = 2.0 means patients with high expression have twice the risk
+      of the event (e.g., death) compared to those with low expression.
+
+  - question: How many samples do I need for reliable analysis?
+    answer: |
+      For survival analysis, the critical factor is the number of events
+      (not total samples). A minimum of 10 events is recommended for
+      stable Cox regression estimates. More events provide more statistical
+      power to detect true associations.
+
+  - question: Why is my gene showing no significant association?
+    answer: |
+      Several reasons could explain non-significant results:
+      1. The gene may not be truly associated with survival
+      2. Insufficient statistical power (too few events)
+      3. The expression range may be too narrow
+      4. The dataset may not be appropriate for this analysis

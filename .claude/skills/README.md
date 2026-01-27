@@ -6,6 +6,9 @@ This directory contains skills for Claude Code. Skills provide specialized knowl
 
 | Skill | Description | Use When |
 |-------|-------------|----------|
+| [oauth2-jwt-auth](oauth2-jwt-auth.md) | JWT tokens, password hashing, protected routes | User authentication, login, registration |
+| [langchain-chat](langchain-chat.md) | LangChain, conversation chains, streaming | AI chat features, message history |
+| [postgres-database](postgres-database.md) | PostgreSQL, Docker, migrations | Database setup and management |
 | [survival-analysis](survival-analysis.md) | Kaplan-Meier, Cox regression, hazard ratios | Working with survival analysis code |
 | [geo-data](geo-data.md) | GEO database, expression data, probe mapping | Fetching or parsing GEO data |
 | [api-development](api-development.md) | FastAPI, Pydantic, async services | Creating or modifying API endpoints |

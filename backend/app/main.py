@@ -11,8 +11,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.services.geo_survival_workflow_orchestrator import GEOSurvivalWorkflowOrchestrator
-from app.api import routes
+from app.api import routes, chat_routes, auth_routes
 from app.config.logging_config import setup_logging, get_logger
+from app.config.database import init_db, close_db
 
 # Setup logging to console and file
 setup_logging(level=logging.DEBUG)
@@ -29,19 +30,24 @@ async def lifespan(app: FastAPI):
     """
     global orchestrator
     logger.info("Starting GEO Survival Analysis API...")
-    
+
+    # Initialize database
+    await init_db()
+    logger.info("Database initialized")
+
     orchestrator = GEOSurvivalWorkflowOrchestrator(
         email="svarogjk1989@gmail.com",
         model="mistral"
     )
-    
+
     # Set orchestrator in routes module
     routes.set_orchestrator(orchestrator)
-    
+
     yield
-    
+
     logger.info("Shutting down GEO Survival Analysis API...")
     await orchestrator.close()
+    await close_db()
 
 
 # Create FastAPI app
@@ -63,6 +69,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(routes.router, prefix="/api")
+app.include_router(chat_routes.router, prefix="/api")
+app.include_router(auth_routes.router, prefix="/api")
 
 
 if __name__ == "__main__":

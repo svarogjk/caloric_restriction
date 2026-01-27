@@ -9,8 +9,11 @@ This directory contains modular project rules that are automatically loaded by C
 | [critical.md](critical.md) | Absolute requirements that must never be violated |
 | [backend.md](backend.md) | Python/FastAPI backend conventions |
 | [frontend.md](frontend.md) | React/TypeScript frontend conventions |
+| [authentication.md](authentication.md) | OAuth2 JWT authentication rules |
+| [chat-system.md](chat-system.md) | AI chat system development rules |
 | [survival-analysis.md](survival-analysis.md) | Survival analysis domain rules |
 | [geo-data.md](geo-data.md) | GEO database handling rules |
+| [git.md](git.md) | Git workflow and commit conventions |
 
 ## How Rules Work
 

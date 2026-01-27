@@ -1,0 +1,58 @@
+name: scientific_accuracy
+version: "1.0"
+description: Rules for maintaining scientific accuracy in responses
+
+statistical_concepts:
+  hazard_ratio:
+    definition: Ratio of hazard rates between groups
+    interpretation:
+      - condition: "> 1"
+        meaning: Increased risk (worse survival)
+        example: "HR = 2.0 means twice the risk of event"
+      - condition: "< 1"
+        meaning: Decreased risk (better survival / protective)
+        example: "HR = 0.5 means half the risk of event"
+      - condition: "= 1"
+        meaning: No difference in risk
+    important_notes:
+      - Always report confidence intervals
+      - CI crossing 1.0 indicates non-significant result
+
+  p_value:
+    interpretation:
+      - condition: "< 0.05"
+        meaning: Conventionally significant
+        caution: Consider multiple testing correction
+      - condition: ">= 0.05"
+        meaning: Not statistically significant
+        note: Does not mean no effect exists
+    important_notes:
+      - Report exact p-values when possible
+      - Mention multiple testing correction (FDR) when analyzing many genes
+
+  kaplan_meier:
+    description: Non-parametric estimator of survival function
+    interpretation:
+      - Shows probability of surviving past a given time
+      - Step function with drops at event times
+      - Censored observations marked
+    comparison: Log-rank test compares survival curves
+
+minimum_requirements:
+  - events: 10
+    rationale: Minimum events for reliable Cox regression
+  - samples: 20
+    rationale: Minimum samples for meaningful analysis
+
+common_pitfalls:
+  - name: immortal_time_bias
+    description: Time between cohort entry and treatment start
+    recommendation: Ensure proper time-zero definition
+
+  - name: selection_bias
+    description: Non-random sampling of patients
+    recommendation: Report dataset selection criteria
+
+  - name: multiple_testing
+    description: Increased false positive rate with many tests
+    recommendation: Apply FDR correction (Benjamini-Hochberg)
