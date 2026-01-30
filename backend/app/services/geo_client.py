@@ -45,11 +45,37 @@ class GEODataset:
 @dataclass
 class GEOSearchResult:
     """Container for GEO search results"""
-    
+
     datasets: List[GEODataset]
     total_count: int
     search_query: str
     timestamp: datetime
+
+
+@dataclass
+class DatasetPreview:
+    """Lightweight dataset preview for quick estimation"""
+
+    accession: str
+    title: str
+    summary: str
+    sample_count: int
+    platforms: List[str]
+    organism: str
+    has_survival_keywords: bool = False
+
+
+@dataclass
+class GEOPreviewResult:
+    """Result of a quick GEO preview search"""
+
+    total_datasets: int
+    datasets_with_survival_keywords: int
+    top_datasets: List[DatasetPreview]
+    platform_counts: Dict[str, int]
+    platform_diversity: str  # "low", "medium", "high"
+    warnings: List[str]
+    search_query: str
 
 
 class GEOClient:
@@ -234,7 +260,212 @@ class GEOClient:
                 logger.error(f"Error searching GEO: {e}", exc_info=True)
                 logger.error(f"Search query was: {search_query}")
                 raise
-    
+
+    async def quick_search(
+        self,
+        keywords: List[str],
+        organism: Optional[str] = None,
+        dataset_type: Optional[str] = None,
+        min_samples: int = 30,
+    ) -> Dict[str, Any]:
+        """
+        Quick count-only search - returns total count without fetching dataset details.
+
+        This is much faster than search() as it only calls esearch, not esummary.
+
+        Args:
+            keywords: Search keywords
+            organism: Filter by organism
+            dataset_type: Filter by dataset type
+            min_samples: Minimum number of samples
+
+        Returns:
+            Dict with total_count, ids (first 100), and search_query
+        """
+        await self._rate_limit()
+
+        search_query = self._build_geo_query(
+            keywords=keywords,
+            organism=organism,
+            dataset_type=dataset_type,
+            min_samples=min_samples,
+        )
+
+        search_params = self._build_params(
+            db=self.GEO_DB,
+            term=search_query,
+            retmax=100,  # Get first 100 IDs for potential summary fetch
+            retmode="json",
+        )
+
+        try:
+            response = await self.client.get(
+                f"{self.BASE_URL}/esearch.fcgi", params=search_params
+            )
+            response.raise_for_status()
+            search_data = response.json()
+
+            ids = search_data.get("esearchresult", {}).get("idlist", [])
+            total_count = int(search_data.get("esearchresult", {}).get("count", 0))
+
+            return {
+                "total_count": total_count,
+                "ids": ids,
+                "search_query": search_query,
+            }
+
+        except Exception as e:
+            logger.error(f"Error in quick_search: {e}")
+            return {"total_count": 0, "ids": [], "search_query": search_query}
+
+    async def get_preview(
+        self,
+        keywords: List[str],
+        organism: Optional[str] = None,
+        dataset_type: Optional[str] = None,
+        min_samples: int = 30,
+        max_preview: int = 10,
+        survival_keywords: Optional[set] = None,
+    ) -> GEOPreviewResult:
+        """
+        Get a quick preview of GEO search results with survival analysis estimation.
+
+        Args:
+            keywords: Search keywords
+            organism: Filter by organism
+            dataset_type: Filter by dataset type
+            min_samples: Minimum samples
+            max_preview: Maximum datasets to preview
+            survival_keywords: Set of survival-related keywords to look for
+
+        Returns:
+            GEOPreviewResult with counts, top datasets, and platform analysis
+        """
+        # Default survival keywords if not provided
+        if survival_keywords is None:
+            survival_keywords = {
+                "survival",
+                "overall survival",
+                "os",
+                "prognosis",
+                "outcome",
+                "mortality",
+                "death",
+                "follow-up",
+                "hazard",
+                "relapse",
+                "recurrence",
+                "disease-free",
+                "event-free",
+            }
+
+        # First, get quick count and IDs
+        quick_result = await self.quick_search(
+            keywords=keywords,
+            organism=organism,
+            dataset_type=dataset_type,
+            min_samples=min_samples,
+        )
+
+        total_count = quick_result["total_count"]
+        ids = quick_result["ids"]
+        search_query = quick_result["search_query"]
+
+        if total_count == 0:
+            return GEOPreviewResult(
+                total_datasets=0,
+                datasets_with_survival_keywords=0,
+                top_datasets=[],
+                platform_counts={},
+                platform_diversity="low",
+                warnings=["No datasets found matching your query"],
+                search_query=search_query,
+            )
+
+        # Fetch summaries for top N datasets
+        preview_ids = ids[:max_preview]
+        datasets = await self.fetch_datasets(preview_ids)
+
+        # Analyze datasets for survival keywords and platforms
+        top_datasets = []
+        survival_count = 0
+        platform_counts: Dict[str, int] = {}
+
+        for ds in datasets:
+            # Check for survival keywords in title and summary
+            text_lower = (ds.title + " " + ds.summary).lower()
+            has_survival = any(kw in text_lower for kw in survival_keywords)
+
+            if has_survival:
+                survival_count += 1
+
+            # Count platforms
+            for platform in ds.platforms:
+                platform_counts[platform] = platform_counts.get(platform, 0) + 1
+
+            top_datasets.append(
+                DatasetPreview(
+                    accession=ds.accession,
+                    title=ds.title,
+                    summary=ds.summary[:200] + "..."
+                    if len(ds.summary) > 200
+                    else ds.summary,
+                    sample_count=ds.sample_count,
+                    platforms=ds.platforms,
+                    organism=ds.organism,
+                    has_survival_keywords=has_survival,
+                )
+            )
+
+        # Assess platform diversity
+        unique_platforms = len(platform_counts)
+        if unique_platforms <= 2:
+            platform_diversity = "low"
+        elif unique_platforms <= 5:
+            platform_diversity = "medium"
+        else:
+            platform_diversity = "high"
+
+        # Generate warnings
+        warnings = []
+
+        if survival_count == 0:
+            warnings.append(
+                "No datasets mention survival/outcome terms in their descriptions. "
+                "Consider adding 'survival' or 'prognosis' to your query."
+            )
+        elif survival_count < len(datasets) * 0.3:
+            warnings.append(
+                f"Only {survival_count} of {len(datasets)} preview datasets mention survival data."
+            )
+
+        if platform_diversity == "high":
+            warnings.append(
+                f"High platform diversity detected ({unique_platforms} platforms). "
+                "Gene overlap between platforms may be limited (~60%)."
+            )
+
+        # Check for methylation platforms
+        methylation_platforms = {"GPL13534", "GPL16791", "GPL21145", "GPL8490"}
+        methylation_count = sum(
+            1 for p in platform_counts.keys() if p in methylation_platforms
+        )
+        if methylation_count > 0:
+            warnings.append(
+                f"{methylation_count} methylation platform(s) detected. "
+                "These don't contain gene expression data."
+            )
+
+        return GEOPreviewResult(
+            total_datasets=total_count,
+            datasets_with_survival_keywords=survival_count,
+            top_datasets=top_datasets,
+            platform_counts=platform_counts,
+            platform_diversity=platform_diversity,
+            warnings=warnings,
+            search_query=search_query,
+        )
+
     async def fetch_datasets(self, ids: List[str]) -> List[GEODataset]:
         """Fetch detailed information for GEO dataset IDs"""
         if not ids:

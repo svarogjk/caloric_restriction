@@ -5,12 +5,14 @@ Evaluates survival analysis queries before execution to:
 1. Estimate likelihood of finding relevant data
 2. Suggest improvements to increase success
 3. Provide confidence scores
+4. Preview actual GEO search results for data-driven feedback
 """
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -46,6 +48,7 @@ class EstimationResult:
     suggestions: list[str]
     improved_query: Optional[str]
     validation: dict = field(default_factory=dict)
+    geo_preview: Optional[dict] = None  # GEO preview data if available
 
 
 class QueryEstimationService:
@@ -126,8 +129,13 @@ class QueryEstimationService:
         "rna",
     }
 
-    def __init__(self, model: str = "mistral"):
+    def __init__(
+        self,
+        model: str = "mistral",
+        geo_preview_service: Optional[Any] = None,
+    ):
         self.model = model
+        self.geo_preview_service = geo_preview_service
         self._init_estimation_agent()
 
     def _init_estimation_agent(self) -> None:
@@ -170,34 +178,90 @@ Be realistic - not all queries will find good survival data."""
         Returns:
             EstimationResult with confidence score, suggestions, and improved query
         """
-        # 1. Rule-based validation
+        # 1. Rule-based validation (fast, synchronous)
         validation = self._validate_query(query)
 
-        # 2. AI-powered estimation
-        ai_estimation = await self._ai_estimate(query)
+        # 2. Run AI estimation and GEO preview in parallel
+        geo_preview = None
+        geo_preview_dict = None
 
-        # 3. Calculate combined confidence score
-        confidence = self._calculate_confidence(validation, ai_estimation)
+        if self.geo_preview_service:
+            # Run both in parallel for better performance
+            try:
+                geo_task = self.geo_preview_service.get_preview(query)
+                ai_task = self._ai_estimate(query)
+                geo_preview, ai_estimation = await asyncio.gather(
+                    geo_task, ai_task, return_exceptions=True
+                )
 
-        # 4. Generate improvement suggestions
+                # Handle any exceptions from gather
+                if isinstance(geo_preview, Exception):
+                    logger.warning(f"GEO preview failed: {geo_preview}")
+                    geo_preview = None
+                if isinstance(ai_estimation, Exception):
+                    logger.warning(f"AI estimation failed: {ai_estimation}")
+                    ai_estimation = AIEstimationResult(
+                        confidence=0.5,
+                        estimated_datasets=5,
+                        estimated_time=120,
+                        rationale="Default estimation due to error",
+                    )
+            except Exception as e:
+                logger.warning(f"Parallel estimation failed: {e}")
+                ai_estimation = await self._ai_estimate(query)
+        else:
+            # No GEO preview service, just run AI estimation
+            ai_estimation = await self._ai_estimate(query)
+
+        # 3. Convert geo_preview to dict if available
+        if geo_preview:
+            geo_preview_dict = self.geo_preview_service.preview_to_dict(geo_preview)
+
+        # 4. Calculate combined confidence score (with GEO data if available)
+        confidence = self._calculate_confidence(
+            validation, ai_estimation, geo_preview_dict
+        )
+
+        # 5. Generate improvement suggestions (combining rule-based and data-driven)
         suggestions = self._generate_suggestions(validation, query)
 
-        # 5. Create improved query if confidence is low
+        # Add data-driven suggestions from GEO preview
+        if geo_preview and self.geo_preview_service:
+            data_suggestions = self.geo_preview_service.generate_data_driven_suggestions(
+                geo_preview, query
+            )
+            # Merge without duplicates, data-driven first
+            seen = set()
+            merged = []
+            for s in data_suggestions + suggestions:
+                s_key = s[:50].lower()  # Use first 50 chars as key
+                if s_key not in seen:
+                    seen.add(s_key)
+                    merged.append(s)
+            suggestions = merged[:6]  # Limit to 6 suggestions
+
+        # 6. Create improved query if confidence is low
         improved_query = None
         if confidence < 0.5 and suggestions:
             improved_query = await self._improve_query(query, suggestions)
 
-        # 6. Determine if analysis can proceed
+        # 7. Determine if analysis can proceed
         can_proceed = confidence >= 0.3
+
+        # Use actual dataset count from GEO if available
+        estimated_datasets = ai_estimation.estimated_datasets
+        if geo_preview_dict and geo_preview_dict.get("total_datasets", 0) > 0:
+            estimated_datasets = geo_preview_dict["total_datasets"]
 
         return EstimationResult(
             confidence_score=confidence,
-            estimated_datasets=ai_estimation.estimated_datasets,
+            estimated_datasets=estimated_datasets,
             estimated_time_seconds=ai_estimation.estimated_time,
             can_proceed=can_proceed,
             suggestions=suggestions,
             improved_query=improved_query,
             validation=validation,
+            geo_preview=geo_preview_dict,
         )
 
     def _validate_query(self, query: str) -> dict:
@@ -255,23 +319,88 @@ Provide your estimation."""
             )
 
     def _calculate_confidence(
-        self, validation: dict, ai_estimation: AIEstimationResult
+        self,
+        validation: dict,
+        ai_estimation: AIEstimationResult,
+        geo_preview: Optional[dict] = None,
     ) -> float:
-        """Calculate overall confidence score."""
+        """
+        Calculate overall confidence score.
+
+        Incorporates rule-based validation, AI estimation, and real GEO data.
+
+        Args:
+            validation: Rule-based validation results
+            ai_estimation: AI-powered estimation
+            geo_preview: Optional GEO preview data
+
+        Returns:
+            Confidence score between 0.0 and 1.0
+        """
         score = 0.0
 
-        # Rule-based factors (40% weight)
-        if validation["has_survival_keywords"]:
-            score += 0.12
-        if validation["has_cancer_type"]:
-            score += 0.15
-        if validation["has_gene_focus"]:
-            score += 0.08
-        if validation["has_organism"]:
-            score += 0.05
+        if geo_preview and geo_preview.get("total_datasets", 0) > 0:
+            # Data-driven confidence (when GEO preview is available)
+            # Use real data to inform confidence (50% weight)
+            total = geo_preview["total_datasets"]
+            survival_count = geo_preview.get("datasets_with_survival_keywords", 0)
+            platform_diversity = geo_preview.get("platform_diversity", "high")
 
-        # AI estimation factor (60% weight)
-        score += ai_estimation.confidence * 0.6
+            # Dataset count factors
+            if total >= 50:
+                score += 0.15
+            elif total >= 20:
+                score += 0.12
+            elif total >= 10:
+                score += 0.08
+            elif total >= 5:
+                score += 0.05
+
+            # Survival keyword presence in datasets
+            preview_count = len(geo_preview.get("top_datasets", []))
+            if preview_count > 0:
+                survival_ratio = survival_count / preview_count
+                if survival_ratio >= 0.5:
+                    score += 0.12
+                elif survival_ratio >= 0.3:
+                    score += 0.08
+                elif survival_ratio > 0:
+                    score += 0.04
+
+            # Platform homogeneity bonus
+            if platform_diversity == "low":
+                score += 0.08
+            elif platform_diversity == "medium":
+                score += 0.04
+            # High diversity = no bonus, harder to get common genes
+
+            # Rule-based validation (25% weight)
+            if validation["has_survival_keywords"]:
+                score += 0.06
+            if validation["has_cancer_type"]:
+                score += 0.08
+            if validation["has_gene_focus"]:
+                score += 0.04
+            if validation["has_organism"]:
+                score += 0.02
+
+            # AI estimation (25% weight)
+            score += ai_estimation.confidence * 0.25
+
+        else:
+            # Fallback: No GEO preview, use original logic
+            # Rule-based factors (40% weight)
+            if validation["has_survival_keywords"]:
+                score += 0.12
+            if validation["has_cancer_type"]:
+                score += 0.15
+            if validation["has_gene_focus"]:
+                score += 0.08
+            if validation["has_organism"]:
+                score += 0.05
+
+            # AI estimation factor (60% weight)
+            score += ai_estimation.confidence * 0.6
 
         return min(1.0, max(0.0, score))
 

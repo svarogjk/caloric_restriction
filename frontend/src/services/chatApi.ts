@@ -25,6 +25,26 @@ export interface ConversationListItem {
     contextType: string
 }
 
+export interface DatasetPreview {
+    accession: string
+    title: string
+    summary: string
+    sampleCount: number
+    platforms: string[]
+    organism: string
+    hasSurvivalKeywords: boolean
+}
+
+export interface GeoPreview {
+    totalDatasets: number
+    datasetsWithSurvivalKeywords: number
+    topDatasets: DatasetPreview[]
+    platformCounts: Record<string, number>
+    platformDiversity: 'low' | 'medium' | 'high'
+    warnings: string[]
+    searchQuery: string
+}
+
 export interface MessageResponse {
     messageId: string
     role: 'user' | 'assistant'
@@ -38,6 +58,7 @@ export interface MessageResponse {
         canProceed: boolean
         suggestions: string[]
         improvedQuery?: string
+        geoPreview?: GeoPreview
     }
     suggestedActions?: string[]
 }
@@ -58,6 +79,7 @@ export interface EstimateQueryResponse {
     canProceed: boolean
     suggestions: string[]
     improvedQuery?: string
+    geoPreview?: GeoPreview
     validation: {
         hasSurvivalKeywords: boolean
         hasCancerType: boolean
@@ -152,6 +174,23 @@ export const chatApi = {
                 canProceed: data.estimation.can_proceed,
                 suggestions: data.estimation.suggestions,
                 improvedQuery: data.estimation.improved_query,
+                geoPreview: data.estimation.geo_preview ? {
+                    totalDatasets: data.estimation.geo_preview.total_datasets,
+                    datasetsWithSurvivalKeywords: data.estimation.geo_preview.datasets_with_survival_keywords,
+                    topDatasets: (data.estimation.geo_preview.top_datasets || []).map((ds: Record<string, unknown>) => ({
+                        accession: ds.accession,
+                        title: ds.title,
+                        summary: ds.summary,
+                        sampleCount: ds.sample_count,
+                        platforms: ds.platforms,
+                        organism: ds.organism,
+                        hasSurvivalKeywords: ds.has_survival_keywords,
+                    })),
+                    platformCounts: data.estimation.geo_preview.platform_counts || {},
+                    platformDiversity: data.estimation.geo_preview.platform_diversity,
+                    warnings: data.estimation.geo_preview.warnings || [],
+                    searchQuery: data.estimation.geo_preview.search_query,
+                } : undefined,
             } : undefined,
             suggestedActions: data.suggested_actions,
         }
@@ -170,6 +209,23 @@ export const chatApi = {
             canProceed: data.can_proceed,
             suggestions: data.suggestions,
             improvedQuery: data.improved_query,
+            geoPreview: data.geo_preview ? {
+                totalDatasets: data.geo_preview.total_datasets,
+                datasetsWithSurvivalKeywords: data.geo_preview.datasets_with_survival_keywords,
+                topDatasets: (data.geo_preview.top_datasets || []).map((ds: Record<string, unknown>) => ({
+                    accession: ds.accession,
+                    title: ds.title,
+                    summary: ds.summary,
+                    sampleCount: ds.sample_count,
+                    platforms: ds.platforms,
+                    organism: ds.organism,
+                    hasSurvivalKeywords: ds.has_survival_keywords,
+                })),
+                platformCounts: data.geo_preview.platform_counts || {},
+                platformDiversity: data.geo_preview.platform_diversity,
+                warnings: data.geo_preview.warnings || [],
+                searchQuery: data.geo_preview.search_query,
+            } : undefined,
             validation: {
                 hasSurvivalKeywords: data.validation?.has_survival_keywords || false,
                 hasCancerType: data.validation?.has_cancer_type || false,

@@ -14,6 +14,26 @@ export interface Message {
     isStreaming?: boolean
 }
 
+export interface DatasetPreview {
+    accession: string
+    title: string
+    summary: string
+    sampleCount: number
+    platforms: string[]
+    organism: string
+    hasSurvivalKeywords: boolean
+}
+
+export interface GeoPreview {
+    totalDatasets: number
+    datasetsWithSurvivalKeywords: number
+    topDatasets: DatasetPreview[]
+    platformCounts: Record<string, number>
+    platformDiversity: 'low' | 'medium' | 'high'
+    warnings: string[]
+    searchQuery: string
+}
+
 export interface QueryEstimation {
     confidenceScore: number
     estimatedDatasets: number
@@ -21,6 +41,7 @@ export interface QueryEstimation {
     canProceed: boolean
     suggestions: string[]
     improvedQuery?: string
+    geoPreview?: GeoPreview
 }
 
 export interface Conversation {
@@ -283,6 +304,7 @@ const chatSlice = createSlice({
                         canProceed: est.canProceed,
                         suggestions: est.suggestions,
                         improvedQuery: est.improvedQuery,
+                        geoPreview: est.geoPreview,
                     }
                     state.currentEstimation = assistantMessage.estimation
                 }
@@ -304,6 +326,7 @@ const chatSlice = createSlice({
                     canProceed: action.payload.canProceed,
                     suggestions: action.payload.suggestions,
                     improvedQuery: action.payload.improvedQuery,
+                    geoPreview: action.payload.geoPreview,
                 }
             })
 

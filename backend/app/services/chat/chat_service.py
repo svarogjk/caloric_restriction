@@ -1,7 +1,8 @@
 """
 Chat Service - Main orchestrator for chat functionality.
 
-Coordinates conversation management, LangChain responses, and query estimation.
+Coordinates conversation management, LangChain responses, query estimation,
+and GEO preview functionality.
 """
 
 import logging
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.chat.conversation_service import ConversationService, ConversationData
 from app.services.chat.estimation_service import QueryEstimationService, EstimationResult
 from app.services.chat.langchain_service import LangChainService
+from app.services.chat.geo_preview_service import GEOPreviewService
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +63,18 @@ class ChatService:
         session: AsyncSession,
         langchain_service: Optional[LangChainService] = None,
         estimation_service: Optional[QueryEstimationService] = None,
+        geo_preview_service: Optional[GEOPreviewService] = None,
     ):
         self.conversation_service = ConversationService(session)
         self.langchain_service = langchain_service or LangChainService()
-        self.estimation_service = estimation_service or QueryEstimationService()
+
+        # Create GEO preview service for real-time GEO search previews
+        self.geo_preview_service = geo_preview_service or GEOPreviewService()
+
+        # Inject GEO preview service into estimation service
+        self.estimation_service = estimation_service or QueryEstimationService(
+            geo_preview_service=self.geo_preview_service
+        )
 
     async def create_conversation(
         self,
@@ -156,6 +166,7 @@ class ChatService:
                 "can_proceed": estimation.can_proceed,
                 "suggestions": estimation.suggestions,
                 "improved_query": estimation.improved_query,
+                "geo_preview": estimation.geo_preview,  # Include GEO preview data
             }
 
             # Save estimation
@@ -241,9 +252,27 @@ class ChatService:
             conversation_id
         )
 
+        # Run estimation for analysis queries (same as send_message)
+        estimation_context = None
+        if self._looks_like_analysis_query(content):
+            estimation = await self.estimation_service.estimate_query(content)
+            estimation_context = {
+                "confidence_score": estimation.confidence_score,
+                "estimated_datasets": estimation.estimated_datasets,
+                "estimated_time_seconds": estimation.estimated_time_seconds,
+                "can_proceed": estimation.can_proceed,
+                "suggestions": estimation.suggestions,
+                "geo_preview": estimation.geo_preview,
+            }
+
+            # Yield estimation summary as first chunk
+            yield self._format_estimation_summary(estimation)
+
         # Stream response
         full_response = ""
-        async for chunk in self.langchain_service.stream_response(messages, model):
+        async for chunk in self.langchain_service.stream_response(
+            messages, model, estimation_context=estimation_context
+        ):
             full_response += chunk
             yield chunk
 
@@ -254,6 +283,46 @@ class ChatService:
             content=full_response,
             model_used=model,
         )
+
+    def _format_estimation_summary(self, estimation: EstimationResult) -> str:
+        """Format estimation result as a user-friendly summary."""
+        lines = []
+        lines.append("\n**Query Analysis Summary**\n")
+
+        confidence_pct = int(estimation.confidence_score * 100)
+        lines.append(f"Confidence: {confidence_pct}%\n")
+
+        if estimation.geo_preview:
+            preview = estimation.geo_preview
+            total = preview.get("total_datasets", 0)
+            survival = preview.get("datasets_with_survival_keywords", 0)
+            lines.append(f"Found {total} matching datasets in GEO")
+            if survival > 0:
+                lines.append(f"  - {survival} mention survival/outcome data")
+
+            # Platform breakdown
+            platform_counts = preview.get("platform_counts", {})
+            if platform_counts:
+                top_platforms = sorted(
+                    platform_counts.items(), key=lambda x: x[1], reverse=True
+                )[:3]
+                platforms_str = ", ".join(
+                    f"{p}: {c}" for p, c in top_platforms
+                )
+                lines.append(f"  - Platforms: {platforms_str}")
+
+            # Warnings
+            warnings = preview.get("warnings", [])
+            for warning in warnings[:2]:
+                lines.append(f"  - {warning}")
+
+        if estimation.suggestions:
+            lines.append("\nSuggestions:")
+            for suggestion in estimation.suggestions[:3]:
+                lines.append(f"  - {suggestion}")
+
+        lines.append("\n---\n")
+        return "\n".join(lines)
 
     async def estimate_query(self, query: str) -> EstimationResult:
         """

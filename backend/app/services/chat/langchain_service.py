@@ -151,8 +151,27 @@ class LangChainService:
         if estimation_context:
             confidence = estimation_context.get("confidence_score", 0)
             suggestions = estimation_context.get("suggestions", [])
+            geo_preview = estimation_context.get("geo_preview")
 
             context_note = f"\n\n[Query Analysis: {confidence:.0%} confidence"
+
+            # Add GEO preview info if available
+            if geo_preview:
+                total = geo_preview.get("total_datasets", 0)
+                survival_count = geo_preview.get("datasets_with_survival_keywords", 0)
+                context_note += f", Found {total} datasets ({survival_count} with survival data)"
+
+                # Add platform info
+                platform_counts = geo_preview.get("platform_counts", {})
+                if platform_counts:
+                    platform_diversity = geo_preview.get("platform_diversity", "unknown")
+                    context_note += f", Platform diversity: {platform_diversity}"
+
+                # Add warnings
+                warnings = geo_preview.get("warnings", [])
+                if warnings:
+                    context_note += f", Warnings: {warnings[0][:50]}..."
+
             if suggestions:
                 context_note += f", Suggestions: {'; '.join(suggestions[:2])}"
             context_note += "]"
@@ -166,6 +185,7 @@ class LangChainService:
         self,
         messages: list[dict],
         model: str = "mistral",
+        estimation_context: dict | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream response tokens.
@@ -173,6 +193,7 @@ class LangChainService:
         Args:
             messages: List of message dicts with 'role' and 'content'
             model: Model to use
+            estimation_context: Optional query estimation data
 
         Yields:
             Response tokens as they are generated
@@ -185,6 +206,25 @@ class LangChainService:
 
         history = self._convert_messages(messages[:-1])
         current_input = messages[-1].get("content", "")
+
+        # Add estimation context if available (same as generate_response)
+        if estimation_context:
+            confidence = estimation_context.get("confidence_score", 0)
+            suggestions = estimation_context.get("suggestions", [])
+            geo_preview = estimation_context.get("geo_preview")
+
+            context_note = f"\n\n[Query Analysis: {confidence:.0%} confidence"
+
+            # Add GEO preview info
+            if geo_preview:
+                total = geo_preview.get("total_datasets", 0)
+                survival_count = geo_preview.get("datasets_with_survival_keywords", 0)
+                context_note += f", Found {total} datasets ({survival_count} with survival data)"
+
+            if suggestions:
+                context_note += f", Suggestions: {'; '.join(suggestions[:2])}"
+            context_note += "]"
+            current_input += context_note
 
         async for chunk in chain.astream({"history": history, "input": current_input}):
             if hasattr(chunk, "content") and chunk.content:
