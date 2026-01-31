@@ -45,6 +45,17 @@ export interface AnalysisResult {
     common_genes: GeneSurvival[]
     processing_time: number
     timestamp: string
+    ranking_quality_score?: number
+    ranking_recommendations?: string
+}
+
+export interface QueryEstimation {
+    confidenceScore: number
+    estimatedDatasets: number
+    estimatedTimeSeconds: number
+    canProceed: boolean
+    suggestions: string[]
+    improvedQuery?: string
 }
 
 export interface Dataset {
@@ -63,6 +74,9 @@ export interface SearchState {
     loading: boolean
     error: string | null
     expandedGeneId: string | null
+    // Estimation state
+    estimation: QueryEstimation | null
+    estimationLoading: boolean
 }
 
 const initialState: SearchState = {
@@ -75,6 +89,8 @@ const initialState: SearchState = {
     loading: false,
     error: null,
     expandedGeneId: null,
+    estimation: null,
+    estimationLoading: false,
 }
 
 const searchSlice = createSlice({
@@ -108,6 +124,16 @@ const searchSlice = createSlice({
         expandGene: (state, action: PayloadAction<string>) => {
             state.expandedGeneId = state.expandedGeneId === action.payload ? null : action.payload
         },
+        setEstimation: (state, action: PayloadAction<QueryEstimation | null>) => {
+            state.estimation = action.payload
+        },
+        setEstimationLoading: (state, action: PayloadAction<boolean>) => {
+            state.estimationLoading = action.payload
+        },
+        clearEstimation: (state) => {
+            state.estimation = null
+            state.estimationLoading = false
+        },
     },
 })
 
@@ -121,6 +147,9 @@ export const {
     setResults,
     setError,
     expandGene,
+    setEstimation,
+    setEstimationLoading,
+    clearEstimation,
 } = searchSlice.actions
 
 export default searchSlice.reducer

@@ -145,3 +145,24 @@ export const getAvailableModels = async (): Promise<string[]> => {
         throw error
     }
 }
+
+export interface QueryEstimationResponse {
+    confidence_score: number
+    estimated_datasets: number
+    estimated_time_seconds: number
+    can_proceed: boolean
+    suggestions: string[]
+    improved_query?: string
+}
+
+export const estimateQuery = async (query: string): Promise<QueryEstimationResponse> => {
+    try {
+        const response = await apiClient.post<QueryEstimationResponse>('/chat/estimate', {
+            query: query,
+        })
+        return response.data
+    } catch (error) {
+        console.error('Error estimating query:', error)
+        throw error
+    }
+}

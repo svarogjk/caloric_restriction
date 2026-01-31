@@ -60,13 +60,16 @@ class GeneSurvivalResponse(BaseModel):
 
 class AnalysisResponse(BaseModel):
     """Response model for survival analysis results"""
-    
+
     query: str
     n_datasets_analyzed: int
     n_datasets_with_survival: int
     common_genes: List[GeneSurvivalResponse]
     processing_time: float
     timestamp: str
+    # Ranking feedback for user
+    ranking_quality_score: Optional[float] = None
+    ranking_recommendations: Optional[str] = None
 
 
 class HealthResponse(BaseModel):

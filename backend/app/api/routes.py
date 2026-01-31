@@ -155,7 +155,9 @@ async def search_datasets(request: AnalysisRequest):
             n_datasets_with_survival=result.n_datasets_with_survival,
             common_genes=genes_response,
             processing_time=result.processing_time,
-            timestamp=result.timestamp.isoformat()
+            timestamp=result.timestamp.isoformat(),
+            ranking_quality_score=result.ranking_quality_score,
+            ranking_recommendations=result.ranking_recommendations
         )
     
     except Exception as e:

@@ -65,13 +65,27 @@ class DatasetScore(BaseModel):
 
 class RankedDatasets(BaseModel):
     """Ranked list of datasets"""
-    
+
     datasets: List[DatasetScore]
     overall_quality: float = Field(
         ge=0, le=10,
         description="Overall quality of dataset collection for survival analysis"
     )
     recommendations: str = Field(description="Recommendations for improving results")
+
+
+class RankingResult:
+    """Complete ranking result including datasets and metadata"""
+
+    def __init__(
+        self,
+        datasets: List[GEODataset],
+        quality_score: float,
+        recommendations: str
+    ):
+        self.datasets = datasets
+        self.quality_score = quality_score
+        self.recommendations = recommendations
 
 
 class GEODatasetRankingService:
@@ -250,24 +264,23 @@ class GEODatasetRankingService:
         datasets: List[GEODataset],
         query: str,
         top_k: int = 20
-    ) -> List[GEODataset]:
+    ) -> RankingResult:
         """
         Rank datasets by survival analysis potential and platform size.
         Smaller platforms and single platforms are preferred.
-        
+
         Args:
             datasets: Datasets to rank
             query: Original search query
             top_k: Number of top datasets to return
             min_survival_score: Minimum survival score to include (default 5.0)
-        
+
         Returns:
-            Re-ranked list of datasets, sorted by LLM score + platform size penalty
-            Only includes datasets with survival_score >= min_survival_score
+            RankingResult with ranked datasets, quality score, and recommendations
         """
         if not datasets:
             logger.warning("No datasets to rank")
-            return []
+            return RankingResult(datasets=[], quality_score=0.0, recommendations="No datasets available to rank.")
         
         logger.info(f"Ranking {len(datasets)} datasets for survival analysis potential, query: {query}")
         
@@ -285,7 +298,11 @@ class GEODatasetRankingService:
         
         if not expression_datasets:
             logger.warning("All datasets were filtered out as methylation/non-expression")
-            return []
+            return RankingResult(
+                datasets=[],
+                quality_score=0.0,
+                recommendations="All datasets were methylation or non-expression arrays. Try a more specific search."
+            )
         
         # STEP 2: Prioritize datasets with strong survival indicators
         datasets_with_survival_hints = []
@@ -350,14 +367,26 @@ class GEODatasetRankingService:
                 logger.warning(f"No datasets with survival score >= {min_survival_score}. "
                               f"Consider refining search to explicitly include survival/prognosis terms.")
                 # Return top-scored datasets anyway for visibility
-                return reordered[:top_k]
-            
+                return RankingResult(
+                    datasets=reordered[:top_k],
+                    quality_score=ranked.overall_quality,
+                    recommendations=ranked.recommendations
+                )
+
             logger.info(f"  {len(filtered)} datasets passed survival score threshold ({min_survival_score})")
-            return filtered[:top_k]
-        
+            return RankingResult(
+                datasets=filtered[:top_k],
+                quality_score=ranked.overall_quality,
+                recommendations=ranked.recommendations
+            )
+
         except Exception as e:
             logger.error(f"Dataset ranking failed: {e}")
-            return prioritized_datasets[:top_k]
+            return RankingResult(
+                datasets=prioritized_datasets[:top_k],
+                quality_score=0.0,
+                recommendations=f"Ranking failed: {str(e)}"
+            )
     
     async def _prepare_dataset_summaries(self, datasets: List[GEODataset]) -> List[Dict[str, Any]]:
         """Prepare dataset summaries for LLM, including platform size information"""

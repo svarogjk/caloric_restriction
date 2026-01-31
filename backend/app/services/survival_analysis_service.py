@@ -304,8 +304,17 @@ Determine if this dataset contains survival data and identify the relevant colum
                 logger.warning(f"No survival data detected in {loaded_data.accession}")
                 return None
 
+            # Handle comma-separated column names from LLM (take the first one)
             survival_time_col = detection.survival_time_column
+            if survival_time_col and ',' in survival_time_col:
+                survival_time_col = survival_time_col.split(',')[0].strip()
+                logger.debug(f"Multiple time columns detected, using first: {survival_time_col}")
+
             event_col = detection.event_column
+            if event_col and ',' in event_col:
+                event_col = event_col.split(',')[0].strip()
+                logger.debug(f"Multiple event columns detected, using first: {event_col}")
+
             time_unit = detection.survival_time_unit
             event_type = detection.event_type
 

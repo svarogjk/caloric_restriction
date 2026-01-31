@@ -6,7 +6,7 @@ Identifies genes associated with survival/lifespan across multiple datasets
 
 import logging
 import asyncio
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 from collections import Counter
@@ -56,7 +56,7 @@ class GeneSurvivalOccurrence:
 @dataclass
 class CrossDatasetSurvivalAnalysis:
     """Results from survival analysis across multiple datasets"""
-    
+
     query: str
     n_datasets_analyzed: int
     n_datasets_with_survival: int
@@ -64,6 +64,9 @@ class CrossDatasetSurvivalAnalysis:
     all_survival_results: List[SurvivalAnalysisResult]
     processing_time: float
     timestamp: datetime
+    # Ranking service feedback for user
+    ranking_quality_score: Optional[float] = None
+    ranking_recommendations: Optional[str] = None
 
 
 class GEOSurvivalWorkflowOrchestrator:
@@ -146,26 +149,28 @@ class GEOSurvivalWorkflowOrchestrator:
         
         # Step 2: Rank datasets
         datasets_for_ranking = min(len(search_result.datasets), max_datasets * ranking_multiplier)
-        ranked_datasets = await self._rank_datasets(search_result.datasets, query, datasets_for_ranking)
-        
+        ranked_datasets, ranking_quality, ranking_recommendations = await self._rank_datasets(
+            search_result.datasets, query, datasets_for_ranking
+        )
+
         top_datasets = ranked_datasets[:max_datasets]
         logger.info(f"Ranked {datasets_for_ranking} datasets, analyzing top {len(top_datasets)}")
-        
+
         # Step 3: Pre-load platform mappings
         await self._preload_platforms(top_datasets)
-        
+
         # Step 4: Load and analyze each dataset for survival
         survival_results = await self._analyze_datasets_survival(top_datasets)
-        
+
         logger.info(f"Completed survival analysis on {len(survival_results)} datasets")
-        
+
         # Step 5: Identify common survival-associated genes
         common_genes = self._find_common_survival_genes(survival_results, min_occurrence) if survival_results else []
-        
+
         logger.info(f"Found {len(common_genes)} genes associated with survival across datasets")
-        
+
         processing_time = (datetime.now() - start_time).total_seconds()
-        
+
         return CrossDatasetSurvivalAnalysis(
             query=query,
             n_datasets_analyzed=len(ranked_datasets),
@@ -173,7 +178,9 @@ class GEOSurvivalWorkflowOrchestrator:
             common_survival_genes=common_genes,
             all_survival_results=survival_results,
             processing_time=processing_time,
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
+            ranking_quality_score=ranking_quality,
+            ranking_recommendations=ranking_recommendations
         )
     
     async def _search_geo(
@@ -338,20 +345,25 @@ class GEOSurvivalWorkflowOrchestrator:
         datasets: List[GEODataset],
         query: str,
         top_k: int
-    ) -> List[GEODataset]:
-        """Rank datasets by survival analysis potential"""
-        
+    ) -> Tuple[List[GEODataset], Optional[float], Optional[str]]:
+        """
+        Rank datasets by survival analysis potential
+
+        Returns:
+            Tuple of (ranked_datasets, quality_score, recommendations)
+        """
+
         try:
-            ranked = await self.ranking_service.rank_datasets(
+            result = await self.ranking_service.rank_datasets(
                 datasets=datasets,
                 query=query,
                 top_k=top_k
             )
-            return ranked
-        
+            return result.datasets, result.quality_score, result.recommendations
+
         except Exception as e:
             logger.error(f"Dataset ranking failed: {e}")
-            return datasets[:top_k]
+            return datasets[:top_k], None, None
     
     async def _preload_platforms(self, datasets: List[GEODataset]) -> None:
         """Pre-load all platform mappings"""
@@ -459,22 +471,50 @@ class GEOSurvivalWorkflowOrchestrator:
         
         return survival_results
     
+    def _normalize_gene_identifier(self, gene_id: str, gene_symbol: Optional[str]) -> Tuple[str, Optional[str]]:
+        """
+        Normalize gene identifier for cross-dataset comparison.
+
+        Returns:
+            Tuple of (normalized_identifier, display_symbol)
+        """
+        # If we have a valid gene symbol, use it (normalized to uppercase)
+        if gene_symbol and not gene_symbol.isdigit():
+            # Check if it's a real gene symbol (not a probe ID pattern)
+            if not any(x in gene_symbol for x in ['_at', '_s_at', '_x_at', 'AFFX-']):
+                normalized = gene_symbol.upper().strip()
+                return normalized, gene_symbol
+
+        # Check if gene_id itself looks like a gene symbol (not numeric, not probe-like)
+        if gene_id and not gene_id.isdigit():
+            # Skip probe ID patterns
+            if not any(x in gene_id for x in ['_at', '_s_at', '_x_at', 'AFFX-', '_PM', '_MM']):
+                # Looks like a gene symbol
+                normalized = gene_id.upper().strip()
+                return normalized, gene_id
+
+        # Fall back to the original gene_id (might be Entrez ID or probe ID)
+        return gene_id, gene_symbol
+
     def _find_common_survival_genes(
         self,
         survival_results: List[SurvivalAnalysisResult],
         min_occurrence: int
     ) -> List[GeneSurvivalOccurrence]:
         """Identify genes commonly associated with survival across datasets"""
-        
+
         gene_data = {}
-        
+
         for result in survival_results:
             for gene in result.significant_genes:
-                gene_identifier = gene.gene_symbol if gene.gene_symbol else gene.gene_id
-                
+                # Normalize gene identifier for consistent cross-dataset matching
+                gene_identifier, display_symbol = self._normalize_gene_identifier(
+                    gene.gene_id, gene.gene_symbol
+                )
+
                 if gene_identifier not in gene_data:
                     gene_data[gene_identifier] = {
-                        'symbol': gene.gene_symbol,
+                        'symbol': display_symbol or gene.gene_symbol,
                         'datasets': [],
                         'hazard_ratios': [],
                         'cox_p_values': [],
