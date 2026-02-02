@@ -919,7 +919,14 @@ class GeneMappingService:
                     if '!platform_table_begin' in line.lower():
                         in_table_section = True
                         continue
-                    
+
+                    # CRITICAL: Stop at platform_table_end or when entering SAMPLE section
+                    # This prevents parsing sample expression data as gene symbols
+                    if '!platform_table_end' in line.lower() or line.startswith('^SAMPLE'):
+                        if mapping:
+                            logger.debug(f"{platform_id}: Stopped at platform table end with {len(mapping)} mappings")
+                        break
+
                     # Skip column description lines (e.g., "#ID = Description text")
                     # These are single-column descriptions, not the actual header
                     if line.startswith('#') and '=' in line and '\t' not in line:
@@ -941,7 +948,8 @@ class GeneMappingService:
                             if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
                                 id_idx = idx
                             # Prioritize GENE_SYMBOL over GENE_ID (numeric Entrez IDs)
-                            elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
+                            # Include "GENE SYMBOL" (with space) for platforms like GPL16043
+                            elif header_clean in ['GENE_SYMBOL', 'GENE SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
                                 # Make sure it's not GENE_ID column (we want symbols, not numeric IDs)
                                 if 'GENE_ID' not in header_clean and 'GENEID' not in header_clean:
                                     symbol_idx = idx
@@ -1055,20 +1063,26 @@ class GeneMappingService:
                 if '!platform_table_begin' in line.lower():
                     in_table_section = True
                     continue
-                
+
+                # CRITICAL: Stop at platform_table_end or when entering SAMPLE section
+                # This prevents parsing sample expression data as gene symbols
+                if '!platform_table_end' in line.lower() or line.startswith('^SAMPLE'):
+                    if mapping:
+                        logger.debug(f"{platform_id}: Stopped at platform table end with {len(mapping)} mappings")
+                    break
+
                 # Skip column description lines (e.g., "#ID = Description text")
                 # These are single-column descriptions, not the actual header
                 if line.startswith('#') and '=' in line and '\t' not in line:
                     continue
-                
+
                 # Find table header line - can start with #ID OR be first line after !platform_table_begin
                 if not table_started and (line.startswith('#ID') or (in_table_section and (line.startswith('ID') or line.upper().startswith('ID')))):
                     table_started = True
                     headers = line.split('\t')
-                    
+
                     logger.debug(f"Found header at line {lines_processed}: {[h.lstrip('#') for h in headers[:10]]}")
-                    
-                    
+
                     # First pass: look for exact matches
                     # Clean headers by removing #, =, and extra spaces (e.g., "#ID = " -> "ID")
                     for idx, header in enumerate(headers):
@@ -1076,7 +1090,8 @@ class GeneMappingService:
                         
                         if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
                             id_idx = idx
-                        elif header_clean in ['GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
+                        # Include "GENE SYMBOL" (with space) for platforms like GPL16043
+                        elif header_clean in ['GENE_SYMBOL', 'GENE SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
                             symbol_idx = idx
                     
                     # Second pass: flexible matching for ID column

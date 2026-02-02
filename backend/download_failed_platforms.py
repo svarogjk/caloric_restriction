@@ -208,11 +208,17 @@ class PlatformDownloader:
                                 col_lower = col.lower().strip()
                                 if col_lower in ['id', 'probe_id', 'probeset_id']:
                                     id_col = idx
-                                elif any(name in col_lower for name in ['gene_symbol', 'symbol', 'orf', 'gene', 'entrezgeneid', 'genesymbol']):
+                                # Be specific about gene symbol columns - avoid 'gene' alone which can match expression columns
+                                # Do NOT include 'entrezgeneid' or 'gene_id' as these are numeric IDs
+                                elif col_lower in ['gene_symbol', 'genesymbol', 'gene symbol', 'symbol', 'orf', 'gene_name', 'gene_assignment']:
                                     symbol_col = idx
-                            
+
+                            # Log what columns we found for debugging
                             if id_col is not None and symbol_col is not None:
-                                logger.info(f"GPL{platform_id}: Found columns - ID: {id_col}, Symbol: {symbol_col}")
+                                logger.info(f"GPL{platform_id}: Found columns - ID: {id_col} ({cols[id_col]}), Symbol: {symbol_col} ({cols[symbol_col]})")
+                            else:
+                                # Log available columns for debugging if we couldn't find both
+                                logger.warning(f"GPL{platform_id}: Columns available: {cols[:15]}")
                             continue
                         
                         # Parse data rows
@@ -293,18 +299,48 @@ class PlatformDownloader:
         logger.error(f"GPL{platform_id}: All download strategies failed")
         return None
     
+    def _validate_gene_symbols(self, mappings: Dict[str, str], platform_id: str) -> bool:
+        """Validate that gene symbols don't look like numeric expression values"""
+        if not mappings:
+            return False
+
+        # Sample some values to check
+        sample_values = list(mappings.values())[:100]
+        numeric_count = 0
+
+        for value in sample_values:
+            try:
+                float(value)
+                numeric_count += 1
+            except (ValueError, TypeError):
+                pass
+
+        # If more than 50% of sample looks numeric, it's likely expression data, not gene symbols
+        numeric_ratio = numeric_count / len(sample_values)
+        if numeric_ratio > 0.5:
+            logger.error(f"GPL{platform_id}: Validation FAILED - {numeric_ratio*100:.0f}% of gene symbols appear to be numeric (expression data?)")
+            logger.error(f"GPL{platform_id}: Sample values: {sample_values[:5]}")
+            return False
+
+        return True
+
     def save_mappings(self, platform_id: str, mappings: Dict[str, str]):
         """Save mappings to parquet file"""
         try:
+            # Validate gene symbols before saving
+            if not self._validate_gene_symbols(mappings, platform_id):
+                logger.error(f"GPL{platform_id}: Refusing to save - gene symbols look like expression values")
+                return
+
             df = pd.DataFrame({
                 'probe_id': list(mappings.keys()),
                 'gene_symbol': list(mappings.values())
             })
-            
+
             output_file = self.platform_dir / f"{platform_id}_gene_mapping.parquet"
             df.to_parquet(output_file, index=False)
             logger.info(f"✓ GPL{platform_id}: Saved {len(mappings)} mappings to {output_file.name}")
-            
+
         except Exception as e:
             logger.error(f"GPL{platform_id}: Failed to save mappings - {e}")
     
