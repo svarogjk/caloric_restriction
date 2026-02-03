@@ -342,13 +342,13 @@ class GeneMappingService:
         Returns:
             Dictionary mapping probe_id -> gene_symbol, or None if failed
         """
-        # Check small in-memory cache first
-        if platform_id in self._mapping_cache:
-            logger.debug(f"Using in-memory cache for {platform_id}")
-            return self._mapping_cache[platform_id]
-        
-        # Normalize platform ID
+        # Normalize platform ID first for consistent cache keys
         normalized_id = platform_id if platform_id.startswith('GPL') else f'GPL{platform_id}'
+
+        # Check small in-memory cache first
+        if normalized_id in self._mapping_cache:
+            logger.debug(f"Using in-memory cache for {normalized_id}")
+            return self._mapping_cache[normalized_id]
         
         # Check if this platform is known to have no gene mappings (skip download entirely)
         if normalized_id in self._empty_mapping_platforms or platform_id in self._empty_mapping_platforms:
@@ -420,7 +420,7 @@ class GeneMappingService:
         if mapping:
             # Only keep small mappings in memory
             if len(mapping) < 100000:
-                self._mapping_cache[platform_id] = mapping
+                self._mapping_cache[normalized_id] = mapping
                 # Enforce max cache size
                 if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
                     oldest = next(iter(self._mapping_cache))
@@ -430,7 +430,7 @@ class GeneMappingService:
             # Save to disk cache
             if use_cache:
                 try:
-                    await self._save_mapping_to_parquet(platform_id, mapping)
+                    await self._save_mapping_to_parquet(normalized_id, mapping)
                 except Exception as e:
                     logger.warning(f"Failed to save cache for {platform_id}: {e}")
         
