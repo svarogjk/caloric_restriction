@@ -6,9 +6,12 @@ interface MessageListProps {
     messages: Message[]
     isLoading: boolean
     className?: string
+    onRunAnalysis?: (query: string) => void
+    onModifyQuery?: (query: string) => void
+    onExampleClick?: (example: string) => void
 }
 
-const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, className = '' }) => {
+const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, className = '', onRunAnalysis, onModifyQuery, onExampleClick }) => {
     const messagesEndRef = useRef<HTMLDivElement>(null)
 
     // Auto-scroll to bottom when new messages arrive
@@ -40,12 +43,13 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, classNam
                                 "How do I interpret a hazard ratio?",
                                 "Find prognostic biomarkers in lung cancer",
                             ].map((example, i) => (
-                                <span
+                                <button
                                     key={i}
-                                    className="px-3 py-1 bg-gray-100 text-gray-600 text-xs rounded-full"
+                                    onClick={() => onExampleClick?.(example)}
+                                    className="px-3 py-1.5 bg-gray-100 text-gray-600 text-xs rounded-full hover:bg-indigo-100 hover:text-indigo-700 transition-colors cursor-pointer"
                                 >
                                     {example}
-                                </span>
+                                </button>
                             ))}
                         </div>
                     </div>
@@ -54,11 +58,27 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, classNam
         )
     }
 
+    // Track the last user message for context
+    const getLastUserMessage = (index: number): string | undefined => {
+        for (let i = index - 1; i >= 0; i--) {
+            if (messages[i].role === 'user') {
+                return messages[i].content
+            }
+        }
+        return undefined
+    }
+
     return (
         <div className={`${className} px-4 py-4`}>
             <div className="max-w-3xl mx-auto space-y-4">
-                {messages.map((message) => (
-                    <MessageBubble key={message.id} message={message} />
+                {messages.map((message, index) => (
+                    <MessageBubble
+                        key={message.id}
+                        message={message}
+                        onRunAnalysis={onRunAnalysis}
+                        onModifyQuery={onModifyQuery}
+                        previousUserMessage={message.role === 'assistant' ? getLastUserMessage(index) : undefined}
+                    />
                 ))}
 
                 {isLoading && (

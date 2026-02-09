@@ -3,11 +3,44 @@ import { Message } from '../../store/chatSlice'
 
 interface MessageBubbleProps {
     message: Message
+    onRunAnalysis?: (query: string) => void
+    onModifyQuery?: (query: string) => void
+    previousUserMessage?: string
 }
 
-const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
+const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRunAnalysis, onModifyQuery, previousUserMessage }) => {
     const isUser = message.role === 'user'
     const isSystem = message.role === 'system'
+
+    // Extract suggested query from AI response (e.g., quoted text like "breast cancer survival")
+    const extractSuggestedQuery = (content: string): string | undefined => {
+        // Look for quoted text that looks like a query suggestion
+        const quotedMatches = content.match(/"([^"]{10,100})"/g)
+        if (quotedMatches && quotedMatches.length > 0) {
+            // Return the first quoted string that looks like a query
+            for (const match of quotedMatches) {
+                const unquoted = match.slice(1, -1)
+                // Check if it looks like a search query (contains cancer/survival/gene terms)
+                if (/survival|cancer|prognosis|gene|expression/i.test(unquoted)) {
+                    return unquoted
+                }
+            }
+        }
+        return undefined
+    }
+
+    // Build the query with fallbacks
+    const getActionQuery = (): string | undefined => {
+        // Priority: 1. improved query from estimation, 2. extracted from AI text, 3. geo preview search query, 4. previous user message
+        return (
+            message.estimation?.improvedQuery ||
+            extractSuggestedQuery(message.content) ||
+            message.estimation?.geoPreview?.searchQuery ||
+            previousUserMessage
+        )
+    }
+
+    const actionQuery = !isUser && !isSystem ? getActionQuery() : undefined
 
     if (isSystem) {
         return (
@@ -56,10 +89,16 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
                 </div>
 
                 {/* Suggested Actions */}
-                {message.suggestedActions && message.suggestedActions.length > 0 && (
+                {message.suggestedActions && message.suggestedActions.length > 0 && actionQuery && (
                     <div className="mt-2 flex flex-wrap gap-2">
                         {message.suggestedActions.map((action, i) => (
-                            <ActionButton key={i} action={action} />
+                            <ActionButton
+                                key={i}
+                                action={action}
+                                onRunAnalysis={onRunAnalysis}
+                                onModifyQuery={onModifyQuery}
+                                query={actionQuery}
+                            />
                         ))}
                     </div>
                 )}
@@ -68,15 +107,41 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message }) => {
     )
 }
 
-const ActionButton: React.FC<{ action: string }> = ({ action }) => {
+interface ActionButtonProps {
+    action: string
+    onRunAnalysis?: (query: string) => void
+    onModifyQuery?: (query: string) => void
+    query?: string
+}
+
+const ActionButton: React.FC<ActionButtonProps> = ({ action, onRunAnalysis, onModifyQuery, query }) => {
     const actionLabels: Record<string, string> = {
         'run_analysis': 'Run Analysis',
         'modify_query': 'Modify Query',
         'use_improved_query': 'Use Improved Query',
     }
 
+    const handleClick = () => {
+        if (action === 'run_analysis' && onRunAnalysis && query) {
+            onRunAnalysis(query)
+        } else if ((action === 'modify_query' || action === 'use_improved_query') && onModifyQuery && query) {
+            onModifyQuery(query)
+        }
+    }
+
+    const isDisabled = (action === 'run_analysis' && (!onRunAnalysis || !query)) ||
+        ((action === 'modify_query' || action === 'use_improved_query') && (!onModifyQuery || !query))
+
     return (
-        <button className="px-3 py-1 text-xs bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors">
+        <button
+            onClick={handleClick}
+            disabled={isDisabled}
+            className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                isDisabled
+                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                    : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+            }`}
+        >
             {actionLabels[action] || action}
         </button>
     )

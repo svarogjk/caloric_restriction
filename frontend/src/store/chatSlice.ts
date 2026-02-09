@@ -1,7 +1,57 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
 import { chatApi, ConversationListItem } from '../services/chatApi'
+import { searchDatasets } from '../services/api'
 
 // ==================== Types ====================
+
+export interface KMCurveData {
+    times: number[]
+    survival_probabilities: number[]
+    ci_lower: number[] | null
+    ci_upper: number[] | null
+    n_samples: number
+    n_events: number
+}
+
+export interface GeneDatasetResult {
+    dataset_id: string
+    dataset_title: string
+    hazard_ratio: number
+    hazard_ratio_ci_lower: number
+    hazard_ratio_ci_upper: number
+    cox_p_value: number
+    log_rank_p_value: number
+    risk_direction: 'high_risk' | 'low_risk'
+    n_samples: number
+    median_survival_high: number | null
+    median_survival_low: number | null
+    km_curve_high: KMCurveData | null
+    km_curve_low: KMCurveData | null
+}
+
+export interface GeneSurvival {
+    gene_id: string
+    gene_symbol: string | null
+    n_datasets: number
+    avg_hazard_ratio: number
+    avg_cox_p_value: number
+    avg_log_rank_p_value: number
+    predominant_risk: 'high_risk' | 'low_risk'
+    risk_direction_consistency: number
+    datasets: string[]
+    per_dataset_results: GeneDatasetResult[] | null
+}
+
+export interface AnalysisResult {
+    query: string
+    n_datasets_analyzed: number
+    n_datasets_with_survival: number
+    common_genes: GeneSurvival[]
+    processing_time: number
+    timestamp: string
+    ranking_quality_score?: number
+    ranking_recommendations?: string
+}
 
 export interface Message {
     id: string
@@ -64,6 +114,14 @@ export interface ChatState {
     currentEstimation: QueryEstimation | null
     selectedModel: 'mistral' | 'anthropic'
     sidebarOpen: boolean
+    // Search/Analysis settings
+    datasetCount: number
+    rankingMultiplier: number
+    organism: string | null
+    // Analysis state
+    analysisResults: AnalysisResult | null
+    analysisLoading: boolean
+    analysisError: string | null
 }
 
 const initialState: ChatState = {
@@ -77,6 +135,14 @@ const initialState: ChatState = {
     currentEstimation: null,
     selectedModel: 'mistral',
     sidebarOpen: true,
+    // Search/Analysis settings
+    datasetCount: 10,
+    rankingMultiplier: 3,
+    organism: null,
+    // Analysis state
+    analysisResults: null,
+    analysisLoading: false,
+    analysisError: null,
 }
 
 // ==================== Async Thunks ====================
@@ -167,6 +233,40 @@ export const deleteConversation = createAsyncThunk(
     }
 )
 
+export const runAnalysis = createAsyncThunk(
+    'chat/runAnalysis',
+    async (
+        { query }: { query: string },
+        { getState, dispatch, rejectWithValue }
+    ) => {
+        try {
+            const state = getState() as { chat: ChatState }
+            const { selectedModel, datasetCount, rankingMultiplier, organism } = state.chat
+
+            // Add a system message indicating analysis is starting
+            const systemMessage: Message = {
+                id: `analysis-start-${Date.now()}`,
+                role: 'system',
+                content: `Running survival analysis for: "${query}"`,
+                createdAt: new Date().toISOString(),
+            }
+            dispatch(addMessage(systemMessage))
+
+            const results = await searchDatasets(
+                query,
+                selectedModel,
+                datasetCount,
+                rankingMultiplier,
+                organism
+            )
+
+            return results
+        } catch (error) {
+            return rejectWithValue(error instanceof Error ? error.message : 'Failed to run analysis')
+        }
+    }
+)
+
 // ==================== Slice ====================
 
 const chatSlice = createSlice({
@@ -212,6 +312,19 @@ const chatSlice = createSlice({
         },
         clearMessages: (state) => {
             state.messages = []
+        },
+        setDatasetCount: (state, action: PayloadAction<number>) => {
+            state.datasetCount = action.payload
+        },
+        setRankingMultiplier: (state, action: PayloadAction<number>) => {
+            state.rankingMultiplier = action.payload
+        },
+        setOrganism: (state, action: PayloadAction<string | null>) => {
+            state.organism = action.payload
+        },
+        clearAnalysisResults: (state) => {
+            state.analysisResults = null
+            state.analysisError = null
         },
     },
     extraReducers: (builder) => {
@@ -342,6 +455,22 @@ const chatSlice = createSlice({
                     state.activeConversation = null
                 }
             })
+
+        // Run analysis
+        builder
+            .addCase(runAnalysis.pending, (state) => {
+                state.analysisLoading = true
+                state.analysisError = null
+            })
+            .addCase(runAnalysis.fulfilled, (state, action) => {
+                state.analysisLoading = false
+                state.analysisResults = action.payload
+                state.currentEstimation = null
+            })
+            .addCase(runAnalysis.rejected, (state, action) => {
+                state.analysisLoading = false
+                state.analysisError = action.payload as string
+            })
     },
 })
 
@@ -356,6 +485,10 @@ export const {
     clearError,
     toggleSidebar,
     clearMessages,
+    setDatasetCount,
+    setRankingMultiplier,
+    setOrganism,
+    clearAnalysisResults,
 } = chatSlice.actions
 
 export default chatSlice.reducer

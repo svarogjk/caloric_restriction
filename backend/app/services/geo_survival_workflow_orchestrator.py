@@ -153,8 +153,10 @@ class GEOSurvivalWorkflowOrchestrator:
             search_result.datasets, query, datasets_for_ranking
         )
 
-        top_datasets = ranked_datasets[:max_datasets]
-        logger.info(f"Ranked {datasets_for_ranking} datasets, analyzing top {len(top_datasets)}")
+        # Analyze an initial batch, then retry with more if too few succeed
+        initial_batch_size = min(len(ranked_datasets), max(max_datasets, 10))
+        top_datasets = ranked_datasets[:initial_batch_size]
+        logger.info(f"Ranked {datasets_for_ranking} datasets, analyzing initial batch of {len(top_datasets)}")
 
         # Step 3: Pre-load platform mappings
         await self._preload_platforms(top_datasets)
@@ -162,7 +164,21 @@ class GEOSurvivalWorkflowOrchestrator:
         # Step 4: Load and analyze each dataset for survival
         survival_results = await self._analyze_datasets_survival(top_datasets)
 
-        logger.info(f"Completed survival analysis on {len(survival_results)} datasets")
+        # Retry with next batch if too few datasets yielded results
+        min_desired_results = min(3, max_datasets)
+        already_tried = initial_batch_size
+        while len(survival_results) < min_desired_results and already_tried < len(ranked_datasets):
+            next_batch_end = min(already_tried + max_datasets, len(ranked_datasets))
+            next_batch = ranked_datasets[already_tried:next_batch_end]
+            if not next_batch:
+                break
+            logger.info(f"Only {len(survival_results)} results so far, retrying with next batch of {len(next_batch)} datasets (indices {already_tried}-{next_batch_end})")
+            await self._preload_platforms(next_batch)
+            extra_results = await self._analyze_datasets_survival(next_batch)
+            survival_results.extend(extra_results)
+            already_tried = next_batch_end
+
+        logger.info(f"Completed survival analysis on {len(survival_results)} datasets (analyzed {already_tried} total)")
 
         # Step 5: Identify common survival-associated genes
         common_genes = self._find_common_survival_genes(survival_results, min_occurrence) if survival_results else []
@@ -191,52 +207,78 @@ class GEOSurvivalWorkflowOrchestrator:
         search_multiplier: int = 3
     ) -> GEOSearchResult:
         """Search GEO for datasets with survival/clinical data"""
-        
-        # Add survival-related keywords to improve search
-        survival_keywords = self._extract_keywords(query)
-        
+
+        # Extract disease and survival keywords separately for AND'd query
+        disease_keywords, survival_keywords = self._extract_keywords(query)
+
         try:
-            logger.info(f"Searching GEO with keywords: {survival_keywords}")
-            
+            logger.info(f"Searching GEO with disease keywords: {disease_keywords}, survival keywords: {survival_keywords}")
+
             # Search for both microarray and RNA-seq datasets
             # First try expression profiling by array (microarray) - more reliable for series matrix
             # Request more results than needed since many won't have actual survival data
             result_array = await self.geo_client.search(
-                keywords=survival_keywords,
+                keywords=disease_keywords,
+                survival_keywords=survival_keywords,
                 max_results=max_results * search_multiplier,
                 organism=organism,
                 dataset_type="Expression profiling by array"
             )
-            
+
             # Also search for RNA-seq datasets (fewer as they often need supplementary files)
             result_rnaseq = await self.geo_client.search(
-                keywords=survival_keywords,
+                keywords=disease_keywords,
+                survival_keywords=survival_keywords,
                 max_results=max_results,
                 organism=organism,
                 dataset_type="Expression profiling by high throughput sequencing"
             )
-            
+
             # Combine results, removing duplicates
             seen_accessions = set()
             combined_datasets = []
-            
+
             for dataset in result_array.datasets + result_rnaseq.datasets:
                 if dataset.accession not in seen_accessions:
                     seen_accessions.add(dataset.accession)
                     combined_datasets.append(dataset)
-            
+
             total_count = result_array.total_count + result_rnaseq.total_count
-            
+
             result = GEOSearchResult(
                 datasets=combined_datasets,
                 total_count=total_count,
                 search_query=result_array.search_query,
                 timestamp=datetime.now()
             )
-            
+
             logger.info(f"GEO search completed. Found {result.total_count} total, {len(result.datasets)} retrieved (array: {len(result_array.datasets)}, RNA-seq: {len(result_rnaseq.datasets)})")
+
+            # If targeted search returned too few results, retry with broader query
+            if len(combined_datasets) < max_results * 2 and survival_keywords:
+                logger.info(f"Too few results ({len(combined_datasets)}), retrying with broader query (disease + survival OR'd together)")
+                broader_result = await self.geo_client.search(
+                    keywords=disease_keywords + survival_keywords[:2],
+                    max_results=max_results * search_multiplier,
+                    organism=organism,
+                    dataset_type="Expression profiling by array"
+                )
+                added = 0
+                for dataset in broader_result.datasets:
+                    if dataset.accession not in seen_accessions:
+                        seen_accessions.add(dataset.accession)
+                        combined_datasets.append(dataset)
+                        added += 1
+                result = GEOSearchResult(
+                    datasets=combined_datasets,
+                    total_count=total_count + broader_result.total_count,
+                    search_query=result_array.search_query,
+                    timestamp=datetime.now()
+                )
+                logger.info(f"Broader search added {added} datasets, total now: {len(combined_datasets)}")
+
             return result
-        
+
         except Exception as e:
             logger.error(f"GEO search failed: {type(e).__name__}: {e}")
             return GEOSearchResult(
@@ -246,18 +288,24 @@ class GEOSurvivalWorkflowOrchestrator:
                 timestamp=datetime.now()
             )
     
-    def _extract_keywords(self, query: str) -> List[str]:
-        """Extract search keywords from query and add survival-related terms based on query type"""
-        common_words = {'the', 'a', 'an', 'in', 'on', 'at', 'for', 'to', 'of', 'and', 'or', 
+    def _extract_keywords(self, query: str) -> Tuple[List[str], List[str]]:
+        """Extract disease and survival keywords separately for AND'd NCBI query.
+
+        Returns:
+            Tuple of (disease_keywords, survival_keywords) to be AND'd in the query.
+            Disease keywords are OR'd among themselves, survival keywords are OR'd among themselves,
+            then the two groups are AND'd together for precise results.
+        """
+        common_words = {'the', 'a', 'an', 'in', 'on', 'at', 'for', 'to', 'of', 'and', 'or',
                        'what', 'which', 'how', 'does', 'do', 'is', 'are', 'genes', 'gene',
                        'predict', 'affect', 'associated', 'with'}
         query_lower = query.lower()
         words = query_lower.split()
         keywords = [w for w in words if w not in common_words and len(w) > 2]
-        
+
         # Detect query type: cancer, aging/CR, or other
         is_mouse_study = any(w in query_lower for w in ['mouse', 'mice', 'lifespan', 'aging', 'longevity', 'caloric restriction'])
-        
+
         # Detect specific cancer types for better search targeting
         cancer_types = {
             'breast': ['breast cancer', 'breast carcinoma', 'breast tumor'],
@@ -273,7 +321,7 @@ class GEOSurvivalWorkflowOrchestrator:
             'lymphoma': ['lymphoma', 'DLBCL', 'hodgkin'],
             'melanoma': ['melanoma', 'skin cancer'],
         }
-        
+
         detected_cancer = None
         for cancer_key, cancer_terms in cancer_types.items():
             for term in cancer_terms:
@@ -282,63 +330,71 @@ class GEOSurvivalWorkflowOrchestrator:
                     break
             if detected_cancer:
                 break
-        
+
         is_cancer_study = detected_cancer is not None or 'cancer' in query_lower or 'carcinoma' in query_lower
-        
+
+        # Build disease keywords (what the study is about)
+        disease_kw = []
         if is_mouse_study:
-            # For mouse/aging studies, look for lifespan/longevity data
-            survival_keywords = [
+            disease_kw = keywords[:4]
+            survival_kw = [
                 "lifespan",
-                "longevity", 
+                "longevity",
                 "survival curve",
                 "median survival",
                 "age at death",
             ]
             logger.info(f"Query type: mouse/aging study")
         elif is_cancer_study:
-            # For cancer studies, prioritize datasets with ACTUAL survival data
-            # Key insight: Include terms that indicate the dataset CONTAINS survival metadata
-            # These terms are more likely to appear in datasets with actual clinical follow-up
-            survival_keywords = [
-                "overall survival",
-                "survival analysis",  # Datasets that did survival analysis likely have data
-                "clinical outcome",   # Clinical outcome data typically includes survival
-                "patient outcome",    # Patient outcomes = survival/events
-                "prognostic",         # Prognostic studies have survival data
-                "clinical data",      # General clinical data inclusion
-                "follow-up",          # Indicates longitudinal data collection
-            ]
-            # Add specific cancer terms to ensure we get the right cancer type
             if detected_cancer:
-                cancer_search_terms = cancer_types[detected_cancer][:2]  # Top 2 terms for this cancer
-                keywords = cancer_search_terms + keywords  # Put cancer type first
+                # Use specific cancer terms as disease keywords
+                disease_kw = cancer_types[detected_cancer][:2]
+            else:
+                disease_kw = [kw for kw in keywords if kw not in ('survival', 'human')][:3]
+                if not disease_kw:
+                    disease_kw = ['cancer']
+            survival_kw = [
+                "overall survival",
+                "survival analysis",
+                "clinical outcome",
+                "prognosis",
+                "prognostic",
+                "patient outcome",
+                "follow-up",
+                "Kaplan-Meier",
+            ]
             logger.info(f"Query type: cancer study (detected: {detected_cancer or 'general'})")
         else:
-            # General clinical studies
-            survival_keywords = [
+            disease_kw = keywords[:4]
+            survival_kw = [
                 "overall survival",
                 "survival time",
                 "clinical outcome",
+                "prognosis",
                 "patient cohort",
                 "follow-up",
                 "survival analysis",
             ]
             logger.info(f"Query type: general clinical study")
-        
-        # Combine user keywords with survival keywords
-        # User keywords first (especially cancer type), then survival keywords
-        combined = keywords[:4] + survival_keywords
-        
-        # Remove duplicates while preserving order
+
+        # Deduplicate disease keywords
         seen = set()
-        unique_keywords = []
-        for kw in combined:
+        unique_disease = []
+        for kw in disease_kw:
             if kw.lower() not in seen:
                 seen.add(kw.lower())
-                unique_keywords.append(kw)
-        
-        logger.info(f"Search keywords: {unique_keywords[:8]}")
-        return unique_keywords[:8]
+                unique_disease.append(kw)
+
+        # Deduplicate survival keywords
+        seen_surv = set()
+        unique_survival = []
+        for kw in survival_kw:
+            if kw.lower() not in seen_surv:
+                seen_surv.add(kw.lower())
+                unique_survival.append(kw)
+
+        logger.info(f"Disease keywords: {unique_disease}, Survival keywords: {unique_survival}")
+        return unique_disease, unique_survival
     
     async def _rank_datasets(
         self,

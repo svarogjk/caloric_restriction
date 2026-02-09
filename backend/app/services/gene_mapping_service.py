@@ -1382,20 +1382,35 @@ class GeneMappingService:
                 gpl_id = f"GPL{platform_id}"
             
             # Calculate folder prefix (same logic as _fetch_platform_mapping)
-            if len(numeric_id) >= 4:
-                folder_prefix = f"GPL{numeric_id[:-3]}nnn"
-            elif len(numeric_id) == 3:
-                folder_prefix = f"GPL{numeric_id[0]}nnn"
-            elif len(numeric_id) == 2:
-                folder_prefix = f"GPL{numeric_id[0]}nnn"
+            numeric_value = int(numeric_id)
+            if numeric_value < 1000:
+                folder_prefix = "GPLnnn"
             else:
-                folder_prefix = f"GPL{numeric_id}nnn"
+                folder_prefix = f"GPL{numeric_id[:-3]}nnn"
             
+            # If we have a pre-built mapping, report a small size (no download needed)
+            prebuilt_path = self._get_prebuilt_mapping_path(gpl_id)
+            if prebuilt_path:
+                size_mb = prebuilt_path.stat().st_size / (1024 * 1024)
+                logger.debug(f"Platform {gpl_id} has pre-built mapping: {size_mb:.1f}MB")
+                return size_mb
+
+            # Try annotation file size first (smaller)
+            annot_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/annot/{gpl_id}.annot.gz"
+            try:
+                annot_response = await self.client.head(annot_url, timeout=10.0)
+                if annot_response.status_code == 200:
+                    content_length = int(annot_response.headers.get('content-length', 0))
+                    size_mb = content_length / (1024 * 1024)
+                    logger.debug(f"Platform {gpl_id} annot size: {size_mb:.1f}MB")
+                    return size_mb
+            except (httpx.TimeoutException, httpx.ConnectError):
+                pass
+
+            # Fallback to family file size
             family_url = f"{self.GEO_FTP_BASE}/{folder_prefix}/{gpl_id}/soft/{gpl_id}_family.soft.gz"
-            
-            # Get file size via HEAD request
             head_response = await self.client.head(family_url, timeout=10.0)
-            
+
             if head_response.status_code == 200:
                 content_length = int(head_response.headers.get('content-length', 0))
                 size_mb = content_length / (1024 * 1024)

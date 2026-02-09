@@ -5,6 +5,7 @@ Performs survival analysis on GEO datasets to identify genes associated with lif
 
 import logging
 import hashlib
+import re
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 import warnings
@@ -264,7 +265,139 @@ Determine if this dataset contains survival data and identify the relevant colum
         except Exception as e:
             logger.error(f"Survival data detection failed: {e}")
             return None
-    
+
+    def detect_survival_data_regex(
+        self,
+        loaded_data: LoadedGEOData
+    ) -> Optional[SurvivalDataDetectionResponse]:
+        """
+        Regex-based fallback for survival data detection.
+        Scans column names and values for common survival patterns.
+        Used when LLM detection fails or returns no results.
+        """
+        if loaded_data.sample_metadata is None or loaded_data.sample_metadata.empty:
+            return None
+
+        metadata_df = loaded_data.sample_metadata
+
+        # Patterns for time columns (column name matching)
+        time_patterns = [
+            re.compile(r'(?:overall[_\s]?survival|os)[_\s]?(?:time|months?|days?|years?)', re.I),
+            re.compile(r'(?:rfs|dfs|pfs|efs|dss)[_\s]?(?:time|months?|days?|years?)', re.I),
+            re.compile(r'survival[_\s]?(?:time|months?|days?|years?)', re.I),
+            re.compile(r'(?:time[_\s]?to[_\s]?(?:death|event|recurrence|relapse|progression))', re.I),
+            re.compile(r'follow[_\s]?up[_\s]?(?:time|months?|days?|years?)', re.I),
+            re.compile(r'(?:months?|days?|years?)[_\s]?(?:survival|follow)', re.I),
+            re.compile(r'(?:age[_\s]?at[_\s]?death|lifespan|longevity)', re.I),
+            re.compile(r'(?:os_time|rfs_time|dfs_time|pfs_time)', re.I),
+            re.compile(r't\.(?:os|rfs|dfs|pfs)', re.I),
+        ]
+
+        # Patterns for event columns (column name matching)
+        event_patterns = [
+            re.compile(r'(?:overall[_\s]?survival|os)[_\s]?(?:event|status|censor)', re.I),
+            re.compile(r'(?:rfs|dfs|pfs|efs|dss)[_\s]?(?:event|status|censor)', re.I),
+            re.compile(r'vital[_\s]?status', re.I),
+            re.compile(r'(?:death|deceased|dead|alive|living)', re.I),
+            re.compile(r'(?:event|censor(?:ed)?|status)', re.I),
+            re.compile(r'(?:os_event|rfs_event|dfs_event)', re.I),
+            re.compile(r'e\.(?:os|rfs|dfs|pfs)', re.I),
+            re.compile(r'(?:recurrence|relapse)[_\s]?(?:status|event)?', re.I),
+        ]
+
+        # Patterns for survival data embedded in values (e.g., "os (months): 24")
+        value_time_patterns = [
+            re.compile(r'(?:os|overall\s*survival|survival)\s*\(?(?:months?|days?|years?)\)?\s*:\s*[\d.]+', re.I),
+            re.compile(r'(?:follow[\s_]?up|rfs|dfs|pfs)\s*\(?(?:months?|days?|years?)\)?\s*:\s*[\d.]+', re.I),
+            re.compile(r'(?:time[\s_]?to[\s_]?(?:death|event))\s*:\s*[\d.]+', re.I),
+            re.compile(r'(?:age[\s_]?at[\s_]?death|lifespan)\s*:\s*[\d.]+', re.I),
+        ]
+        value_event_patterns = [
+            re.compile(r'(?:vital[\s_]?status|os[\s_]?status|status)\s*:\s*(?:dead|alive|deceased|living|0|1)', re.I),
+            re.compile(r'(?:os[\s_]?event|event|death|deceased)\s*:\s*(?:0|1|yes|no|true|false)', re.I),
+            re.compile(r'(?:dead|alive|deceased|living)\s*:\s*(?:0|1|yes|no)', re.I),
+        ]
+
+        time_col = None
+        event_col = None
+        time_unit = "days"
+
+        # Phase 1: Match column names directly
+        for col in metadata_df.columns:
+            if time_col is None:
+                for pattern in time_patterns:
+                    if pattern.search(col):
+                        time_col = col
+                        # Infer time unit from column name
+                        col_lower = col.lower()
+                        if 'month' in col_lower:
+                            time_unit = "months"
+                        elif 'year' in col_lower:
+                            time_unit = "years"
+                        break
+            if event_col is None:
+                for pattern in event_patterns:
+                    if pattern.search(col):
+                        # Avoid matching generic "status" when there's no time col
+                        if pattern.pattern == r'(?:event|censor(?:ed)?|status)' and time_col is None:
+                            continue
+                        event_col = col
+                        break
+
+        # Phase 2: Scan values in characteristics columns for embedded survival data
+        if time_col is None or event_col is None:
+            for col in metadata_df.columns:
+                sample_values = metadata_df[col].dropna().head(10).astype(str).tolist()
+                joined_values = " | ".join(sample_values)
+
+                if time_col is None:
+                    for pattern in value_time_patterns:
+                        if pattern.search(joined_values):
+                            time_col = col
+                            if 'month' in joined_values.lower():
+                                time_unit = "months"
+                            elif 'year' in joined_values.lower():
+                                time_unit = "years"
+                            logger.info(f"Regex found survival time in values of column '{col}': {sample_values[:3]}")
+                            break
+
+                if event_col is None:
+                    for pattern in value_event_patterns:
+                        if pattern.search(joined_values):
+                            event_col = col
+                            logger.info(f"Regex found event status in values of column '{col}': {sample_values[:3]}")
+                            break
+
+        if time_col and event_col:
+            # Validate: check that the time column has numeric-looking values
+            try:
+                time_vals = pd.to_numeric(metadata_df[time_col], errors='coerce')
+                valid_count = time_vals.notna().sum()
+                if valid_count < 5:
+                    logger.debug(f"Regex detection rejected: time column '{time_col}' has only {valid_count} numeric values")
+                    return None
+            except (ValueError, TypeError):
+                return None
+
+            event_type = "death"
+            for event_kw in ['recurrence', 'relapse', 'progression']:
+                if event_kw in (event_col or '').lower():
+                    event_type = event_kw
+                    break
+
+            logger.info(f"Regex fallback detected survival data: time='{time_col}', event='{event_col}', unit={time_unit}")
+            return SurvivalDataDetectionResponse(
+                has_survival_data=True,
+                survival_time_column=time_col,
+                event_column=event_col,
+                survival_time_unit=time_unit,
+                event_type=event_type,
+                reasoning=f"Regex fallback detected time column '{time_col}' and event column '{event_col}'"
+            )
+
+        logger.debug(f"Regex fallback found no survival data in {loaded_data.accession}")
+        return None
+
     async def analyze_survival(
         self,
         loaded_data: LoadedGEOData,
@@ -301,8 +434,14 @@ Determine if this dataset contains survival data and identify the relevant colum
 
             if detection is None or not detection.has_survival_data or \
                detection.survival_time_column is None or detection.event_column is None:
-                logger.warning(f"No survival data detected in {loaded_data.accession}")
-                return None
+                # Try regex-based fallback before giving up
+                logger.info(f"LLM detection failed for {loaded_data.accession}, trying regex fallback")
+                detection = self.detect_survival_data_regex(loaded_data)
+
+                if detection is None or not detection.has_survival_data or \
+                   detection.survival_time_column is None or detection.event_column is None:
+                    logger.warning(f"No survival data detected in {loaded_data.accession} (LLM + regex both failed)")
+                    return None
 
             # Handle comma-separated column names from LLM (take the first one)
             survival_time_col = detection.survival_time_column
@@ -415,7 +554,7 @@ Determine if this dataset contains survival data and identify the relevant colum
             raise ValueError(f"Event column '{event_col}' not found in metadata")
         
         survival_df = pd.DataFrame({
-            'time': pd.to_numeric(metadata_df[time_col], errors='coerce'),
+            'time': self._parse_numeric_column(metadata_df[time_col]),
             'event': self._parse_event_column(metadata_df[event_col])
         })
         
@@ -427,36 +566,86 @@ Determine if this dataset contains survival data and identify the relevant colum
         
         return survival_df
     
+    def _parse_numeric_column(self, series: pd.Series) -> pd.Series:
+        """
+        Parse a column that may contain numeric values in various formats.
+        Handles: plain numbers, "key: value" pairs (GEO characteristics format),
+        and strings with embedded numbers.
+        """
+        # First try direct numeric conversion
+        result = pd.to_numeric(series, errors='coerce')
+        valid_count = result.notna().sum()
+
+        # If most values converted, we're done
+        if valid_count >= len(series) * 0.3:
+            return result
+
+        # Otherwise try extracting numbers from "key: value" style strings
+        def extract_number(val):
+            if pd.isna(val):
+                return np.nan
+            val_str = str(val).strip()
+            # Try direct conversion first
+            try:
+                return float(val_str)
+            except (ValueError, TypeError):
+                pass
+            # Extract number after colon (e.g., "os (months): 24.5")
+            match = re.search(r':\s*([\d.]+)\s*$', val_str)
+            if match:
+                try:
+                    return float(match.group(1))
+                except (ValueError, TypeError):
+                    pass
+            # Extract trailing number (e.g., "survival_time 24")
+            match = re.search(r'([\d.]+)\s*$', val_str)
+            if match:
+                try:
+                    return float(match.group(1))
+                except (ValueError, TypeError):
+                    pass
+            return np.nan
+
+        return series.apply(extract_number)
+
     def _parse_event_column(self, event_series: pd.Series) -> pd.Series:
         """
         Parse event column to binary (0/1) format
-        
+
         Handles various formats:
         - Binary: 0/1, True/False
         - Text: "dead"/"alive", "deceased"/"living", "event"/"censored"
+        - GEO characteristics: "vital status: dead", "os event: 1"
         - Numeric: Any non-zero value as event
         """
+        event_words = {'1', 'true', 'yes', 'dead', 'deceased', 'death', 'event', 'recurrence', 'relapsed'}
+        censored_words = {'0', 'false', 'no', 'alive', 'living', 'censored', 'no_event', 'no event'}
+
         result = pd.Series(index=event_series.index, dtype=float)
-        
+
         for idx, val in event_series.items():
             if pd.isna(val):
                 result[idx] = np.nan
                 continue
-            
+
             val_str = str(val).lower().strip()
-            
+
+            # Extract value after colon for "key: value" format
+            if ':' in val_str:
+                val_str = val_str.split(':', 1)[1].strip()
+
             # Check for event indicators
-            if val_str in ['1', 'true', 'yes', 'dead', 'deceased', 'death', 'event', 'recurrence']:
+            if val_str in event_words:
                 result[idx] = 1.0
-            elif val_str in ['0', 'false', 'no', 'alive', 'living', 'censored', 'no_event']:
+            elif val_str in censored_words:
                 result[idx] = 0.0
             else:
                 # Try numeric conversion
                 try:
-                    result[idx] = 1.0 if float(val) != 0 else 0.0
+                    result[idx] = 1.0 if float(val_str) != 0 else 0.0
                 except (ValueError, TypeError):
                     result[idx] = np.nan
-        
+
         return result
     
     def _analyze_gene_survival(

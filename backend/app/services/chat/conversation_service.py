@@ -58,6 +58,9 @@ class ConversationService:
         )
         self.session.add(conversation)
         await self.session.flush()
+        # Refresh to load the messages relationship (empty for new conversations)
+        # This prevents lazy loading issues in async context
+        await self.session.refresh(conversation, ["messages"])
         logger.info(f"Created conversation: {conversation.id}")
         return conversation
 

@@ -135,39 +135,48 @@ class GEOClient:
         dataset_type: Optional[str] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
-        min_samples: int = 30
+        min_samples: int = 30,
+        survival_keywords: Optional[List[str]] = None
     ) -> str:
         """Build GEO search query optimized for finding survival studies
-        
+
         Args:
-            keywords: Search keywords
+            keywords: Disease/topic keywords (AND'd with survival_keywords)
             organism: Filter by organism
             dataset_type: Filter by dataset type (microarray, RNA-seq)
             date_from: Start date filter
             date_to: End date filter
             min_samples: Minimum number of samples (survival analysis needs adequate n)
+            survival_keywords: Survival/outcome keywords (AND'd separately from disease keywords)
         """
         query_parts = []
-        
+
+        # Disease/topic keywords OR'd together, then AND'd with rest
         if keywords:
             keyword_query = " OR ".join([f'"{kw}"[All Fields]' for kw in keywords])
             query_parts.append(f"({keyword_query})")
-        
+
+        # Survival/outcome keywords OR'd together, then AND'd with disease keywords
+        # This ensures datasets match BOTH the disease AND have survival data
+        if survival_keywords:
+            survival_query = " OR ".join([f'"{kw}"[All Fields]' for kw in survival_keywords])
+            query_parts.append(f"({survival_query})")
+
         if organism:
             query_parts.append(f'"{organism}"[Organism]')
-        
+
         if dataset_type:
             query_parts.append(f'"{dataset_type}"[DataSet Type]')
-        
+
         if date_from and date_to:
             query_parts.append(f'("{date_from}"[Publication Date] : "{date_to}"[Publication Date])')
-        
+
         # Require minimum sample count for survival analysis
         if min_samples > 0:
             query_parts.append(f'{min_samples}:5000[Number of Samples]')
-        
+
         query_parts.append('"gse"[Entry Type]')
-        
+
         final_query = " AND ".join(query_parts)
         logger.info(f"Built GEO query: {final_query}")
         return final_query
@@ -180,28 +189,31 @@ class GEOClient:
         dataset_type: Optional[str] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
-        min_samples: int = 30
+        min_samples: int = 30,
+        survival_keywords: Optional[List[str]] = None
     ) -> GEOSearchResult:
         """Search GEO for datasets with retry logic
-        
+
         Args:
-            keywords: Search keywords
+            keywords: Disease/topic keywords
             max_results: Maximum number of results to return
             organism: Filter by organism (e.g., "Homo sapiens")
             dataset_type: Filter by dataset type
             date_from: Start date for publication filter
             date_to: End date for publication filter
             min_samples: Minimum number of samples (default 30 for survival analysis)
+            survival_keywords: Survival/outcome keywords (AND'd separately from disease keywords)
         """
         await self._rate_limit()
-        
+
         search_query = self._build_geo_query(
             keywords=keywords,
             organism=organism,
             dataset_type=dataset_type,
             date_from=date_from,
             date_to=date_to,
-            min_samples=min_samples
+            min_samples=min_samples,
+            survival_keywords=survival_keywords
         )
         
         search_params = self._build_params(

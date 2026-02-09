@@ -4,14 +4,22 @@ interface ChatInputProps {
     onSend: (message: string) => void
     disabled?: boolean
     placeholder?: string
+    value?: string
+    onChange?: (value: string) => void
 }
 
 const ChatInput: React.FC<ChatInputProps> = ({
     onSend,
     disabled = false,
     placeholder = 'Type a message...',
+    value,
+    onChange,
 }) => {
-    const [message, setMessage] = useState('')
+    const [internalMessage, setInternalMessage] = useState('')
+
+    // Support both controlled and uncontrolled modes
+    const message = value !== undefined ? value : internalMessage
+    const setMessage = onChange !== undefined ? onChange : setInternalMessage
     const textareaRef = useRef<HTMLTextAreaElement>(null)
 
     // Auto-resize textarea
