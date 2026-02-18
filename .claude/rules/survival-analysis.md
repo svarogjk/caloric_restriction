@@ -1,46 +1,44 @@
+---
+paths:
+  - "backend/app/**/*survival*"
+  - "frontend/src/**/Kaplan*"
+  - "frontend/src/**/Volcano*"
+---
+
 # Survival Analysis Rules
 
 Domain rules for survival analysis using lifelines library.
 
 ## Key Concepts
 
-- **Kaplan-Meier curves**: Survival probability over time (non-parametric)
-- **Cox regression**: Hazard ratios showing gene-survival associations (semi-parametric)
-- **HR > 1**: Gene expression increases risk (worse survival)
-- **HR < 1**: Gene expression is protective (better survival)
-- **Censoring**: Event not observed (patient lost to follow-up, marked as 0)
+- **Kaplan-Meier**: Survival probability over time (non-parametric)
+- **Cox regression**: Hazard ratios (HR) for gene-survival associations
+- **HR > 1**: Increased risk | **HR < 1**: Protective
+- **Censoring**: Event not observed (lost to follow-up), marked as 0
 
 ## Required Data Format
 
-```python
-survival_df = pd.DataFrame({
-    'time': [10, 20, 15, 30, 25],        # Duration until event/censoring
-    'event': [1, 0, 1, 1, 0],            # 1=event occurred, 0=censored
-    'BRCA1': [2.5, 1.2, 3.1, 0.8, 1.5]  # Gene expression values
-})
-```
+DataFrame with columns: `time` (positive, duration), `event` (binary 0/1), gene expression columns (float).
 
-## Validation Requirements
+## Validation Before Analysis
 
-Before running survival analysis, verify:
-- [ ] Minimum 10 events (deaths/recurrences)
-- [ ] No constant expression values (variance > 0)
-- [ ] No extreme outliers in expression
-- [ ] Time values are positive
-- [ ] Event column is binary (0 or 1)
+- Minimum 10 events (deaths/recurrences)
+- Expression variance > 0 (no constant values)
+- Time values positive, event column binary
+- No extreme outliers in expression
 
 ## Common Errors
 
-| Error | Cause | Fix |
-|-------|-------|-----|
-| `ConvergenceError` | Too few events | Require minimum 10 events |
-| `LinAlgError` | Collinear covariates | Remove correlated variables |
-| All HR = 1.0 | No expression variance | Filter low-variance genes |
-| Very large HR | Extreme expression | Log-transform or normalize |
+| Error | Fix |
+|-------|-----|
+| `ConvergenceError` | Require minimum 10 events |
+| `LinAlgError` | Remove correlated covariates |
+| All HR = 1.0 | Filter low-variance genes |
+| Very large HR | Log-transform or normalize expression |
 
-## Statistical Considerations
+## Statistical Requirements
 
-- Always apply multiple testing correction (FDR) when analyzing many genes
+- Apply FDR correction when analyzing many genes
 - Check proportional hazards assumption for Cox models
 - Report confidence intervals alongside p-values
-- Use Efron's method when there are tied event times
+- Use Efron's method for tied event times

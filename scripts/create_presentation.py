@@ -105,7 +105,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
     add_image_slide(
         prs,
         "Getting Started",
-        screenshots_dir / "starting_page.png",
+        _find_screenshot(screenshots_dir, "starting_page.png"),
         "Enter a natural language query to search for relevant GEO datasets",
     )
 
@@ -113,7 +113,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
     add_image_slide(
         prs,
         "Gene Analysis Results",
-        screenshots_dir / "gene_screenshot.png",
+        _find_screenshot(screenshots_dir, "gene_screenshot.png"),
         "View ranked genes with hazard ratios, p-values, and confidence intervals",
     )
 
@@ -121,7 +121,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
     add_image_slide(
         prs,
         "Volcano Plot Visualization",
-        screenshots_dir / "volcano_plot.png",
+        _find_screenshot(screenshots_dir, "volcano_plot.png"),
         "Visualize gene significance: X-axis shows log2 hazard ratio, Y-axis shows -log10 p-value",
     )
 
@@ -129,7 +129,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
     add_image_slide(
         prs,
         "Survival Curves",
-        screenshots_dir / "kaplan_meier_curves.png",
+        _find_screenshot(screenshots_dir, "km_curves.png", "kaplan_meier_curves.png"),
         "Compare survival probability between high and low expression groups over time",
     )
 

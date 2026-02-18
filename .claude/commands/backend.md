@@ -1,20 +1,17 @@
+---
+description: Start the FastAPI backend development server on port 8000 with hot reload
+user-invocable: true
+---
+
 # Run Backend Server
 
-Start the FastAPI backend development server.
-
-## Usage
-
-Run this command to start the backend server with hot reload enabled.
-
-## Execution
+Start the backend server:
 
 ```bash
 cd backend && uv run python -m uvicorn app.main:app --reload --port 8000
 ```
 
-## Details
-
-- **Port:** 8000
-- **Hot Reload:** Enabled (auto-restarts on code changes)
-- **API Docs:** http://localhost:8000/docs (Swagger UI)
-- **Alternative Docs:** http://localhost:8000/redoc (ReDoc)
+- **Port**: 8000
+- **Hot Reload**: Enabled
+- **API Docs**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc

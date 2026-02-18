@@ -1,5 +1,5 @@
 ---
-description: Git workflow helper - sync, commit, tag
+description: Git workflow helper - sync, commit, tag, push with conventional commits
 user-invocable: true
 ---
 
@@ -7,9 +7,7 @@ user-invocable: true
 
 Manage git operations with conventional commits.
 
-## What do you want to do?
-
-Based on the user's request, perform one of these operations:
+## Based on the user's request, perform one of these operations:
 
 ### 1. Sync (Pull Latest)
 ```bash
@@ -34,6 +32,9 @@ Then create a commit with the appropriate prefix:
 - `feat:` for new features
 - `fix:` for bug fixes
 - `chore:` for maintenance
+- `refactor:` for restructuring
+- `docs:` for documentation
+- `test:` for tests
 
 Stage specific files and commit:
 ```bash
@@ -41,7 +42,7 @@ git add <files>
 git commit -m "$(cat <<'EOF'
 <prefix>: <description>
 
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 EOF
 )"
 ```
@@ -62,26 +63,20 @@ git push origin v<version>
 ```bash
 git status
 git add <specific-files>
-git commit -m "prefix: message
+git commit -m "$(cat <<'EOF'
+prefix: message
 
-Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
+EOF
+)"
 git pull --rebase origin development
 git push origin development
 ```
 
 ## Usage Examples
 
-User: `/git sync`
-→ Pull latest from development
-
-User: `/git commit the api changes as a fix`
-→ Stage and commit with `fix:` prefix
-
-User: `/git push`
-→ Pull rebase then push
-
-User: `/git tag v1.2.0`
-→ Create and push version tag
-
-User: `/git status`
-→ Show current git status and recent commits
+`/git sync` -> Pull latest from development
+`/git commit the api changes as a fix` -> Stage and commit with `fix:` prefix
+`/git push` -> Pull rebase then push
+`/git tag v1.2.0` -> Create and push version tag
+`/git status` -> Show current git status

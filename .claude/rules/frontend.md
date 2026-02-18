@@ -1,3 +1,8 @@
+---
+paths:
+  - "frontend/**/*"
+---
+
 # Frontend Rules
 
 React 18, TypeScript, Redux Toolkit, Tailwind CSS.
@@ -14,65 +19,15 @@ React 18, TypeScript, Redux Toolkit, Tailwind CSS.
 ## Commands
 
 ```bash
-# Start dev server
-cd frontend && npm run dev
-
-# Type check
-cd frontend && npx tsc --noEmit
-
-# Lint
-cd frontend && npm run lint
-
-# Build
-cd frontend && npm run build
+npx tsc --noEmit   # Type check
+npm run lint        # Lint
+npm run build       # Build
 ```
 
-## Code Patterns
-
-### Adding a Component
-```typescript
-interface Props {
-  data: DataType;
-  onAction: () => void;
-}
-
-export const NewComponent: React.FC<Props> = ({ data, onAction }) => {
-  return <div>...</div>;
-};
-```
-
-### Using Redux
-```typescript
-import { useSelector, useDispatch } from 'react-redux';
-import { RootState } from '../store/store';
-import { setQuery, searchGenes } from '../store/searchSlice';
-
-const MyComponent = () => {
-  const dispatch = useDispatch();
-  const { query, results, loading } = useSelector((state: RootState) => state.search);
-
-  const handleSearch = () => {
-    dispatch(searchGenes(query));
-  };
-};
-```
-
-### Tailwind Patterns
-```html
-<!-- Card -->
-<div className="bg-white rounded-lg shadow-md p-4">
-
-<!-- Button -->
-<button className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600">
-
-<!-- Grid -->
-<div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-```
-
-## Requirements
+## Patterns
 
 - Props interfaces defined for all components
-- Functional components with hooks only
-- Redux for shared state, local state for UI-only
+- Functional components with hooks only, typed as `React.FC<Props>`
+- Redux for shared state, local `useState` for UI-only state
 - No `any` types - use proper TypeScript types
-- Error states handled in async operations
+- Handle error states in all async operations

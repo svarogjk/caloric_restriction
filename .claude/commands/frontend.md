@@ -1,19 +1,16 @@
+---
+description: Start the React frontend development server on port 5173 with Vite HMR
+user-invocable: true
+---
+
 # Run Frontend Server
 
-Start the React frontend development server.
-
-## Usage
-
-Run this command to start the frontend development server with Vite.
-
-## Execution
+Start the frontend dev server:
 
 ```bash
 cd frontend && npm run dev
 ```
 
-## Details
-
-- **Port:** 5173 (default Vite port)
-- **Hot Reload:** Enabled (HMR - Hot Module Replacement)
-- **URL:** http://localhost:5173
+- **Port**: 5173
+- **Hot Reload**: HMR enabled
+- **URL**: http://localhost:5173
