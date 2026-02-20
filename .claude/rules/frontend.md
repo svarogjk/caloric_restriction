@@ -12,17 +12,10 @@ React 18, TypeScript, Redux Toolkit, Tailwind CSS.
 | File | Purpose |
 |------|---------|
 | `frontend/src/store/searchSlice.ts` | Redux state |
+| `frontend/src/store/chatSlice.ts` | Chat Redux state |
 | `frontend/src/services/api.ts` | API client |
-| `frontend/src/components/SearchPage.tsx` | Main page |
 | `frontend/src/components/KaplanMeierPlot.tsx` | Survival curves |
-
-## Commands
-
-```bash
-npx tsc --noEmit   # Type check
-npm run lint        # Lint
-npm run build       # Build
-```
+| `frontend/src/components/VolcanoPlot.tsx` | Volcano visualization |
 
 ## Patterns
 

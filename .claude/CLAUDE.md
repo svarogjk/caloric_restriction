@@ -1,9 +1,6 @@
 # GEO Survival Analysis
 
-Gene expression survival analysis from NCBI GEO datasets.
-Stack: Python 3.13 / FastAPI / lifelines / uv (backend) + React 18 / TypeScript / Redux Toolkit / Tailwind (frontend).
-
-See @README.md for project overview and @backend/pyproject.toml for Python dependencies.
+See @../README.md for project overview and @../backend/pyproject.toml for Python dependencies.
 
 ## Commands
 
