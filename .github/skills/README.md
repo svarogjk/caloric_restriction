@@ -8,6 +8,7 @@ This directory contains Agent Skills for GitHub Copilot. Skills are automaticall
 |-------|-------------|----------|
 | [survival-analysis](./survival-analysis/SKILL.md) | Kaplan-Meier, Cox regression, hazard ratios | Working with survival analysis code |
 | [geo-data](./geo-data/SKILL.md) | GEO database, expression data, probe mapping | Fetching or parsing GEO data |
+| [geo-platform-streaming](./geo-platform-streaming/SKILL.md) | Stream large GPL SOFT files (~GB) to extract probe→gene mappings | Downloading platforms >200MB without OOM/timeout |
 | [api-development](./api-development/SKILL.md) | FastAPI, Pydantic, async services | Creating or modifying API endpoints |
 | [react-frontend](./react-frontend/SKILL.md) | React, Redux, Tailwind, Recharts | Building frontend components |
 
@@ -27,6 +28,11 @@ This directory contains Agent Skills for GitHub Copilot. Skills are automaticall
 **GEO Data:**
 - "Download expression matrix for GSE12345"
 - "Map probe IDs to gene symbols"
+
+**GEO Platform Streaming:**
+- "Download GPL5175 platform mapping without downloading the full 4GB file"
+- "Stream-parse a large GPL SOFT file to get probe gene mappings"
+- "Add platform mapping for GPL16686 efficiently"
 
 **API Development:**
 - "Create a new endpoint for gene lookup"

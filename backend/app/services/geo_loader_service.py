@@ -19,10 +19,6 @@ import httpx
 from pydantic import BaseModel, Field, field_validator
 from pydantic_ai import Agent
 
-from app.config.logging_config import get_logger
-
-logger = get_logger(__name__)
-
 from app.models.llm_models import model_dict
 from app.services.geo_client import GEODataset
 from app.services.gene_mapping_service import GeneMappingService
@@ -110,7 +106,7 @@ class GEODataLoaderService:
             retries=2,
         )
         
-        self.client = httpx.AsyncClient(timeout=300.0, follow_redirects=True)
+        self.client = httpx.AsyncClient(timeout=1200.0, follow_redirects=True)  # Increased from 300s to 1200s (20 minutes)
         self.gene_mapping_service = GeneMappingService()
     
     def set_model(self, model: str) -> None:
@@ -586,11 +582,7 @@ Determine the optimal parsing strategy for this file."""
             logger.info(f"Successfully stored dataset {data.accession} to {storage_path}")
         except Exception as e:
             logger.warning(f"Failed to save to storage: {e}")
-    
-    def _old_save_to_storage(self, data: LoadedGEOData) -> None:
-        """OLD UNUSED - DO NOT USE"""
-        pass
-    
+
     def _load_from_storage(self, storage_path: Path, dataset: GEODataset) -> LoadedGEOData:
         """Load data from datasets folder with metadata restoration"""
         try:

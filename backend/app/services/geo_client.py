@@ -104,7 +104,7 @@ class GEOClient:
         ssl_context.verify_mode = ssl.CERT_NONE
         
         self.client = httpx.AsyncClient(
-            timeout=60.0,
+            timeout=600.0,  # Increased from 60s to 600s (10 minutes) for slower GEO API responses
             follow_redirects=True,
             headers={"User-Agent": f"GEOClient/1.0 ({email if email else 'no-email'})"},
             verify=False  # Disable SSL verification for development/testing

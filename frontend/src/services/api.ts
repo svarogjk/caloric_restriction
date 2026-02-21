@@ -1,5 +1,4 @@
 import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios'
-import { Dataset } from '../store/searchSlice'
 import { getStoredToken, removeStoredToken } from './authApi'
 
 const API_BASE_URL = '/api'
@@ -90,7 +89,8 @@ export const searchDatasets = async (
     model: string,
     maxDatasets: number = 10,
     rankingMultiplier: number = 3,
-    organism: string | null = null
+    organism: string | null = null,
+    cancerGenesOnly: boolean = false,
 ): Promise<SurvivalAnalysisResponse> => {
     try {
         const response = await apiClient.post('/search', {
@@ -100,6 +100,7 @@ export const searchDatasets = async (
             ranking_multiplier: rankingMultiplier,
             organism: organism,
             min_occurrence: 2,
+            cancer_genes_only: cancerGenesOnly,
         })
         return response.data
     } catch (error) {
@@ -108,61 +109,3 @@ export const searchDatasets = async (
     }
 }
 
-export const getDatasetDetails = async (datasetId: string): Promise<Dataset> => {
-    try {
-        const response = await apiClient.get<Dataset>(`/datasets/${datasetId}`)
-        return response.data
-    } catch (error) {
-        console.error('Error fetching dataset details:', error)
-        throw error
-    }
-}
-
-export const downloadDataset = async (
-    datasetId: string,
-    format: 'csv' | 'json' = 'csv'
-): Promise<Blob> => {
-    try {
-        const response = await apiClient.get(
-            `/datasets/${datasetId}/download?format=${format}`,
-            {
-                responseType: 'blob',
-            }
-        )
-        return response.data
-    } catch (error) {
-        console.error('Error downloading dataset:', error)
-        throw error
-    }
-}
-
-export const getAvailableModels = async (): Promise<string[]> => {
-    try {
-        const response = await apiClient.get<string[]>('/models')
-        return response.data
-    } catch (error) {
-        console.error('Error fetching models:', error)
-        throw error
-    }
-}
-
-export interface QueryEstimationResponse {
-    confidence_score: number
-    estimated_datasets: number
-    estimated_time_seconds: number
-    can_proceed: boolean
-    suggestions: string[]
-    improved_query?: string
-}
-
-export const estimateQuery = async (query: string): Promise<QueryEstimationResponse> => {
-    try {
-        const response = await apiClient.post<QueryEstimationResponse>('/chat/estimate', {
-            query: query,
-        })
-        return response.data
-    } catch (error) {
-        console.error('Error estimating query:', error)
-        throw error
-    }
-}

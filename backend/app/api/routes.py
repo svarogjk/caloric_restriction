@@ -39,16 +39,6 @@ async def health_check():
     )
 
 
-@router.get("/models")
-async def get_available_models():
-    """
-    Get available LLM models for search
-    
-    Returns:
-        List of available model names
-    """
-    return ["mistral", "claude"]
-
 
 @router.post("/search", response_model=AnalysisResponse)
 async def search_datasets(request: AnalysisRequest):
@@ -85,6 +75,7 @@ async def search_datasets(request: AnalysisRequest):
             min_occurrence=request.min_occurrence,
             model=model,
             ranking_multiplier=request.ranking_multiplier,
+            cancer_genes_only=request.cancer_genes_only,
         )
         
         # Convert GeneSurvivalOccurrence objects to response models

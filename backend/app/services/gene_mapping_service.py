@@ -24,7 +24,6 @@ class GeneMappingService:
     
     CACHE_DIR = Path("/tmp/gpl_cache")
     MEMORY_CACHE_FILE = CACHE_DIR / ".memory_cache_index.json"
-    INVALID_PLATFORMS_FILE = CACHE_DIR / ".invalid_platforms.json"
     EMPTY_MAPPING_PLATFORMS_FILE = CACHE_DIR / ".empty_mapping_platforms.json"
     PARTIAL_DOWNLOADS_DIR = CACHE_DIR / ".partial_downloads"
     GEO_FTP_BASE = "https://ftp.ncbi.nlm.nih.gov/geo/platforms"
@@ -42,7 +41,7 @@ class GeneMappingService:
         self.PREBUILT_PLATFORM_DIR.mkdir(exist_ok=True)
         # Large timeout for downloading potentially multi-GB platform files
         # Will be overridden per-request with smart timeout calculation
-        self.client = httpx.AsyncClient(timeout=600.0, follow_redirects=True)
+        self.client = httpx.AsyncClient(timeout=1800.0, follow_redirects=True)  # Increased from 600s to 1800s (30 minutes)
         # Cache only platform IDs, not the actual mappings (to save memory)
         self._cached_platform_ids: set = set()
         # Small in-memory cache for recently accessed mappings (LRU-like)
@@ -103,35 +102,6 @@ class GeneMappingService:
             logger.info(f"Saved empty mapping platforms cache: {len(self._empty_mapping_platforms)} platforms")
         except Exception as e:
             logger.debug(f"Failed to save empty mapping platforms cache: {e}")
-    
-    def _load_invalid_platforms_cache(self) -> None:
-        """Load list of known invalid platforms to avoid repeated failed attempts
-        
-        NOTE: This is now disabled because it prevents retries in new sessions.
-        Instead, we rely on in-memory caching during a single session.
-        """
-        try:
-            if self.INVALID_PLATFORMS_FILE.exists():
-                with open(self.INVALID_PLATFORMS_FILE, 'r') as f:
-                    cache_data = json.load(f)
-                
-                self._invalid_platforms = set(cache_data.get('invalid_platforms', []))
-                if self._invalid_platforms:
-                    logger.debug(f"Loaded {len(self._invalid_platforms)} known invalid platforms")
-        except Exception as e:
-            logger.debug(f"Could not load invalid platforms cache: {e}")
-    
-    def _save_invalid_platforms_cache(self) -> None:
-        """Save list of invalid platforms to persistent storage"""
-        try:
-            cache_data = {
-                'invalid_platforms': list(self._invalid_platforms)
-            }
-            with open(self.INVALID_PLATFORMS_FILE, 'w') as f:
-                json.dump(cache_data, f)
-            logger.debug(f"Saved invalid platforms cache: {len(self._invalid_platforms)} platforms")
-        except Exception as e:
-            logger.debug(f"Failed to save invalid platforms cache: {e}")
     
     def _save_memory_cache_index(self) -> None:
         """Save index of cached platforms to persistent storage"""
@@ -1028,141 +998,6 @@ class GeneMappingService:
         
         except Exception as e:
             logger.error(f"Error parsing GPL file (streaming) for {platform_id}: {e}")
-            return None
-    
-    def _parse_gpl_file(self, content: str, platform_id: str) -> Optional[Dict[str, str]]:
-        """
-        Parse GPL family file line-by-line and extract probe ID -> gene symbol mapping.
-        Uses streaming approach to minimize memory usage.
-        Implements multiple fallback strategies for column detection.
-        
-        Args:
-            content: Content of GPL family SOFT file
-            platform_id: Platform ID for logging
-        
-        Returns:
-            Dictionary mapping probe_id -> gene_symbol
-        """
-        try:
-            mapping = {}
-            lines_processed = 0
-            table_started = False
-            in_table_section = False  # Track if we've passed !platform_table_begin
-            id_idx = None
-            symbol_idx = None
-            
-            # Process line by line instead of loading entire file
-            for line in content.split('\n'):
-                lines_processed += 1
-                
-                # Skip empty lines and comment-only lines
-                if not line or line.startswith('#!') or line.startswith('##'):
-                    continue
-                
-                # Check for platform_table_begin marker
-                if '!platform_table_begin' in line.lower():
-                    in_table_section = True
-                    continue
-
-                # CRITICAL: Stop at platform_table_end or when entering SAMPLE section
-                # This prevents parsing sample expression data as gene symbols
-                if '!platform_table_end' in line.lower() or line.startswith('^SAMPLE'):
-                    if mapping:
-                        logger.debug(f"{platform_id}: Stopped at platform table end with {len(mapping)} mappings")
-                    break
-
-                # Skip column description lines (e.g., "#ID = Description text")
-                # These are single-column descriptions, not the actual header
-                if line.startswith('#') and '=' in line and '\t' not in line:
-                    continue
-
-                # Find table header line - can start with #ID OR be first line after !platform_table_begin
-                if not table_started and (line.startswith('#ID') or (in_table_section and (line.startswith('ID') or line.upper().startswith('ID')))):
-                    table_started = True
-                    headers = line.split('\t')
-
-                    logger.debug(f"Found header at line {lines_processed}: {[h.lstrip('#') for h in headers[:10]]}")
-
-                    # First pass: look for exact matches
-                    # Clean headers by removing #, =, and extra spaces (e.g., "#ID = " -> "ID")
-                    for idx, header in enumerate(headers):
-                        header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                        
-                        if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
-                            id_idx = idx
-                        # Include "GENE SYMBOL" (with space) for platforms like GPL16043
-                        elif header_clean in ['GENE_SYMBOL', 'GENE SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
-                            symbol_idx = idx
-                    
-                    # Second pass: flexible matching for ID column
-                    if id_idx is None:
-                        for idx, header in enumerate(headers):
-                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                            if any(x in header_clean for x in ['ID', 'ACCESSION', 'PROBE']):
-                                id_idx = idx
-                                break
-                    
-                    # Third pass: flexible matching for gene symbol column
-                    if symbol_idx is None:
-                        for idx, header in enumerate(headers):
-                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                            # Check for gene-related columns (symbol, name, description, etc.)
-                            if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
-                                                                 'ORF', 'GENE', 'DESCRIPTION', 'PRODUCT']):
-                                symbol_idx = idx
-                                break
-                    
-                    # Fourth pass: use common aliases
-                    if symbol_idx is None:
-                        for idx, header in enumerate(headers):
-                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                            if any(x == header_clean for x in ['NAME', 'TITLE', 'DEFINITION']):
-                                symbol_idx = idx
-                                break
-                    
-                    logger.debug(f"Detected columns - ID: {id_idx} ({headers[id_idx] if id_idx is not None else 'NOT FOUND'}), "
-                               f"Symbol: {symbol_idx} ({headers[symbol_idx] if symbol_idx is not None else 'NOT FOUND'})")
-                    continue
-                
-                # Skip lines before table starts or comment lines
-                if not table_started or line.startswith('#'):
-                    continue
-                
-                # Parse data rows
-                parts = line.split('\t')
-                if id_idx is None or len(parts) <= id_idx:
-                    continue
-                
-                probe_id = parts[id_idx].strip()
-                
-                # Skip empty or invalid probe IDs
-                if not probe_id or probe_id.startswith('#'):
-                    continue
-                
-                # Extract gene symbol
-                gene_symbol = None
-                if symbol_idx is not None and len(parts) > symbol_idx:
-                    gene_symbol = parts[symbol_idx].strip()
-                
-                # Use first gene if multiple are listed (separated by ///)
-                if gene_symbol and '///' in gene_symbol:
-                    gene_symbol = gene_symbol.split('///')[0].strip()
-                
-                # Skip if no valid gene symbol
-                if not gene_symbol or gene_symbol == '' or gene_symbol.lower() in ['null', 'na', 'n/a']:
-                    continue
-                
-                mapping[probe_id] = gene_symbol
-            
-            if mapping:
-                logger.info(f"Parsed GPL file for {platform_id}: {len(mapping)} probes from {lines_processed} lines")
-            else:
-                logger.warning(f"No valid mappings found in GPL file for {platform_id} ({lines_processed} lines processed)")
-            
-            return mapping if mapping else None
-        
-        except Exception as e:
-            logger.error(f"Error parsing GPL file for {platform_id}: {e}")
             return None
     
     async def _try_miniml_format(self, gpl_id: str, folder_prefix: str) -> Optional[Dict[str, str]]:

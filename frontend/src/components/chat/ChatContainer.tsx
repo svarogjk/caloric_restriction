@@ -11,6 +11,7 @@ import {
     setDatasetCount,
     setRankingMultiplier,
     setOrganism,
+    setCancerGenesOnly,
     runAnalysis,
     clearAnalysisResults,
 } from '../../store/chatSlice'
@@ -34,6 +35,7 @@ const ChatContainer: React.FC = () => {
         datasetCount,
         rankingMultiplier,
         organism,
+        cancerGenesOnly,
         analysisResults,
         analysisLoading,
         analysisError,
@@ -193,6 +195,20 @@ const ChatContainer: React.FC = () => {
                                     <option value="Homo sapiens">Human</option>
                                     <option value="Mus musculus">Mouse</option>
                                 </select>
+                            </div>
+
+                            {/* Cancer Genes Only */}
+                            <div className="flex items-center gap-2">
+                                <input
+                                    type="checkbox"
+                                    id="chat-cancer-genes-only"
+                                    checked={cancerGenesOnly}
+                                    onChange={(e) => dispatch(setCancerGenesOnly(e.target.checked))}
+                                    className="w-4 h-4 text-purple-600 border-gray-300 rounded cursor-pointer"
+                                />
+                                <label htmlFor="chat-cancer-genes-only" className="text-sm font-medium text-gray-700 cursor-pointer">
+                                    Cancer genes only (~600)
+                                </label>
                             </div>
                         </div>
                         <p className="text-xs text-gray-500 mt-2">

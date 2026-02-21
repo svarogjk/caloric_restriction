@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # JWT Authentication
     jwt_secret_key: str = "changeme-generate-with-openssl-rand-hex-32"
     jwt_algorithm: str = "HS256"
-    jwt_expire_minutes: int = 30
+    jwt_expire_minutes: int = 1440  # 24 hours - allows long-running analysis operations
 
     # External services
     mistral_key: str = ""

@@ -11,7 +11,6 @@ import {
     ReferenceLine,
 } from 'recharts'
 import { AnalysisResult, GeneSurvival } from '../../store/chatSlice'
-import { GeneSurvival as SearchGeneSurvival } from '../../store/searchSlice'
 import KaplanMeierPlot from '../KaplanMeierPlot'
 
 interface AnalysisResultsDisplayProps {
@@ -388,7 +387,7 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
             {/* Kaplan-Meier Modal */}
             {selectedGene && (
                 <KaplanMeierPlot
-                    gene={selectedGene as SearchGeneSurvival}
+                    gene={selectedGene as GeneSurvival}
                     onClose={() => setSelectedGene(null)}
                 />
             )}

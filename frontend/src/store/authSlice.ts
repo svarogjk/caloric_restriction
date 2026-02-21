@@ -1,4 +1,4 @@
-import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
+import { createSlice, createAsyncThunk } from '@reduxjs/toolkit'
 import {
     User,
     UserCreate,
@@ -111,10 +111,6 @@ const authSlice = createSlice({
         clearRegisterSuccess: (state) => {
             state.registerSuccess = false
         },
-        setToken: (state, action: PayloadAction<string>) => {
-            state.token = action.payload
-            setStoredToken(action.payload)
-        },
     },
     extraReducers: (builder) => {
         builder
@@ -170,5 +166,5 @@ const authSlice = createSlice({
     },
 })
 
-export const { logout, clearError, clearRegisterSuccess, setToken } = authSlice.actions
+export const { logout, clearError, clearRegisterSuccess } = authSlice.actions
 export default authSlice.reducer

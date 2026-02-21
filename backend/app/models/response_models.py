@@ -3,15 +3,7 @@ Response models for GEO Survival Analysis API
 """
 
 from pydantic import BaseModel
-from typing import List, Optional, Dict
-
-
-class KMCurvePoint(BaseModel):
-    """Single point on a Kaplan-Meier curve"""
-    time: float
-    survival_probability: float
-    ci_lower: Optional[float] = None
-    ci_upper: Optional[float] = None
+from typing import List, Optional
 
 
 class KMCurveData(BaseModel):
@@ -74,19 +66,6 @@ class AnalysisResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Response model for health check"""
-    
+
     status: str
     version: str
-
-
-# Keep legacy response for backwards compatibility
-class GeneOccurrenceResponse(BaseModel):
-    """Legacy response model for gene occurrence (deprecated)"""
-    
-    gene_id: str
-    n_datasets: int
-    avg_log_fc: float
-    avg_p_value: float
-    avg_adj_p_value: float
-    direction_consistency: float
-    datasets: List[str]

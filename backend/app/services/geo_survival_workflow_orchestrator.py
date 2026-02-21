@@ -111,6 +111,7 @@ class GEOSurvivalWorkflowOrchestrator:
         min_occurrence: int = 2,
         model: Optional[str] = None,
         ranking_multiplier: int = 3,
+        cancer_genes_only: bool = False,
     ) -> CrossDatasetSurvivalAnalysis:
         """
         Complete survival analysis workflow for a query
@@ -162,7 +163,7 @@ class GEOSurvivalWorkflowOrchestrator:
         await self._preload_platforms(top_datasets)
 
         # Step 4: Load and analyze each dataset for survival
-        survival_results = await self._analyze_datasets_survival(top_datasets)
+        survival_results = await self._analyze_datasets_survival(top_datasets, cancer_genes_only=cancer_genes_only)
 
         # Retry with next batch if too few datasets yielded results
         min_desired_results = min(3, max_datasets)
@@ -174,7 +175,7 @@ class GEOSurvivalWorkflowOrchestrator:
                 break
             logger.info(f"Only {len(survival_results)} results so far, retrying with next batch of {len(next_batch)} datasets (indices {already_tried}-{next_batch_end})")
             await self._preload_platforms(next_batch)
-            extra_results = await self._analyze_datasets_survival(next_batch)
+            extra_results = await self._analyze_datasets_survival(next_batch, cancer_genes_only=cancer_genes_only)
             survival_results.extend(extra_results)
             already_tried = next_batch_end
 
@@ -451,10 +452,11 @@ class GEOSurvivalWorkflowOrchestrator:
     
     async def _analyze_datasets_survival(
         self,
-        datasets: List[GEODataset]
+        datasets: List[GEODataset],
+        cancer_genes_only: bool = False,
     ) -> List[SurvivalAnalysisResult]:
         """Load and analyze datasets for survival associations"""
-        
+
         semaphore = asyncio.Semaphore(1)
         
         async def process_dataset(dataset: GEODataset) -> Optional[SurvivalAnalysisResult]:
@@ -494,7 +496,27 @@ class GEOSurvivalWorkflowOrchestrator:
                     if not loaded_data.probe_to_gene_mapping or len(loaded_data.probe_to_gene_mapping) == 0:
                         logger.warning(f"Dataset {dataset.accession} - gene mapping failed")
                         return None
-                    
+
+                    # Filter to cancer genes if requested
+                    if cancer_genes_only:
+                        from app.data.cancer_genes import CANCER_GENE_SET
+                        cancer_probes = {
+                            probe
+                            for probe, gene in loaded_data.probe_to_gene_mapping.items()
+                            if gene.upper() in CANCER_GENE_SET
+                        }
+                        cancer_mask = loaded_data.expression_matrix.index.isin(cancer_probes)
+                        loaded_data.expression_matrix = loaded_data.expression_matrix[cancer_mask]
+                        if len(loaded_data.expression_matrix) == 0:
+                            logger.warning(
+                                f"Dataset {dataset.accession}: no cancer genes found after filter"
+                            )
+                            return None
+                        logger.info(
+                            f"Dataset {dataset.accession}: filtered to "
+                            f"{len(loaded_data.expression_matrix)} cancer gene probes"
+                        )
+
                     # Perform survival analysis
                     survival_result = await self.survival_service.analyze_survival(
                         loaded_data=loaded_data

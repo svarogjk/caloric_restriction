@@ -12,6 +12,7 @@ import re
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
+from pydantic_ai.settings import ModelSettings
 from app.models.llm_models import model_dict
 from app.services.geo_client import GEODataset
 from app.services.gene_mapping_service import GeneMappingService
@@ -106,11 +107,13 @@ class GEODatasetRankingService:
             re.IGNORECASE
         )
         # Initialize the ranking agent
+        # max_tokens=8192: scoring 25 datasets needs ~2500+ output tokens; 4096 default is too low
         self.ranking_agent = Agent(
             model=model_dict.get(self.model, model_dict["mistral"]),
             output_type=RankedDatasets,
             system_prompt=self._get_system_prompt(),
             retries=2,
+            model_settings=ModelSettings(max_tokens=8192),
         )
     
     def _is_methylation_or_non_expression(self, dataset: GEODataset) -> bool:
@@ -318,7 +321,7 @@ class GEODatasetRankingService:
         # Put datasets with survival hints first, then others
         prioritized_datasets = datasets_with_survival_hints + datasets_without_hints
         
-        max_datasets_for_llm = min(len(prioritized_datasets), 50)
+        max_datasets_for_llm = min(len(prioritized_datasets), 25)
         dataset_summaries = await self._prepare_dataset_summaries(prioritized_datasets[:max_datasets_for_llm])
         
         ranking_prompt = self._build_ranking_prompt(query, dataset_summaries)

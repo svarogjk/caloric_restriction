@@ -118,6 +118,7 @@ export interface ChatState {
     datasetCount: number
     rankingMultiplier: number
     organism: string | null
+    cancerGenesOnly: boolean
     // Analysis state
     analysisResults: AnalysisResult | null
     analysisLoading: boolean
@@ -139,6 +140,7 @@ const initialState: ChatState = {
     datasetCount: 10,
     rankingMultiplier: 3,
     organism: null,
+    cancerGenesOnly: false,
     // Analysis state
     analysisResults: null,
     analysisLoading: false,
@@ -241,7 +243,7 @@ export const runAnalysis = createAsyncThunk(
     ) => {
         try {
             const state = getState() as { chat: ChatState }
-            const { selectedModel, datasetCount, rankingMultiplier, organism } = state.chat
+            const { selectedModel, datasetCount, rankingMultiplier, organism, cancerGenesOnly } = state.chat
 
             // Add a system message indicating analysis is starting
             const systemMessage: Message = {
@@ -257,7 +259,8 @@ export const runAnalysis = createAsyncThunk(
                 selectedModel,
                 datasetCount,
                 rankingMultiplier,
-                organism
+                organism,
+                cancerGenesOnly
             )
 
             return results
@@ -283,18 +286,6 @@ const chatSlice = createSlice({
         addMessage: (state, action: PayloadAction<Message>) => {
             state.messages.push(action.payload)
         },
-        updateStreamingMessage: (state, action: PayloadAction<string>) => {
-            const lastMessage = state.messages[state.messages.length - 1]
-            if (lastMessage && lastMessage.isStreaming) {
-                lastMessage.content += action.payload
-            }
-        },
-        completeStreamingMessage: (state) => {
-            const lastMessage = state.messages[state.messages.length - 1]
-            if (lastMessage && lastMessage.isStreaming) {
-                lastMessage.isStreaming = false
-            }
-        },
         setStreaming: (state, action: PayloadAction<boolean>) => {
             state.isStreaming = action.payload
         },
@@ -307,12 +298,6 @@ const chatSlice = createSlice({
         clearError: (state) => {
             state.error = null
         },
-        toggleSidebar: (state) => {
-            state.sidebarOpen = !state.sidebarOpen
-        },
-        clearMessages: (state) => {
-            state.messages = []
-        },
         setDatasetCount: (state, action: PayloadAction<number>) => {
             state.datasetCount = action.payload
         },
@@ -321,6 +306,9 @@ const chatSlice = createSlice({
         },
         setOrganism: (state, action: PayloadAction<string | null>) => {
             state.organism = action.payload
+        },
+        setCancerGenesOnly: (state, action: PayloadAction<boolean>) => {
+            state.cancerGenesOnly = action.payload
         },
         clearAnalysisResults: (state) => {
             state.analysisResults = null
@@ -477,17 +465,14 @@ const chatSlice = createSlice({
 export const {
     setActiveConversation,
     addMessage,
-    updateStreamingMessage,
-    completeStreamingMessage,
     setStreaming,
     setSelectedModel,
     clearEstimation,
     clearError,
-    toggleSidebar,
-    clearMessages,
     setDatasetCount,
     setRankingMultiplier,
     setOrganism,
+    setCancerGenesOnly,
     clearAnalysisResults,
 } = chatSlice.actions
 

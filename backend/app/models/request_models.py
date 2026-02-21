@@ -41,3 +41,7 @@ class AnalysisRequest(BaseModel):
         le=10,
         description="Multiplier for datasets to rank before analysis"
     )
+    cancer_genes_only: bool = Field(
+        default=False,
+        description="Restrict analysis to ~600 most cancer-related genes (COSMIC CGC)"
+    )
