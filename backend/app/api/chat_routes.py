@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
+from app.models.database import User
+from app.api.dependencies import get_current_active_user
 from app.services.chat import ChatService, LangChainService, QueryEstimationService
 
 logger = logging.getLogger(__name__)
@@ -138,6 +140,7 @@ class EstimateQueryResponse(BaseModel):
 async def create_conversation(
     request: CreateConversationRequest,
     chat_service: ChatService = Depends(get_chat_service),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     Create a new conversation.
@@ -151,6 +154,7 @@ async def create_conversation(
     conversation = await chat_service.create_conversation(
         title=request.title,
         context_type=request.context_type,
+        user_id=current_user.id,
     )
 
     return CreateConversationResponse(
@@ -165,9 +169,10 @@ async def list_conversations(
     limit: int = 20,
     offset: int = 0,
     chat_service: ChatService = Depends(get_chat_service),
+    current_user: User = Depends(get_current_active_user),
 ):
     """
-    List all conversations ordered by most recent.
+    List conversations for the authenticated user, ordered by most recent.
 
     Args:
         limit: Maximum number of conversations to return
@@ -176,7 +181,9 @@ async def list_conversations(
     Returns:
         List of conversation summaries
     """
-    conversations = await chat_service.list_conversations(limit=limit, offset=offset)
+    conversations = await chat_service.list_conversations(
+        limit=limit, offset=offset, user_id=current_user.id
+    )
 
     return [
         ConversationListItem(

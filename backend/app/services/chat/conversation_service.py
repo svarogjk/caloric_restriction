@@ -50,11 +50,13 @@ class ConversationService:
         self,
         title: Optional[str] = None,
         context_type: str = "general",
+        user_id: Optional[str] = None,
     ) -> Conversation:
         """Create a new conversation."""
         conversation = Conversation(
             title=title or "New Conversation",
             context_type=context_type,
+            user_id=user_id,
         )
         self.session.add(conversation)
         await self.session.flush()
@@ -85,11 +87,15 @@ class ConversationService:
         self,
         limit: int = 20,
         offset: int = 0,
+        user_id: Optional[str] = None,
     ) -> list[Conversation]:
         """List conversations ordered by most recent update."""
+        filters = [Conversation.deleted_at.is_(None)]
+        if user_id is not None:
+            filters.append(Conversation.user_id == user_id)
         query = (
             select(Conversation)
-            .where(Conversation.deleted_at.is_(None))
+            .where(*filters)
             .order_by(desc(Conversation.updated_at))
             .limit(limit)
             .offset(offset)

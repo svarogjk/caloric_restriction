@@ -148,6 +148,33 @@ Help users effectively use these tools by:
 
         return prompt | self.models[model_name]
 
+    def _build_context_note(self, estimation_context: dict) -> str:
+        """Build a context annotation string from estimation data."""
+        confidence = estimation_context.get("confidence_score", 0)
+        suggestions = estimation_context.get("suggestions", [])
+        geo_preview = estimation_context.get("geo_preview")
+
+        note = f"\n\n[Query Analysis: {confidence:.0%} confidence"
+
+        if geo_preview:
+            total = geo_preview.get("total_datasets", 0)
+            survival_count = geo_preview.get("datasets_with_survival_keywords", 0)
+            note += f", Found {total} datasets ({survival_count} with survival data)"
+
+            platform_counts = geo_preview.get("platform_counts", {})
+            if platform_counts:
+                platform_diversity = geo_preview.get("platform_diversity", "unknown")
+                note += f", Platform diversity: {platform_diversity}"
+
+            warnings = geo_preview.get("warnings", [])
+            if warnings:
+                note += f", Warnings: {warnings[0][:50]}..."
+
+        if suggestions:
+            note += f", Suggestions: {'; '.join(suggestions[:2])}"
+        note += "]"
+        return note
+
     def _convert_messages(self, messages: list[dict]) -> list[BaseMessage]:
         """Convert dict messages to LangChain message objects."""
         converted = []
@@ -169,7 +196,7 @@ Help users effectively use these tools by:
         messages: list[dict],
         model: str = "mistral",
         estimation_context: dict | None = None,
-    ) -> str:
+    ) -> tuple[str, int | None]:
         """
         Generate a complete response.
 
@@ -179,10 +206,10 @@ Help users effectively use these tools by:
             estimation_context: Optional query estimation data
 
         Returns:
-            The assistant's response text
+            Tuple of (response text, total tokens used or None)
         """
         if not messages:
-            return "Hello! How can I help you with survival analysis today?"
+            return "Hello! How can I help you with survival analysis today?", None
 
         chain = self._create_chain(model)
 
@@ -190,39 +217,19 @@ Help users effectively use these tools by:
         history = self._convert_messages(messages[:-1])
         current_input = messages[-1].get("content", "")
 
-        # Add estimation context if available
         if estimation_context:
-            confidence = estimation_context.get("confidence_score", 0)
-            suggestions = estimation_context.get("suggestions", [])
-            geo_preview = estimation_context.get("geo_preview")
-
-            context_note = f"\n\n[Query Analysis: {confidence:.0%} confidence"
-
-            # Add GEO preview info if available
-            if geo_preview:
-                total = geo_preview.get("total_datasets", 0)
-                survival_count = geo_preview.get("datasets_with_survival_keywords", 0)
-                context_note += f", Found {total} datasets ({survival_count} with survival data)"
-
-                # Add platform info
-                platform_counts = geo_preview.get("platform_counts", {})
-                if platform_counts:
-                    platform_diversity = geo_preview.get("platform_diversity", "unknown")
-                    context_note += f", Platform diversity: {platform_diversity}"
-
-                # Add warnings
-                warnings = geo_preview.get("warnings", [])
-                if warnings:
-                    context_note += f", Warnings: {warnings[0][:50]}..."
-
-            if suggestions:
-                context_note += f", Suggestions: {'; '.join(suggestions[:2])}"
-            context_note += "]"
-            current_input += context_note
+            current_input += self._build_context_note(estimation_context)
 
         response = await chain.ainvoke({"history": history, "input": current_input})
 
-        return response.content
+        tokens_used = None
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            tokens_used = (
+                response.usage_metadata.get("input_tokens", 0)
+                + response.usage_metadata.get("output_tokens", 0)
+            )
+
+        return response.content, tokens_used
 
     async def stream_response(
         self,
@@ -250,24 +257,8 @@ Help users effectively use these tools by:
         history = self._convert_messages(messages[:-1])
         current_input = messages[-1].get("content", "")
 
-        # Add estimation context if available (same as generate_response)
         if estimation_context:
-            confidence = estimation_context.get("confidence_score", 0)
-            suggestions = estimation_context.get("suggestions", [])
-            geo_preview = estimation_context.get("geo_preview")
-
-            context_note = f"\n\n[Query Analysis: {confidence:.0%} confidence"
-
-            # Add GEO preview info
-            if geo_preview:
-                total = geo_preview.get("total_datasets", 0)
-                survival_count = geo_preview.get("datasets_with_survival_keywords", 0)
-                context_note += f", Found {total} datasets ({survival_count} with survival data)"
-
-            if suggestions:
-                context_note += f", Suggestions: {'; '.join(suggestions[:2])}"
-            context_note += "]"
-            current_input += context_note
+            current_input += self._build_context_note(estimation_context)
 
         async for chunk in chain.astream({"history": history, "input": current_input}):
             if hasattr(chunk, "content") and chunk.content:

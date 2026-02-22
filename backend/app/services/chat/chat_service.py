@@ -80,11 +80,13 @@ class ChatService:
         self,
         title: Optional[str] = None,
         context_type: str = "general",
+        user_id: Optional[str] = None,
     ) -> ConversationData:
         """Create a new conversation."""
         conversation = await self.conversation_service.create_conversation(
             title=title,
             context_type=context_type,
+            user_id=user_id,
         )
         return self.conversation_service.to_conversation_data(conversation)
 
@@ -104,10 +106,11 @@ class ChatService:
         self,
         limit: int = 20,
         offset: int = 0,
+        user_id: Optional[str] = None,
     ) -> list[ConversationData]:
         """List all conversations."""
         conversations = await self.conversation_service.list_conversations(
-            limit=limit, offset=offset
+            limit=limit, offset=offset, user_id=user_id
         )
         return [
             ConversationData(
@@ -142,21 +145,11 @@ class ChatService:
         Returns:
             ChatResponse with the assistant's reply
         """
-        # 1. Save user message
-        await self.conversation_service.add_message(
-            conversation_id=conversation_id,
-            role="user",
-            content=content,
-        )
-
-        # 2. Get conversation history
-        messages = await self.conversation_service.get_messages_as_dicts(
-            conversation_id
-        )
-
-        # 3. Check if this looks like an analysis query
+        # 1. Check if this looks like an analysis query and run estimation first
+        #    so we can link estimation_id to the user message
         estimation = None
         estimation_dict = None
+        saved_estimation_id = None
         if self._looks_like_analysis_query(content):
             estimation = await self.estimation_service.estimate_query(content)
             estimation_dict = {
@@ -166,11 +159,10 @@ class ChatService:
                 "can_proceed": estimation.can_proceed,
                 "suggestions": estimation.suggestions,
                 "improved_query": estimation.improved_query,
-                "geo_preview": estimation.geo_preview,  # Include GEO preview data
+                "geo_preview": estimation.geo_preview,
             }
 
-            # Save estimation
-            await self.conversation_service.save_estimation(
+            saved_est = await self.conversation_service.save_estimation(
                 original_query=content,
                 confidence_score=estimation.confidence_score,
                 estimated_datasets=estimation.estimated_datasets,
@@ -185,9 +177,23 @@ class ChatService:
                 has_organism=estimation.validation.get("has_organism", False),
                 has_gene_focus=estimation.validation.get("has_gene_focus", False),
             )
+            saved_estimation_id = saved_est.id
+
+        # 2. Save user message (with estimation_id if applicable)
+        await self.conversation_service.add_message(
+            conversation_id=conversation_id,
+            role="user",
+            content=content,
+            estimation_id=saved_estimation_id,
+        )
+
+        # 3. Get conversation history
+        messages = await self.conversation_service.get_messages_as_dicts(
+            conversation_id
+        )
 
         # 4. Generate AI response
-        response_content = await self.langchain_service.generate_response(
+        response_content, tokens_used = await self.langchain_service.generate_response(
             messages=messages,
             model=model,
             estimation_context=estimation_dict,
@@ -199,6 +205,7 @@ class ChatService:
             role="assistant",
             content=response_content,
             model_used=model,
+            tokens_used=tokens_used,
         )
 
         # 6. Update conversation title if this is the first exchange
@@ -240,20 +247,9 @@ class ChatService:
         Yields:
             Response tokens as they are generated
         """
-        # Save user message
-        await self.conversation_service.add_message(
-            conversation_id=conversation_id,
-            role="user",
-            content=content,
-        )
-
-        # Get history
-        messages = await self.conversation_service.get_messages_as_dicts(
-            conversation_id
-        )
-
-        # Run estimation for analysis queries (same as send_message)
+        # Run estimation first (if applicable) so estimation_id can be linked to user msg
         estimation_context = None
+        saved_estimation_id = None
         if self._looks_like_analysis_query(content):
             estimation = await self.estimation_service.estimate_query(content)
             estimation_context = {
@@ -265,8 +261,38 @@ class ChatService:
                 "geo_preview": estimation.geo_preview,
             }
 
+            saved_est = await self.conversation_service.save_estimation(
+                original_query=content,
+                confidence_score=estimation.confidence_score,
+                estimated_datasets=estimation.estimated_datasets,
+                estimated_time_seconds=estimation.estimated_time_seconds,
+                can_proceed=estimation.can_proceed,
+                suggestions=estimation.suggestions,
+                improved_query=estimation.improved_query,
+                has_survival_keywords=estimation.validation.get(
+                    "has_survival_keywords", False
+                ),
+                has_cancer_type=estimation.validation.get("has_cancer_type", False),
+                has_organism=estimation.validation.get("has_organism", False),
+                has_gene_focus=estimation.validation.get("has_gene_focus", False),
+            )
+            saved_estimation_id = saved_est.id
+
             # Yield estimation summary as first chunk
             yield self._format_estimation_summary(estimation)
+
+        # Save user message (with estimation_id if applicable)
+        await self.conversation_service.add_message(
+            conversation_id=conversation_id,
+            role="user",
+            content=content,
+            estimation_id=saved_estimation_id,
+        )
+
+        # Get history
+        messages = await self.conversation_service.get_messages_as_dicts(
+            conversation_id
+        )
 
         # Stream response
         full_response = ""
@@ -276,7 +302,7 @@ class ChatService:
             full_response += chunk
             yield chunk
 
-        # Save complete response
+        # Save complete response (tokens not available from streaming)
         await self.conversation_service.add_message(
             conversation_id=conversation_id,
             role="assistant",
