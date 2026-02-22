@@ -39,9 +39,9 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, classNam
                         <p className="text-xs text-gray-400">Try asking:</p>
                         <div className="flex flex-wrap justify-center gap-2">
                             {[
-                                "What genes are associated with breast cancer survival?",
-                                "How do I interpret a hazard ratio?",
-                                "Find prognostic biomarkers in lung cancer",
+                                "Which human genes predict overall survival in breast cancer patients?",
+                                "Run Kaplan-Meier survival analysis for TP53 expression in lung cancer GEO datasets",
+                                "Find survival biomarkers in...",
                             ].map((example, i) => (
                                 <button
                                     key={i}
