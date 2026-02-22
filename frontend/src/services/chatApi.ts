@@ -1,4 +1,5 @@
-import axios from 'axios'
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios'
+import { getStoredToken, removeStoredToken } from './authApi'
 
 const API_BASE_URL = '/api/chat'
 
@@ -8,6 +9,28 @@ const chatClient = axios.create({
         'Content-Type': 'application/json',
     },
 })
+
+chatClient.interceptors.request.use(
+    (config: InternalAxiosRequestConfig) => {
+        const token = getStoredToken()
+        if (token) {
+            config.headers.Authorization = `Bearer ${token}`
+        }
+        return config
+    },
+    (error) => Promise.reject(error)
+)
+
+chatClient.interceptors.response.use(
+    (response) => response,
+    (error: AxiosError) => {
+        if (error.response?.status === 401) {
+            removeStoredToken()
+            window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+        }
+        return Promise.reject(error)
+    }
+)
 
 // ==================== Types ====================
 
