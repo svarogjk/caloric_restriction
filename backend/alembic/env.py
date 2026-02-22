@@ -1,7 +1,7 @@
 """
 Alembic environment configuration for async SQLAlchemy.
 
-Supports both PostgreSQL (asyncpg) and SQLite (aiosqlite).
+Supports PostgreSQL (asyncpg).
 """
 
 import asyncio

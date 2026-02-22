@@ -221,6 +221,7 @@ const ChatContainer: React.FC = () => {
                 {currentEstimation && (
                     <QueryEstimation
                         estimation={currentEstimation}
+                        originalQuery={[...messages].reverse().find(m => m.role === 'user')?.content ?? ''}
                         onRunAnalysis={handleRunAnalysis}
                         onDismiss={() => dispatch(clearEstimation())}
                     />

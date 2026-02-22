@@ -3,12 +3,14 @@ import { QueryEstimation as QueryEstimationType } from '../../store/chatSlice'
 
 interface QueryEstimationProps {
     estimation: QueryEstimationType
+    originalQuery: string
     onRunAnalysis: (query: string) => void
     onDismiss: () => void
 }
 
 const QueryEstimation: React.FC<QueryEstimationProps> = ({
     estimation,
+    originalQuery,
     onRunAnalysis,
     onDismiss,
 }) => {
@@ -241,7 +243,7 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
 
                     {estimation.canProceed && (
                         <button
-                            onClick={() => onRunAnalysis(estimation.improvedQuery || '')}
+                            onClick={() => onRunAnalysis(estimation.improvedQuery || originalQuery)}
                             className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
                         >
                             Run Analysis

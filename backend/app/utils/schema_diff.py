@@ -18,7 +18,7 @@ class SchemaDiff:
     def __init__(self):
         """Initialize schema diff analyzer."""
         # Use sync engine for inspection
-        sync_url = settings.database_url.replace("+asyncpg", "+psycopg2").replace("+aiosqlite", "")
+        sync_url = settings.database_url.replace("+asyncpg", "+psycopg2")
         self.engine = create_engine(sync_url)
         self.inspector = inspect(self.engine)
         self.metadata = Base.metadata
