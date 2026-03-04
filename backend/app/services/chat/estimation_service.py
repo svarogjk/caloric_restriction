@@ -10,14 +10,17 @@ Evaluates survival analysis queries before execution to:
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
-from pydantic_ai import Agent
+from langchain_mistralai import ChatMistralAI
+from langchain_core.messages import HumanMessage
 
-from app.models.llm_models import model_dict
+_SERVICES_DIR = Path(__file__).parent.parent
 
 logger = logging.getLogger(__name__)
 
@@ -136,37 +139,22 @@ class QueryEstimationService:
     ):
         self.model = model
         self.geo_preview_service = geo_preview_service
-        self._init_estimation_agent()
+        self._structured_llm = self._init_structured_llm()
 
-    def _init_estimation_agent(self) -> None:
-        """Initialize the AI estimation agent."""
-        self.agent = Agent(
-            model=model_dict.get(self.model, model_dict["mistral"]),
-            output_type=AIEstimationResult,
-            system_prompt=self._get_system_prompt(),
-            retries=2,
+    def _init_structured_llm(self):
+        """Initialize LLM with structured output for estimation."""
+        mistral_key = os.getenv("MISTRAL_KEY", "")
+        if not mistral_key:
+            key_file = _SERVICES_DIR / "mistral_key.txt"
+            if key_file.exists():
+                mistral_key = key_file.read_text().strip()
+
+        llm = ChatMistralAI(
+            api_key=mistral_key,
+            model="mistral-small-latest",
+            temperature=0.1,
         )
-
-    def _get_system_prompt(self) -> str:
-        """Get the system prompt for estimation."""
-        return """You are a bioinformatics expert evaluating survival analysis queries for GEO datasets.
-
-Given a query, estimate:
-1. How likely it is to find relevant GEO datasets with survival data (0.0 to 1.0)
-2. Estimated number of datasets that might match (0-100)
-3. Estimated analysis time in seconds (30-600)
-
-Consider:
-- Specificity of the cancer type or disease
-- Presence of clinical/survival terminology
-- Common availability of such data in GEO
-- Technical feasibility of the analysis
-
-High confidence (0.7-1.0): Well-known cancer types with common survival studies
-Medium confidence (0.4-0.7): Less common diseases or vague queries
-Low confidence (0.0-0.4): Rare diseases, missing context, or infeasible queries
-
-Be realistic - not all queries will find good survival data."""
+        return llm.with_structured_output(AIEstimationResult)
 
     async def estimate_query(self, query: str) -> EstimationResult:
         """
@@ -292,25 +280,22 @@ Be realistic - not all queries will find good survival data."""
         }
 
     async def _ai_estimate(self, query: str) -> AIEstimationResult:
-        """Get AI-powered estimation."""
+        """Get AI-powered estimation using LangChain structured output."""
+        prompt = (
+            f'Evaluate this survival analysis query for GEO datasets:\n\nQuery: "{query}"\n\n'
+            "Consider:\n"
+            "- Is this a well-studied disease with available survival data?\n"
+            "- How specific is the query?\n"
+            "- What's the likelihood of finding matching datasets?\n\n"
+            "Provide your estimation."
+        )
         try:
-            prompt = f"""Evaluate this survival analysis query for GEO datasets:
-
-Query: "{query}"
-
-Consider:
-- Is this a well-studied disease with available survival data?
-- How specific is the query?
-- What's the likelihood of finding matching datasets?
-
-Provide your estimation."""
-
-            result = await self.agent.run(prompt)
-            return result.output
-
-        except Exception as e:
-            logger.warning(f"AI estimation failed: {e}")
-            # Return conservative default
+            result: AIEstimationResult = await self._structured_llm.ainvoke(
+                [HumanMessage(content=prompt)]
+            )
+            return result
+        except (ValueError, RuntimeError) as exc:
+            logger.warning(f"AI estimation failed: {exc}")
             return AIEstimationResult(
                 confidence=0.5,
                 estimated_datasets=5,

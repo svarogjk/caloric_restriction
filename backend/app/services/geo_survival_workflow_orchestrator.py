@@ -4,12 +4,13 @@ Integrates all services to provide end-to-end survival analysis on GEO data
 Identifies genes associated with survival/lifespan across multiple datasets
 """
 
+import hashlib
 import logging
 import asyncio
 from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 from datetime import datetime
-from collections import Counter
+from collections import Counter, OrderedDict
 import pandas as pd
 
 from app.services.geo_client import GEOClient, GEODataset, GEOSearchResult
@@ -102,7 +103,20 @@ class GEOSurvivalWorkflowOrchestrator:
             model=model
         )
         self.current_model = model
+        self._analysis_cache: OrderedDict[str, CrossDatasetSurvivalAnalysis] = OrderedDict()
+        self._ANALYSIS_CACHE_MAX = 10
     
+    def _make_cache_key(
+        self,
+        query: str,
+        max_datasets: int,
+        organism: Optional[str],
+        model: str,
+        cancer_genes_only: bool,
+    ) -> str:
+        raw = f"{query.lower().strip()}|{max_datasets}|{organism}|{model}|{cancer_genes_only}"
+        return hashlib.md5(raw.encode()).hexdigest()
+
     async def analyze_query(
         self,
         query: str,
@@ -128,8 +142,15 @@ class GEOSurvivalWorkflowOrchestrator:
             CrossDatasetSurvivalAnalysis with survival-associated genes
         """
         start_time = datetime.now()
-        
+
         use_model = model if model else self.current_model
+
+        cache_key = self._make_cache_key(query, max_datasets, organism, use_model, cancer_genes_only)
+        if cache_key in self._analysis_cache:
+            self._analysis_cache.move_to_end(cache_key)
+            logger.info(f"Returning cached analysis result for '{query}'")
+            return self._analysis_cache[cache_key]
+
         logger.info(f"Starting GEO survival analysis workflow for: {query} with model: {use_model}")
         
         # Update services to use the specified model
@@ -188,7 +209,7 @@ class GEOSurvivalWorkflowOrchestrator:
 
         processing_time = (datetime.now() - start_time).total_seconds()
 
-        return CrossDatasetSurvivalAnalysis(
+        result = CrossDatasetSurvivalAnalysis(
             query=query,
             n_datasets_analyzed=len(ranked_datasets),
             n_datasets_with_survival=len(survival_results),
@@ -199,6 +220,13 @@ class GEOSurvivalWorkflowOrchestrator:
             ranking_quality_score=ranking_quality,
             ranking_recommendations=ranking_recommendations
         )
+
+        self._analysis_cache[cache_key] = result
+        self._analysis_cache.move_to_end(cache_key)
+        if len(self._analysis_cache) > self._ANALYSIS_CACHE_MAX:
+            self._analysis_cache.popitem(last=False)
+
+        return result
     
     async def _search_geo(
         self,

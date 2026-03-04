@@ -5,6 +5,7 @@ Performs statistical analysis to identify genes altered by interventions
 
 import logging
 import hashlib
+from collections import OrderedDict
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 import warnings
@@ -191,14 +192,29 @@ class DifferentialExpressionService:
         self.p_value_threshold = p_value_threshold
         self.group_detection_agent = create_group_detection_agent(model)
         
-        # Cache for LLM group detection results to avoid redundant API calls
-        self._group_detection_cache: Dict[str, Tuple[List[str], List[str]]] = {}
+        # Bounded LRU cache for LLM group detection results to avoid redundant API calls
+        self._group_detection_cache: OrderedDict[str, Tuple[List[str], List[str]]] = OrderedDict()
+        self._GROUP_CACHE_MAX = 50
     
     def set_model(self, model: str) -> None:
         """Update the model used by the group detection agent"""
         self.model = model
         self.group_detection_agent = create_group_detection_agent(model)
         logger.info(f"Updated differential expression service to use model: {model}")
+
+    def _group_cache_get(self, key: str) -> Optional[Tuple[List[str], List[str]]]:
+        """Get from group detection LRU cache, promoting to most-recently-used."""
+        if key in self._group_detection_cache:
+            self._group_detection_cache.move_to_end(key)
+            return self._group_detection_cache[key]
+        return None
+
+    def _group_cache_put(self, key: str, value: Tuple[List[str], List[str]]) -> None:
+        """Insert into group detection LRU cache, evicting LRU entry when at capacity."""
+        self._group_detection_cache[key] = value
+        self._group_detection_cache.move_to_end(key)
+        if len(self._group_detection_cache) > self._GROUP_CACHE_MAX:
+            self._group_detection_cache.popitem(last=False)
     
     async def analyze_differential_expression(
         self,
@@ -360,9 +376,10 @@ class DifferentialExpressionService:
             cache_key = hashlib.md5(cache_key_content.encode()).hexdigest()
             
             # Check if we've already detected groups for this metadata
-            if cache_key in self._group_detection_cache:
+            cached = self._group_cache_get(cache_key)
+            if cached is not None:
                 logger.info(f"Using cached group detection result")
-                return self._group_detection_cache[cache_key]
+                return cached
         except Exception:
             cache_key = None  # Skip caching if hash creation fails
         
@@ -373,7 +390,7 @@ class DifferentialExpressionService:
             n = len(samples)
             result = (samples[:n//2], samples[n//2:])
             if cache_key:
-                self._group_detection_cache[cache_key] = result
+                self._group_cache_put(cache_key, result)
             return result
         
         # Ensure metadata index matches expression matrix columns
@@ -425,7 +442,7 @@ class DifferentialExpressionService:
                 logger.info(f"Detected groups from column '{col}' using keyword matching")
                 result = (treatment_samples, control_samples)
                 if cache_key:
-                    self._group_detection_cache[cache_key] = result
+                    self._group_cache_put(cache_key, result)
                 return result
         
         # If no clear groups found, try to split by unique values

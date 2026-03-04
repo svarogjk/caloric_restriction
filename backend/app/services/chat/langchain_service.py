@@ -1,15 +1,28 @@
 """
 LangChain Service for conversational AI.
 
-Provides conversation chain management and streaming support.
+Uses LangChain 1.x create_agent (LangGraph-based) with tool-calling support.
+Falls back to a plain chain if no tools have been injected.
+
+History management:
+- Per-conversation history is maintained externally in PostgreSQL (ConversationService)
+- Before passing to the agent, old messages are trimmed via trim_messages()
+  once the estimated token count exceeds 4000 tokens (~16,000 chars)
 """
 
-import os
 import logging
+import os
 from pathlib import Path
 from typing import AsyncGenerator
 
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import (
+    HumanMessage,
+    AIMessage,
+    SystemMessage,
+    BaseMessage,
+    trim_messages,
+)
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_mistralai import ChatMistralAI
 from langchain_anthropic import ChatAnthropic
@@ -19,19 +32,44 @@ logger = logging.getLogger(__name__)
 # Path to key files (relative to services directory)
 SERVICES_DIR = Path(__file__).parent.parent
 
+# ~4 chars per token; trim to 4000 token budget ≈ 16,000 chars
+_MAX_HISTORY_CHARS = 16_000
+
 
 class LangChainService:
-    """Service for LangChain-based conversations."""
+    """Service for LangChain-based conversations with optional tool-calling."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.models = self._init_models()
         self._system_prompt = self._build_system_prompt()
+
+        # Tools injected after init via set_tools() — invalidates cached agents
+        self._tools: list = []
+        self._agents: dict = {}  # keyed by model_name
+
+    # ------------------------------------------------------------------
+    # Tool injection
+    # ------------------------------------------------------------------
+
+    def set_tools(self, tools: list) -> None:
+        """
+        Inject agent tools.
+
+        Call once at startup after all services are ready.
+        Invalidates cached agents so they are rebuilt with the new tools.
+        """
+        self._tools = tools
+        self._agents = {}
+        logger.info(f"Agent tools registered: {[t.name for t in tools]}")
+
+    # ------------------------------------------------------------------
+    # Model initialisation
+    # ------------------------------------------------------------------
 
     def _init_models(self) -> dict:
         """Initialize LLM models."""
         models = {}
 
-        # Mistral - try env var first, then key file
         mistral_key = os.getenv("MISTRAL_KEY")
         if not mistral_key:
             key_file = SERVICES_DIR / "mistral_key.txt"
@@ -48,7 +86,6 @@ class LangChainService:
             )
             logger.info("Initialized Mistral model")
 
-        # Anthropic - try env var first, then key file
         anthropic_key = os.getenv("ANTHROPIC_KEY")
         if not anthropic_key:
             key_file = SERVICES_DIR / "anthropic_key.txt"
@@ -70,86 +107,86 @@ class LangChainService:
 
         return models
 
-    def _build_system_prompt(self) -> str:
-        """Build the system prompt for the chat assistant."""
-        return """You are a bioinformatics assistant for a GEO Survival Analysis application. You help users analyze gene expression survival associations from NCBI GEO datasets.
+    # ------------------------------------------------------------------
+    # Agent / chain creation
+    # ------------------------------------------------------------------
 
-## Application Tools Available
+    def _get_agent(self, model_name: str):
+        """Get or create a LangChain 1.x create_agent graph for the given model."""
+        if model_name in self._agents:
+            return self._agents[model_name]
 
-The user has access to these tools through the application interface:
-
-### 1. Survival Analysis Search
-Users can search for datasets and run survival analysis by typing queries like:
-- "breast cancer survival BRCA1"
-- "lung adenocarcinoma prognosis"
-- "glioblastoma gene expression survival"
-
-When they submit a query, the app will:
-- Search NCBI GEO for relevant datasets
-- Extract survival/clinical data
-- Run Cox regression and Kaplan-Meier analysis
-- Identify genes associated with patient outcomes
-
-### 2. Query Estimation
-Before running analysis, the app estimates query quality showing:
-- Confidence score (how likely to find good results)
-- Estimated number of datasets
-- Suggestions to improve the query
-- Preview of matching GEO datasets
-
-### 3. Analysis Settings (adjustable in the interface)
-- **Dataset Count**: Number of datasets to analyze (default: 10)
-- **Ranking Multiplier**: How many extra datasets to fetch for ranking (default: 3x)
-- **Organism Filter**: Filter by organism (human, mouse, etc.)
-
-### 4. Results Display
-After analysis, users see:
-- **Gene Rankings**: Genes ranked by survival association strength
-- **Hazard Ratios**: HR > 1 = worse survival, HR < 1 = better survival
-- **Kaplan-Meier Curves**: Visual survival probability plots for high/low expression groups
-- **P-values**: Statistical significance (Cox and log-rank tests)
-- **Per-dataset Results**: Breakdown by individual GEO dataset
-
-## Your Role
-
-Help users effectively use these tools by:
-1. Suggesting well-formed search queries (include disease + "survival" or "prognosis")
-2. Explaining what the results mean biologically and clinically
-3. Recommending next steps based on their findings
-4. Interpreting hazard ratios, confidence intervals, and p-values
-5. Suggesting genes or pathways to explore further
-
-## Key Concepts
-- **Hazard Ratio (HR)**: Risk ratio between high/low expression groups
-  - HR > 1: High expression = worse survival (oncogenic)
-  - HR < 1: High expression = better survival (protective)
-- **Kaplan-Meier curves**: Survival probability over time for each group
-- **Log-rank test**: Statistical comparison of survival distributions
-
-## Guidelines
-- Be concise and actionable
-- Reference specific app features when relevant
-- Suggest concrete query improvements
-- Explain statistics in accessible terms
-- Never provide medical advice or diagnosis"""
-
-    def _create_chain(self, model_name: str):
-        """Create a conversation chain for the specified model."""
         if model_name not in self.models:
             raise ValueError(f"Model '{model_name}' not available")
 
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                ("system", self._system_prompt),
-                MessagesPlaceholder(variable_name="history"),
-                ("human", "{input}"),
-            ]
+        llm = self.models[model_name]
+        agent = create_react_agent(
+            llm,
+            self._tools,
+            prompt=self._system_prompt,
         )
+        self._agents[model_name] = agent
+        logger.info(
+            f"Created agent for model '{model_name}' with {len(self._tools)} tools"
+        )
+        return agent
 
+    def _create_chain(self, model_name: str):
+        """Fallback plain chain (used when no tools are injected)."""
+        if model_name not in self.models:
+            raise ValueError(f"Model '{model_name}' not available")
+
+        prompt = ChatPromptTemplate.from_messages([
+            ("system", self._system_prompt),
+            MessagesPlaceholder(variable_name="history"),
+            ("human", "{input}"),
+        ])
         return prompt | self.models[model_name]
 
+    # ------------------------------------------------------------------
+    # History helpers
+    # ------------------------------------------------------------------
+
+    def _trim_history(self, messages: list[BaseMessage]) -> list[BaseMessage]:
+        """
+        Trim history to fit within the context budget.
+
+        Keeps the most recent messages up to _MAX_HISTORY_CHARS characters.
+        Uses langchain_core trim_messages with a character-based counter
+        (approximation: 4 chars ≈ 1 token, budget = 4000 tokens).
+        """
+        total_chars = sum(len(getattr(m, "content", "")) for m in messages)
+        if total_chars <= _MAX_HISTORY_CHARS:
+            return messages
+
+        return trim_messages(
+            messages,
+            strategy="last",
+            max_tokens=_MAX_HISTORY_CHARS,
+            token_counter=lambda msgs: sum(
+                len(getattr(m, "content", "")) for m in msgs
+            ),
+            start_on="human",
+            end_on=("human", "tool"),
+            include_system=False,
+        )
+
+    def _convert_messages(self, messages: list[dict]) -> list[BaseMessage]:
+        """Convert dict messages to LangChain message objects."""
+        type_map = {
+            "user": HumanMessage,
+            "assistant": AIMessage,
+            "system": SystemMessage,
+        }
+        converted = []
+        for msg in messages:
+            cls = type_map.get(msg.get("role", "user"))
+            if cls:
+                converted.append(cls(content=msg.get("content", "")))
+        return converted
+
     def _build_context_note(self, estimation_context: dict) -> str:
-        """Build a context annotation string from estimation data."""
+        """Append query estimation data to the user message."""
         confidence = estimation_context.get("confidence_score", 0)
         suggestions = estimation_context.get("suggestions", [])
         geo_preview = estimation_context.get("geo_preview")
@@ -160,12 +197,6 @@ Help users effectively use these tools by:
             total = geo_preview.get("total_datasets", 0)
             survival_count = geo_preview.get("datasets_with_survival_keywords", 0)
             note += f", Found {total} datasets ({survival_count} with survival data)"
-
-            platform_counts = geo_preview.get("platform_counts", {})
-            if platform_counts:
-                platform_diversity = geo_preview.get("platform_diversity", "unknown")
-                note += f", Platform diversity: {platform_diversity}"
-
             warnings = geo_preview.get("warnings", [])
             if warnings:
                 note += f", Warnings: {warnings[0][:50]}..."
@@ -175,75 +206,93 @@ Help users effectively use these tools by:
         note += "]"
         return note
 
-    def _convert_messages(self, messages: list[dict]) -> list[BaseMessage]:
-        """Convert dict messages to LangChain message objects."""
-        converted = []
-        for msg in messages:
-            content = msg.get("content", "")
-            role = msg.get("role", "user")
-
-            if role == "user":
-                converted.append(HumanMessage(content=content))
-            elif role == "assistant":
-                converted.append(AIMessage(content=content))
-            elif role == "system":
-                converted.append(SystemMessage(content=content))
-
-        return converted
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     async def generate_response(
         self,
         messages: list[dict],
         model: str = "mistral",
         estimation_context: dict | None = None,
+        conversation_id: str | None = None,
     ) -> tuple[str, int | None]:
         """
         Generate a complete response.
 
+        Uses tool-calling agent if tools are configured, plain chain otherwise.
+
         Args:
-            messages: List of message dicts with 'role' and 'content'
-            model: Model to use ('mistral' or 'anthropic')
-            estimation_context: Optional query estimation data
+            messages: Full conversation history as dicts with 'role'/'content'
+            model: Model name ('mistral' or 'anthropic')
+            estimation_context: Optional pre-flight estimation data
+            conversation_id: Unused (history is passed directly via messages)
 
         Returns:
-            Tuple of (response text, total tokens used or None)
+            Tuple of (response text, tokens used or None)
         """
         if not messages:
             return "Hello! How can I help you with survival analysis today?", None
 
-        chain = self._create_chain(model)
-
-        # Split history and current input
-        history = self._convert_messages(messages[:-1])
-        current_input = messages[-1].get("content", "")
-
+        user_content = messages[-1].get("content", "")
+        augmented_input = user_content
         if estimation_context:
-            current_input += self._build_context_note(estimation_context)
+            augmented_input += self._build_context_note(estimation_context)
 
-        response = await chain.ainvoke({"history": history, "input": current_input})
+        history = self._trim_history(self._convert_messages(messages[:-1]))
+
+        if self._tools:
+            agent = self._get_agent(model)
+            # Build full message list for the agent: history + current input
+            agent_messages = history + [HumanMessage(content=augmented_input)]
+            result = await agent.ainvoke({"messages": agent_messages})
+            # Last message in the result state is the AI response
+            output_messages = result.get("messages", [])
+            response_text = ""
+            for msg in reversed(output_messages):
+                if isinstance(msg, AIMessage) and msg.content:
+                    content = msg.content
+                    if isinstance(content, list):
+                        # Anthropic tool-call responses: list of content blocks
+                        # Extract only text blocks, skip tool_use blocks
+                        parts = [
+                            block["text"] if isinstance(block, dict) else str(block)
+                            for block in content
+                            if not isinstance(block, dict) or block.get("type") == "text"
+                        ]
+                        response_text = "".join(parts).strip()
+                    else:
+                        response_text = content
+                    if response_text:
+                        break
+        else:
+            chain = self._create_chain(model)
+            response = await chain.ainvoke(
+                {"history": history, "input": augmented_input}
+            )
+            response_text = response.content
 
         tokens_used = None
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            tokens_used = (
-                response.usage_metadata.get("input_tokens", 0)
-                + response.usage_metadata.get("output_tokens", 0)
-            )
-
-        return response.content, tokens_used
+        return response_text, tokens_used
 
     async def stream_response(
         self,
         messages: list[dict],
         model: str = "mistral",
         estimation_context: dict | None = None,
+        conversation_id: str | None = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream response tokens.
 
+        When tools are configured, streams via astream_events (agent).
+        Falls back to plain chain streaming otherwise.
+
         Args:
-            messages: List of message dicts with 'role' and 'content'
-            model: Model to use
-            estimation_context: Optional query estimation data
+            messages: Full conversation history
+            model: Model name
+            estimation_context: Optional pre-flight estimation data
+            conversation_id: Unused (history is passed directly via messages)
 
         Yields:
             Response tokens as they are generated
@@ -252,18 +301,57 @@ Help users effectively use these tools by:
             yield "Hello! How can I help you with survival analysis today?"
             return
 
-        chain = self._create_chain(model)
-
-        history = self._convert_messages(messages[:-1])
-        current_input = messages[-1].get("content", "")
-
+        user_content = messages[-1].get("content", "")
+        augmented_input = user_content
         if estimation_context:
-            current_input += self._build_context_note(estimation_context)
+            augmented_input += self._build_context_note(estimation_context)
 
-        async for chunk in chain.astream({"history": history, "input": current_input}):
-            if hasattr(chunk, "content") and chunk.content:
-                yield chunk.content
+        history = self._trim_history(self._convert_messages(messages[:-1]))
+
+        if self._tools:
+            agent = self._get_agent(model)
+            agent_messages = history + [HumanMessage(content=augmented_input)]
+            async for event in agent.astream_events(
+                {"messages": agent_messages}, version="v2"
+            ):
+                if event["event"] == "on_chat_model_stream":
+                    chunk = event["data"].get("chunk")
+                    if chunk and hasattr(chunk, "content") and chunk.content:
+                        yield chunk.content
+        else:
+            chain = self._create_chain(model)
+            async for chunk in chain.astream(
+                {"history": history, "input": augmented_input}
+            ):
+                if hasattr(chunk, "content") and chunk.content:
+                    yield chunk.content
 
     def get_available_models(self) -> list[str]:
         """Get list of available model names."""
         return list(self.models.keys())
+
+    def _build_system_prompt(self) -> str:
+        """Build the system prompt for the chat assistant."""
+        return """You are a bioinformatics assistant for a GEO Survival Analysis application. You help users analyze gene expression survival associations from NCBI GEO datasets.
+
+You have access to tools that let you directly search datasets, estimate query quality, search GEO in real time, run survival analyses, and look up gene information. Use them proactively.
+
+## Tools Available
+
+- **search_known_datasets**: Search the indexed local GEO dataset catalogue semantically
+- **estimate_query**: Check confidence and get suggestions before recommending a run
+- **search_geo_datasets**: Live GEO search to preview available datasets
+- **get_gene_info**: Retrieve NCBI gene summaries
+
+## Key Concepts
+- **Hazard Ratio (HR)**: HR > 1 = worse survival (oncogenic); HR < 1 = protective
+- **Kaplan-Meier curves**: Survival probability over time per expression group
+- **Log-rank test**: Statistical comparison of survival distributions between groups
+
+## Guidelines
+- NEVER run the analysis yourself — the user must click "Run Analysis" explicitly
+- Use estimate_query to check confidence and surface the estimation popup for the user
+- Use search_known_datasets first to answer "do we have X data?" questions
+- Suggest survival-specific query improvements (add "overall survival", "prognosis")
+- Explain statistics in accessible terms
+- Never provide medical advice or diagnosis"""

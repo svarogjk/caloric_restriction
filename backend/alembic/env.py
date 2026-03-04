@@ -15,14 +15,14 @@ from alembic import context
 
 # Import our models and database config
 from app.models.database import Base
-from app.config.database import get_database_url
+from app.config.database import DATABASE_URL
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
 # Set the database URL from our configuration
-config.set_main_option("sqlalchemy.url", get_database_url())
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:

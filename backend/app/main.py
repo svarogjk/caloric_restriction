@@ -11,6 +11,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.services.geo_survival_workflow_orchestrator import GEOSurvivalWorkflowOrchestrator
+from app.services.chat.dataset_rag_service import DatasetRAGService
+from app.services.chat.geo_preview_service import GEOPreviewService
+from app.services.chat.agent_tools import build_tools
 from app.api import routes, chat_routes, auth_routes
 from app.config.logging_config import setup_logging, get_logger
 from app.config.database import init_db, close_db
@@ -36,13 +39,31 @@ async def lifespan(app: FastAPI):
     await init_db()
     logger.info("Database initialized")
 
+    # Initialize survival analysis orchestrator
     orchestrator = GEOSurvivalWorkflowOrchestrator(
         email=settings.email,
         model="mistral"
     )
-
-    # Set orchestrator in routes module
     routes.set_orchestrator(orchestrator)
+
+    # Initialize RAG service and index local datasets into pgvector
+    rag_service = DatasetRAGService.from_env()
+    try:
+        n_indexed = await rag_service.index_datasets()
+        logger.info(f"RAG index ready ({n_indexed} new documents embedded)")
+    except (ConnectionError, RuntimeError) as exc:
+        logger.warning(f"RAG indexing skipped (DB may be offline): {exc}")
+
+    # Build and inject agent tools
+    geo_preview_service = GEOPreviewService()
+    estimation_service = chat_routes.get_estimation_service()
+    tools = build_tools(
+        rag_service=rag_service,
+        estimation_service=estimation_service,
+        geo_preview_service=geo_preview_service,
+        orchestrator=orchestrator,
+    )
+    chat_routes.set_tools(tools)
 
     yield
 

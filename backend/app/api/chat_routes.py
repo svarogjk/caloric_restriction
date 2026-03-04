@@ -43,6 +43,16 @@ def get_estimation_service() -> QueryEstimationService:
     return _estimation_service
 
 
+def set_tools(tools: list) -> None:
+    """
+    Inject agent tools into the LangChain service singleton.
+
+    Called from app lifespan once all services are ready.
+    """
+    get_langchain_service().set_tools(tools)
+    logger.info(f"Injected {len(tools)} tools into LangChainService")
+
+
 async def get_chat_service(
     db: AsyncSession = Depends(get_db),
 ) -> ChatService:

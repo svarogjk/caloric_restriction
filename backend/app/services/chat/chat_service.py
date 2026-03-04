@@ -9,6 +9,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import AsyncGenerator, Optional
 
+import httpx
+import anthropic
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.chat.conversation_service import ConversationService, ConversationData
@@ -193,11 +195,20 @@ class ChatService:
         )
 
         # 4. Generate AI response
-        response_content, tokens_used = await self.langchain_service.generate_response(
-            messages=messages,
-            model=model,
-            estimation_context=estimation_dict,
-        )
+        try:
+            response_content, tokens_used = await self.langchain_service.generate_response(
+                messages=messages,
+                model=model,
+                estimation_context=estimation_dict,
+            )
+        except (httpx.HTTPStatusError, httpx.RequestError, anthropic.APIStatusError) as exc:
+            logger.warning(f"LLM call failed ({type(exc).__name__}): {exc}")
+            response_content = (
+                "I'm having trouble reaching the AI service right now. "
+                "Your query has been analysed — see the estimation above. "
+                "Please try again in a moment."
+            )
+            tokens_used = None
 
         # 5. Save assistant message
         assistant_message = await self.conversation_service.add_message(

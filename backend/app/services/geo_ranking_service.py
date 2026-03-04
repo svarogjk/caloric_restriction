@@ -5,6 +5,7 @@ Similar architecture to paper_ranking_service.py
 """
 
 import logging
+from pathlib import Path
 from typing import List, Dict, Any, Optional, Set
 import json
 import asyncio
@@ -18,6 +19,8 @@ from app.services.geo_client import GEODataset
 from app.services.gene_mapping_service import GeneMappingService
 
 logger = logging.getLogger(__name__)
+
+_PLATFORM_SIZE_CACHE_PATH = Path(__file__).parent.parent.parent / "platform_mappings" / ".platform_size_cache.json"
 
 # Known methylation and non-expression array platforms that cannot be used for gene expression survival analysis
 # These will be filtered out early to avoid wasting time on them
@@ -101,6 +104,7 @@ class GEODatasetRankingService:
         self.model = model
         self.gene_mapping_service = GeneMappingService()
         self._platform_size_cache: Dict[str, Optional[float]] = {}
+        self._load_platform_size_cache()
         # Compile non-expression patterns for efficiency
         self._non_expression_regex = re.compile(
             '|'.join(NON_EXPRESSION_PATTERNS), 
@@ -116,6 +120,25 @@ class GEODatasetRankingService:
             model_settings=ModelSettings(max_tokens=8192),
         )
     
+    def _load_platform_size_cache(self) -> None:
+        """Load persisted platform size cache from disk."""
+        try:
+            if _PLATFORM_SIZE_CACHE_PATH.exists():
+                with open(_PLATFORM_SIZE_CACHE_PATH, 'r') as f:
+                    self._platform_size_cache = json.load(f)
+                logger.debug(f"Loaded {len(self._platform_size_cache)} cached platform sizes")
+        except (OSError, json.JSONDecodeError) as e:
+            logger.debug(f"Could not load platform size cache: {e}")
+
+    def _save_platform_size_cache(self) -> None:
+        """Persist platform size cache to disk."""
+        try:
+            _PLATFORM_SIZE_CACHE_PATH.parent.mkdir(exist_ok=True)
+            with open(_PLATFORM_SIZE_CACHE_PATH, 'w') as f:
+                json.dump(self._platform_size_cache, f)
+        except OSError as e:
+            logger.debug(f"Could not save platform size cache: {e}")
+
     def _is_methylation_or_non_expression(self, dataset: GEODataset) -> bool:
         """
         Check if a dataset uses a methylation or non-expression platform.
@@ -541,6 +564,7 @@ Also provide:
                         size_mb = await self.gene_mapping_service.get_platform_size_mb(platform)
                         if size_mb is not None:
                             self._platform_size_cache[platform] = size_mb
+                            self._save_platform_size_cache()
                     
                     if size_mb is not None:
                         total_size += size_mb

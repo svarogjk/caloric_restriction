@@ -9,6 +9,7 @@ import asyncio
 import json
 import os
 import io
+from collections import OrderedDict
 from typing import Dict, Optional, List
 from pathlib import Path
 import pandas as pd
@@ -22,7 +23,7 @@ class GeneMappingService:
     Service for mapping probe IDs to gene symbols using GEO platform annotations
     """
     
-    CACHE_DIR = Path("/tmp/gpl_cache")
+    CACHE_DIR = Path(__file__).parent.parent.parent / "platform_mappings"
     MEMORY_CACHE_FILE = CACHE_DIR / ".memory_cache_index.json"
     EMPTY_MAPPING_PLATFORMS_FILE = CACHE_DIR / ".empty_mapping_platforms.json"
     PARTIAL_DOWNLOADS_DIR = CACHE_DIR / ".partial_downloads"
@@ -44,8 +45,8 @@ class GeneMappingService:
         self.client = httpx.AsyncClient(timeout=1800.0, follow_redirects=True)  # Increased from 600s to 1800s (30 minutes)
         # Cache only platform IDs, not the actual mappings (to save memory)
         self._cached_platform_ids: set = set()
-        # Small in-memory cache for recently accessed mappings (LRU-like)
-        self._mapping_cache: Dict[str, Dict[str, str]] = {}
+        # Small in-memory LRU cache for recently accessed mappings
+        self._mapping_cache: OrderedDict[str, Dict[str, str]] = OrderedDict()
         self.MAX_CACHE_SIZE = 3  # Only keep 3 platforms in memory
         # Track known invalid platforms (404 errors) to avoid repeated failed attempts
         self._invalid_platforms: set = set()
@@ -253,6 +254,22 @@ class GeneMappingService:
             traceback.print_exc()
             return {}
     
+    def _cache_get(self, platform_id: str) -> Optional[Dict[str, str]]:
+        """Get from LRU cache, promoting entry to most-recently-used position."""
+        if platform_id in self._mapping_cache:
+            self._mapping_cache.move_to_end(platform_id)
+            return self._mapping_cache[platform_id]
+        return None
+
+    def _cache_put(self, platform_id: str, mapping: Dict[str, str]) -> None:
+        """Insert into LRU cache, evicting the least-recently-used entry when at capacity."""
+        if platform_id in self._mapping_cache:
+            self._mapping_cache.move_to_end(platform_id)
+        self._mapping_cache[platform_id] = mapping
+        if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
+            evicted, _ = self._mapping_cache.popitem(last=False)
+            logger.debug(f"LRU-evicted {evicted} from memory cache")
+
     async def close(self):
         """Close HTTP client"""
         await self.client.aclose()
@@ -316,9 +333,10 @@ class GeneMappingService:
         normalized_id = platform_id if platform_id.startswith('GPL') else f'GPL{platform_id}'
 
         # Check small in-memory cache first
-        if normalized_id in self._mapping_cache:
+        cached = self._cache_get(normalized_id)
+        if cached is not None:
             logger.debug(f"Using in-memory cache for {normalized_id}")
-            return self._mapping_cache[normalized_id]
+            return cached
         
         # Check if this platform is known to have no gene mappings (skip download entirely)
         if normalized_id in self._empty_mapping_platforms or platform_id in self._empty_mapping_platforms:
@@ -334,13 +352,7 @@ class GeneMappingService:
                 if mapping:
                     # Only keep small mappings in memory cache (< 100k entries)
                     if len(mapping) < 100000:
-                        self._mapping_cache[normalized_id] = mapping
-                        # Enforce max cache size - remove oldest if over limit
-                        if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
-                            oldest = next(iter(self._mapping_cache))
-                            del self._mapping_cache[oldest]
-                            logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
-                    
+                        self._cache_put(normalized_id, mapping)
                     return mapping
                 else:
                     logger.warning(f"Pre-built file for {platform_id} exists but is empty")
@@ -361,15 +373,10 @@ class GeneMappingService:
                 
                 if id_col in mapping_df.columns and symbol_col in mapping_df.columns:
                     mapping = dict(zip(mapping_df[id_col], mapping_df[symbol_col]))
-                    
+
                     # Only keep small mappings in memory cache (< 100k entries)
                     if len(mapping) < 100000:
-                        self._mapping_cache[normalized_id] = mapping
-                        # Enforce max cache size - remove oldest if over limit
-                        if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
-                            oldest = next(iter(self._mapping_cache))
-                            del self._mapping_cache[oldest]
-                            logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+                        self._cache_put(normalized_id, mapping)
                     
                     logger.info(f"Loaded mapping for {platform_id} from platform_mappings: {len(mapping)} probes")
                     return mapping
@@ -390,12 +397,7 @@ class GeneMappingService:
         if mapping:
             # Only keep small mappings in memory
             if len(mapping) < 100000:
-                self._mapping_cache[normalized_id] = mapping
-                # Enforce max cache size
-                if len(self._mapping_cache) > self.MAX_CACHE_SIZE:
-                    oldest = next(iter(self._mapping_cache))
-                    del self._mapping_cache[oldest]
-                    logger.debug(f"Evicted {oldest} from memory cache (size limit reached)")
+                self._cache_put(normalized_id, mapping)
             
             # Save to disk cache
             if use_cache:

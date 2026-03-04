@@ -121,6 +121,7 @@ export interface ChatState {
     analysisResults: AnalysisResult | null
     analysisLoading: boolean
     analysisError: string | null
+    conversationsLastFetched: number | null
 }
 
 const initialState: ChatState = {
@@ -142,9 +143,12 @@ const initialState: ChatState = {
     analysisResults: null,
     analysisLoading: false,
     analysisError: null,
+    conversationsLastFetched: null,
 }
 
 // ==================== Async Thunks ====================
+
+const CONVERSATIONS_CACHE_TTL_MS = 30_000
 
 export const fetchConversations = createAsyncThunk(
     'chat/fetchConversations',
@@ -154,6 +158,15 @@ export const fetchConversations = createAsyncThunk(
         } catch (error) {
             return rejectWithValue(error instanceof Error ? error.message : 'Failed to fetch conversations')
         }
+    },
+    {
+        condition: (_, { getState }): boolean => {
+            const { conversationsLastFetched } = (getState() as { chat: ChatState }).chat
+            if (conversationsLastFetched !== null && Date.now() - conversationsLastFetched < CONVERSATIONS_CACHE_TTL_MS) {
+                return false
+            }
+            return true
+        },
     }
 )
 
@@ -318,6 +331,7 @@ const chatSlice = createSlice({
             .addCase(fetchConversations.fulfilled, (state, action) => {
                 state.isLoading = false
                 state.conversations = action.payload
+                state.conversationsLastFetched = Date.now()
             })
             .addCase(fetchConversations.rejected, (state, action) => {
                 state.isLoading = false
@@ -379,6 +393,7 @@ const chatSlice = createSlice({
             })
             .addCase(sendMessage.fulfilled, (state, action) => {
                 state.isLoading = false
+                state.conversationsLastFetched = null  // invalidate: updatedAt changed server-side
                 // Add assistant message
                 const assistantMessage: Message = {
                     id: action.payload.messageId,
