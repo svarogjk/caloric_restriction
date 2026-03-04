@@ -73,12 +73,3 @@ export const getCurrentUser = async (token: string): Promise<User> => {
     })
     return response.data
 }
-
-export const isTokenValid = async (token: string): Promise<boolean> => {
-    try {
-        await getCurrentUser(token)
-        return true
-    } catch {
-        return false
-    }
-}

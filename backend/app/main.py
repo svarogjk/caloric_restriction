@@ -14,6 +14,7 @@ from app.services.geo_survival_workflow_orchestrator import GEOSurvivalWorkflowO
 from app.api import routes, chat_routes, auth_routes
 from app.config.logging_config import setup_logging, get_logger
 from app.config.database import init_db, close_db
+from app.config.settings import settings
 
 # Setup logging to console and file
 setup_logging(level=logging.DEBUG)
@@ -36,7 +37,7 @@ async def lifespan(app: FastAPI):
     logger.info("Database initialized")
 
     orchestrator = GEOSurvivalWorkflowOrchestrator(
-        email="svarogjk1989@gmail.com",
+        email=settings.email,
         model="mistral"
     )
 

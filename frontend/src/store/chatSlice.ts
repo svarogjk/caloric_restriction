@@ -61,7 +61,6 @@ export interface Message {
     modelUsed?: string
     estimation?: QueryEstimation
     suggestedActions?: string[]
-    isStreaming?: boolean
 }
 
 export interface DatasetPreview {
@@ -109,7 +108,6 @@ export interface ChatState {
     activeConversation: Conversation | null
     messages: Message[]
     isLoading: boolean
-    isStreaming: boolean
     error: string | null
     currentEstimation: QueryEstimation | null
     selectedModel: 'mistral' | 'anthropic'
@@ -131,7 +129,6 @@ const initialState: ChatState = {
     activeConversation: null,
     messages: [],
     isLoading: false,
-    isStreaming: false,
     error: null,
     currentEstimation: null,
     selectedModel: 'mistral',
@@ -285,9 +282,6 @@ const chatSlice = createSlice({
         },
         addMessage: (state, action: PayloadAction<Message>) => {
             state.messages.push(action.payload)
-        },
-        setStreaming: (state, action: PayloadAction<boolean>) => {
-            state.isStreaming = action.payload
         },
         setSelectedModel: (state, action: PayloadAction<'mistral' | 'anthropic'>) => {
             state.selectedModel = action.payload
@@ -465,7 +459,6 @@ const chatSlice = createSlice({
 export const {
     setActiveConversation,
     addMessage,
-    setStreaming,
     setSelectedModel,
     clearEstimation,
     clearError,

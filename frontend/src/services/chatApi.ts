@@ -265,11 +265,4 @@ export const chatApi = {
         await chatClient.delete(`/conversations/${conversationId}`)
     },
 
-    /**
-     * Get available chat models
-     */
-    async getModels(): Promise<string[]> {
-        const response = await chatClient.get('/models')
-        return response.data
-    },
 }

@@ -6,7 +6,6 @@ import sys
 from typing import Optional
 
 import click
-from sqlalchemy import text
 
 from app.config.database import get_db
 from app.utils.query_monitor import QueryMonitor, enable_query_monitoring
