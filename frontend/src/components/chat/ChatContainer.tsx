@@ -12,6 +12,7 @@ import {
     setRankingMultiplier,
     setOrganism,
     setCancerGenesOnly,
+    setGeneFilterInput,
     runAnalysis,
     clearAnalysisResults,
 } from '../../store/chatSlice'
@@ -20,6 +21,7 @@ import MessageList from './MessageList'
 import ChatInput from './ChatInput'
 import QueryEstimation from './QueryEstimation'
 import AnalysisResultsDisplay from './AnalysisResultsDisplay'
+import AnalysisProgress from './AnalysisProgress'
 
 const ChatContainer: React.FC = () => {
     const dispatch = useDispatch<AppDispatch>()
@@ -36,9 +38,13 @@ const ChatContainer: React.FC = () => {
         rankingMultiplier,
         organism,
         cancerGenesOnly,
+        geneFilterInput,
         analysisResults,
         analysisLoading,
         analysisError,
+        analysisProgress,
+        isStreaming,
+        streamingContent,
     } = useSelector((state: RootState) => state.chat)
 
     const [settingsOpen, setSettingsOpen] = useState(false)
@@ -211,6 +217,27 @@ const ChatContainer: React.FC = () => {
                                 </label>
                             </div>
                         </div>
+
+                        {/* Candidate Genes Batch Mode */}
+                        <div className="mt-3">
+                            <label htmlFor="chat-gene-filter" className="text-sm font-medium text-gray-700 block mb-1">
+                                Candidate Genes (optional batch mode)
+                            </label>
+                            <textarea
+                                id="chat-gene-filter"
+                                value={geneFilterInput}
+                                onChange={(e) => dispatch(setGeneFilterInput(e.target.value))}
+                                placeholder={"TP53\nBRCA1\nMYC\nEGFR\nPIK3CA\n(one per line or comma-separated)"}
+                                rows={4}
+                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md bg-white resize-y font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            />
+                            {geneFilterInput.trim() && (
+                                <p className="text-xs text-indigo-600 mt-1">
+                                    {geneFilterInput.split(/[\n,]+/).map((g) => g.trim()).filter((g) => g.length > 0).length} genes selected — analysis restricted to these candidates
+                                </p>
+                            )}
+                        </div>
+
                         <p className="text-xs text-gray-500 mt-2">
                             These settings affect survival analysis when running queries.
                         </p>
@@ -234,20 +261,24 @@ const ChatContainer: React.FC = () => {
                     </div>
                 )}
 
-                {/* Analysis Loading Indicator */}
+                {/* Analysis Progress (SSE streaming) */}
                 {analysisLoading && (
-                    <div className="mx-4 mt-2 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
-                        <div className="flex items-center gap-3">
-                            <svg className="animate-spin h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24">
-                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                            </svg>
-                            <div>
-                                <p className="text-sm font-medium text-indigo-800">Running Survival Analysis...</p>
-                                <p className="text-xs text-indigo-600">This may take a few minutes depending on the number of datasets.</p>
+                    analysisProgress ? (
+                        <AnalysisProgress progress={analysisProgress} />
+                    ) : (
+                        <div className="mx-4 mt-2 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
+                            <div className="flex items-center gap-3">
+                                <svg className="animate-spin h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24">
+                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <div>
+                                    <p className="text-sm font-medium text-indigo-800">Starting analysis...</p>
+                                    <p className="text-xs text-indigo-600">Connecting to analysis stream.</p>
+                                </div>
                             </div>
                         </div>
-                    </div>
+                    )
                 )}
 
                 {/* Analysis Results */}
@@ -264,6 +295,8 @@ const ChatContainer: React.FC = () => {
                 <MessageList
                     messages={messages}
                     isLoading={isLoading}
+                    isStreaming={isStreaming}
+                    streamingContent={streamingContent}
                     onRunAnalysis={handleRunAnalysis}
                     onModifyQuery={handleModifyQuery}
                     onExampleClick={handleSendMessage}
@@ -273,7 +306,7 @@ const ChatContainer: React.FC = () => {
                 {/* Input */}
                 <ChatInput
                     onSend={handleSendMessage}
-                    disabled={isLoading || analysisLoading}
+                    disabled={isLoading || isStreaming || analysisLoading}
                     placeholder="Ask about survival analysis, genes, or GEO datasets..."
                     value={inputValue}
                     onChange={setInputValue}

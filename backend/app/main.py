@@ -15,6 +15,8 @@ from app.services.chat.dataset_rag_service import DatasetRAGService
 from app.services.chat.geo_preview_service import GEOPreviewService
 from app.services.chat.agent_tools import build_tools
 from app.api import routes, chat_routes, auth_routes
+from app.api.enrichment_routes import router as enrichment_router
+from app.api.compare_routes import router as compare_router
 from app.config.logging_config import setup_logging, get_logger
 from app.config.database import init_db, close_db
 from app.config.settings import settings
@@ -93,6 +95,8 @@ app.add_middleware(
 app.include_router(routes.router, prefix="/api")
 app.include_router(chat_routes.router, prefix="/api")
 app.include_router(auth_routes.router, prefix="/api")
+app.include_router(enrichment_router, prefix="/api")
+app.include_router(compare_router, prefix="/api")
 
 
 if __name__ == "__main__":

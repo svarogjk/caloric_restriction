@@ -68,6 +68,10 @@ class GeneSurvivalResult:
     # KM curve data for visualization
     km_curve_high: Optional[KMCurveData] = None
     km_curve_low: Optional[KMCurveData] = None
+    # Multivariate Cox results (F13)
+    adjusted_hazard_ratio: Optional[float] = None
+    multivariate_cox_p: Optional[float] = None
+    covariates_used: Optional[List[str]] = None
 
 
 @dataclass 
@@ -110,6 +114,10 @@ class SurvivalDataDetectionResponse(BaseModel):
     reasoning: str = Field(
         ...,
         description="Explanation of how survival data was identified"
+    )
+    covariate_columns: List[str] = Field(
+        default_factory=list,
+        description="Column names for clinical covariates (age, stage, grade, treatment) to use in multivariate Cox"
     )
 
 
@@ -385,6 +393,7 @@ Determine if this dataset contains survival data and identify the relevant colum
                     event_type = event_kw
                     break
 
+            covariate_cols = self._detect_covariate_columns(metadata_df, exclude={time_col, event_col})
             logger.info(f"Regex fallback detected survival data: time='{time_col}', event='{event_col}', unit={time_unit}")
             return SurvivalDataDetectionResponse(
                 has_survival_data=True,
@@ -392,7 +401,8 @@ Determine if this dataset contains survival data and identify the relevant colum
                 event_column=event_col,
                 survival_time_unit=time_unit,
                 event_type=event_type,
-                reasoning=f"Regex fallback detected time column '{time_col}' and event column '{event_col}'"
+                reasoning=f"Regex fallback detected time column '{time_col}' and event column '{event_col}'",
+                covariate_columns=covariate_cols,
             )
 
         logger.debug(f"Regex fallback found no survival data in {loaded_data.accession}")
@@ -456,10 +466,12 @@ Determine if this dataset contains survival data and identify the relevant colum
 
             time_unit = detection.survival_time_unit
             event_type = detection.event_type
+            covariate_columns = list(detection.covariate_columns) if detection.covariate_columns else []
 
             logger.info(f"Detected survival columns: time={survival_time_col}, event={event_col}")
         else:
             event_type = "death"
+            covariate_columns = []
         
         # Extract survival data from metadata
         try:
@@ -485,20 +497,32 @@ Determine if this dataset contains survival data and identify the relevant colum
         
         expression_matrix = loaded_data.expression_matrix[common_samples]
         survival_df = survival_df.loc[common_samples]
-        
+
+        # Align metadata to common_samples for multivariate Cox (F13)
+        metadata_aligned: Optional[pd.DataFrame] = None
+        if covariate_columns and loaded_data.sample_metadata is not None:
+            try:
+                metadata_aligned = loaded_data.sample_metadata.loc[
+                    loaded_data.sample_metadata.index.intersection(common_samples)
+                ].reindex(common_samples)
+            except Exception as e:
+                logger.debug(f"Could not align metadata for multivariate Cox: {e}")
+
         logger.info(f"Analyzing {len(expression_matrix)} genes across {len(common_samples)} samples")
-        
+
         # Perform survival analysis for each gene
         significant_genes = []
         n_analyzed = 0
-        
+
         for gene_id in expression_matrix.index:
             try:
                 gene_result = self._analyze_gene_survival(
                     gene_id=gene_id,
                     expression=expression_matrix.loc[gene_id],
                     survival_df=survival_df,
-                    probe_to_gene=loaded_data.probe_to_gene_mapping
+                    probe_to_gene=loaded_data.probe_to_gene_mapping,
+                    metadata_df=metadata_aligned,
+                    covariate_columns=covariate_columns if metadata_aligned is not None else None,
                 )
                 
                 n_analyzed += 1
@@ -648,12 +672,104 @@ Determine if this dataset contains survival data and identify the relevant colum
 
         return result
     
+    def _detect_covariate_columns(
+        self,
+        metadata_df: pd.DataFrame,
+        exclude: Optional[set] = None,
+    ) -> List[str]:
+        """
+        Identify clinical covariate columns (age, stage, grade, treatment) suitable
+        for multivariate Cox regression.  Returns column names that have >70% non-null
+        values and appear clinically relevant.
+        """
+        exclude = exclude or set()
+        covariate_keywords = [
+            'age', 'stage', 'grade', 'treatment', 'therapy', 'gender', 'sex',
+            'tumor_size', 'size', 'node', 'metastasis', 'er_status', 'pr_status',
+            'her2', 'histology', 'subtype', 'race', 'ethnicity', 'performance',
+        ]
+        found: List[str] = []
+        for col in metadata_df.columns:
+            if col in exclude:
+                continue
+            coverage = metadata_df[col].notna().mean()
+            if coverage < 0.7:
+                continue
+            col_lower = col.lower()
+            if any(kw in col_lower for kw in covariate_keywords):
+                found.append(col)
+        return found
+
+    def _fit_multivariate_cox(
+        self,
+        expression_col: pd.Series,
+        time_col: pd.Series,
+        event_col: pd.Series,
+        metadata_df: pd.DataFrame,
+        covariate_candidates: List[str],
+    ) -> Tuple[Optional[float], Optional[float], Optional[List[str]]]:
+        """
+        Fit a multivariate Cox model adjusting for clinical covariates.
+
+        Returns:
+            (adjusted_hr, adjusted_p, covariates_used) or (None, None, None) on failure.
+        """
+        try:
+            # Filter covariates: must exist in metadata, have >70% non-null
+            usable: List[str] = []
+            for col in covariate_candidates:
+                if col not in metadata_df.columns:
+                    continue
+                coverage = metadata_df[col].notna().mean()
+                if coverage < 0.7:
+                    continue
+                usable.append(col)
+
+            if not usable:
+                return None, None, None
+
+            # Build analysis dataframe
+            df = pd.DataFrame({
+                "expression": expression_col,
+                "time": time_col,
+                "event": event_col,
+            })
+            for col in usable:
+                df[col] = metadata_df[col].values
+
+            df = df.dropna()
+            if len(df) < 20:
+                return None, None, None
+
+            # One-hot encode string/object columns
+            cat_cols = [c for c in usable if df[c].dtype == object]
+            if cat_cols:
+                df = pd.get_dummies(df, columns=cat_cols, drop_first=True)
+                usable = [c for c in df.columns if c not in ("expression", "time", "event")]
+
+            cph = CoxPHFitter()
+            cph.fit(df, duration_col="time", event_col="event")
+
+            if "expression" not in cph.summary.index:
+                return None, None, None
+
+            expr_row = cph.summary.loc["expression"]
+            adjusted_hr = float(np.exp(expr_row["coef"]))
+            adjusted_p = float(expr_row["p"])
+            return adjusted_hr, adjusted_p, usable
+
+        except Exception as e:
+            logger.debug(f"Multivariate Cox failed: {e}")
+            return None, None, None
+
     def _analyze_gene_survival(
         self,
         gene_id: str,
         expression: pd.Series,
         survival_df: pd.DataFrame,
-        probe_to_gene: Optional[Dict[str, str]] = None
+        probe_to_gene: Optional[Dict[str, str]] = None,
+        metadata_df: Optional[pd.DataFrame] = None,
+        covariate_columns: Optional[List[str]] = None,
     ) -> Optional[GeneSurvivalResult]:
         """
         Analyze survival association for a single gene
@@ -780,6 +896,24 @@ Determine if this dataset contains survival data and identify the relevant colum
                 return None
             return float(value)
         
+        # Multivariate Cox regression with clinical covariates (F13)
+        adjusted_hr: Optional[float] = None
+        adjusted_p: Optional[float] = None
+        covariates_used: Optional[List[str]] = None
+        if metadata_df is not None and covariate_columns:
+            # Align metadata to the same samples as survival_df (after valid_mask filter)
+            aligned_meta = metadata_df.loc[
+                metadata_df.index.intersection(survival_data.index)
+            ] if metadata_df.index.name == survival_data.index.name or set(metadata_df.index).issuperset(set(survival_data.index)) else None
+            if aligned_meta is not None and len(aligned_meta) == len(survival_data):
+                adjusted_hr, adjusted_p, covariates_used = self._fit_multivariate_cox(
+                    expression_col=expression,
+                    time_col=survival_data['time'],
+                    event_col=survival_data['event'],
+                    metadata_df=aligned_meta,
+                    covariate_candidates=covariate_columns,
+                )
+
         return GeneSurvivalResult(
             gene_id=gene_id,
             gene_symbol=gene_symbol,
@@ -795,7 +929,10 @@ Determine if this dataset contains survival data and identify the relevant colum
             n_samples_high=n_high,
             n_samples_low=n_low,
             km_curve_high=km_curve_high,
-            km_curve_low=km_curve_low
+            km_curve_low=km_curve_low,
+            adjusted_hazard_ratio=safe_float(adjusted_hr),
+            multivariate_cox_p=safe_float(adjusted_p),
+            covariates_used=covariates_used,
         )
     
     def generate_kaplan_meier_data(

@@ -5,19 +5,21 @@ import { Message } from '../../store/chatSlice'
 interface MessageListProps {
     messages: Message[]
     isLoading: boolean
+    isStreaming?: boolean
+    streamingContent?: string
     className?: string
     onRunAnalysis?: (query: string) => void
     onModifyQuery?: (query: string) => void
     onExampleClick?: (example: string) => void
 }
 
-const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, className = '', onRunAnalysis, onModifyQuery, onExampleClick }) => {
+const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, isStreaming = false, streamingContent = '', className = '', onRunAnalysis, onModifyQuery, onExampleClick }) => {
     const messagesEndRef = useRef<HTMLDivElement>(null)
 
-    // Auto-scroll to bottom when new messages arrive
+    // Auto-scroll to bottom when new messages arrive or streaming content grows
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    }, [messages])
+    }, [messages, streamingContent])
 
     if (messages.length === 0 && !isLoading) {
         return (
@@ -81,7 +83,31 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, classNam
                     />
                 ))}
 
-                {isLoading && (
+                {isStreaming && (
+                    <div className="flex items-start gap-3">
+                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                            <span className="text-blue-600 text-sm font-medium">AI</span>
+                        </div>
+                        <div className="max-w-[70%]">
+                            <div className="bg-gray-100 rounded-lg px-4 py-3">
+                                <div className="text-sm text-gray-800 whitespace-pre-wrap">
+                                    {streamingContent || (
+                                        <div className="flex items-center gap-1">
+                                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                                            <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                                        </div>
+                                    )}
+                                    {streamingContent && (
+                                        <span className="animate-pulse">&#9612;</span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {isLoading && !isStreaming && (
                     <div className="flex items-start gap-3">
                         <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center">
                             <span className="text-blue-600 text-sm font-medium">AI</span>

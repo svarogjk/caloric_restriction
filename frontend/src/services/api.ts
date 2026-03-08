@@ -82,6 +82,138 @@ export interface SurvivalAnalysisResponse {
     common_genes: GeneSurvivalResponse[]
     processing_time: number
     timestamp: string
+    result_id?: string | null
+}
+
+export interface AnalysisProgressEvent {
+    stage: string
+    message: string
+    current?: number | null
+    total?: number | null
+}
+
+export function streamAnalysis(
+    query: string,
+    model: string,
+    maxDatasets: number = 10,
+    rankingMultiplier: number = 3,
+    organism: string | null = null,
+    cancerGenesOnly: boolean = false,
+    geneFilter: string[] | null = null,
+    minOccurrence: number = 2,
+    onProgress: (event: AnalysisProgressEvent) => void,
+    onComplete: (result: SurvivalAnalysisResponse) => void,
+    onError: (message: string) => void,
+): EventSource {
+    const params = new URLSearchParams({
+        query,
+        model,
+        max_datasets: String(maxDatasets),
+        ranking_multiplier: String(rankingMultiplier),
+        min_occurrence: String(minOccurrence),
+        cancer_genes_only: String(cancerGenesOnly),
+    })
+    if (organism) {
+        params.set('organism', organism)
+    }
+    if (geneFilter && geneFilter.length > 0) {
+        for (const gene of geneFilter) {
+            params.append('gene_filter', gene)
+        }
+    }
+
+    const es = new EventSource(`/api/search/stream?${params.toString()}`)
+
+    es.onmessage = (event: MessageEvent) => {
+        try {
+            const data = JSON.parse(event.data as string) as {
+                stage: string
+                message?: string
+                current?: number | null
+                total?: number | null
+                result?: SurvivalAnalysisResponse
+            }
+            if (data.stage === 'result') {
+                es.close()
+                onComplete(data.result!)
+            } else if (data.stage === 'error') {
+                es.close()
+                onError(data.message ?? 'Unknown error')
+            } else {
+                onProgress({
+                    stage: data.stage,
+                    message: data.message ?? '',
+                    current: data.current ?? undefined,
+                    total: data.total ?? undefined,
+                })
+            }
+        } catch (parseErr) {
+            console.error('SSE parse error:', parseErr)
+        }
+    }
+
+    es.onerror = () => {
+        es.close()
+        onError('Connection lost during analysis')
+    }
+
+    return es
+}
+
+export async function getAnalysisResult(resultId: string): Promise<SurvivalAnalysisResponse> {
+    const response = await axios.get<SurvivalAnalysisResponse>(`/api/results/${resultId}`)
+    return response.data
+}
+
+export async function listAnalysisResults(limit = 20, offset = 0): Promise<AnalysisHistoryItem[]> {
+    const token = getStoredToken()
+    const response = await axios.get<AnalysisHistoryItem[]>('/api/results', {
+        params: { limit, offset },
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    return response.data
+}
+
+export interface AnalysisHistoryItem {
+    result_id: string
+    query: string
+    n_datasets_analyzed: number
+    n_datasets_with_survival: number
+    n_genes_found: number
+    processing_time_seconds: number | null
+    created_at: string
+}
+
+export interface GeneComparisonItem {
+    gene_symbol: string
+    hr_a: number
+    hr_b: number
+    p_value_a: number
+    p_value_b: number
+    n_datasets_a: number
+    n_datasets_b: number
+    direction_agrees: boolean
+}
+
+export interface CompareResponse {
+    query_a: string
+    query_b: string
+    shared_genes: GeneComparisonItem[]
+    unique_to_a: string[]
+    unique_to_b: string[]
+    n_shared: number
+    n_unique_a: number
+    n_unique_b: number
+    direction_agreement_pct: number | null
+    spearman_r: number | null
+}
+
+export async function compareAnalyses(resultIdA: string, resultIdB: string): Promise<CompareResponse> {
+    const response = await apiClient.post<CompareResponse>('/compare', {
+        result_id_a: resultIdA,
+        result_id_b: resultIdB,
+    })
+    return response.data
 }
 
 export const searchDatasets = async (
@@ -91,6 +223,7 @@ export const searchDatasets = async (
     rankingMultiplier: number = 3,
     organism: string | null = null,
     cancerGenesOnly: boolean = false,
+    geneFilter: string[] | null = null,
 ): Promise<SurvivalAnalysisResponse> => {
     try {
         const response = await apiClient.post('/search', {
@@ -101,6 +234,7 @@ export const searchDatasets = async (
             organism: organism,
             min_occurrence: 2,
             cancer_genes_only: cancerGenesOnly,
+            gene_filter: geneFilter,
         })
         return response.data
     } catch (error) {

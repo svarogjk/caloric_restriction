@@ -19,6 +19,7 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     Index,
+    func,
 )
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, relationship, Mapped, mapped_column
@@ -60,6 +61,13 @@ class User(Base):
     # User owns conversations
     conversations: Mapped[list["Conversation"]] = relationship(
         "Conversation",
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    # User owns analysis results
+    analysis_results: Mapped[list["AnalysisResult"]] = relationship(
+        "AnalysisResult",
         back_populates="user",
         cascade="all, delete-orphan",
     )
@@ -215,3 +223,37 @@ class QueryEstimation(Base):
 
     def __repr__(self) -> str:
         return f"<QueryEstimation(id={self.id}, confidence={self.confidence_score})>"
+
+
+class AnalysisResult(Base):
+    """Persisted analysis results for shareable links and history."""
+
+    __tablename__ = "analysis_results"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    user_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    query: Mapped[str] = mapped_column(Text, nullable=False)
+    n_datasets_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    n_datasets_with_survival: Mapped[int] = mapped_column(Integer, default=0)
+    n_genes_found: Mapped[int] = mapped_column(Integer, default=0)
+    processing_time_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    result_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    # Relationship back to user
+    user: Mapped[Optional["User"]] = relationship("User", back_populates="analysis_results")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_analysis_results_user_id", "user_id"),
+        Index("ix_analysis_results_created_at", "created_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AnalysisResult(id={self.id}, query={self.query[:50]})>"

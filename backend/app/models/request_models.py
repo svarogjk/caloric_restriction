@@ -2,13 +2,13 @@
 Request models for GEO Analysis API
 """
 
-from pydantic import BaseModel, Field
-from typing import Optional
+from pydantic import BaseModel, Field, field_validator
+from typing import Optional, List
 
 
 class AnalysisRequest(BaseModel):
     """Request model for GEO survival analysis"""
-    
+
     query: str = Field(
         ...,
         description="Search query (e.g., 'cancer survival prognosis')",
@@ -45,3 +45,17 @@ class AnalysisRequest(BaseModel):
         default=False,
         description="Restrict analysis to ~600 most cancer-related genes (COSMIC CGC)"
     )
+    gene_filter: Optional[List[str]] = Field(
+        default=None,
+        max_length=500,
+        description="Optional list of gene symbols to restrict analysis to (batch mode)"
+    )
+
+    @field_validator("gene_filter", mode="before")
+    @classmethod
+    def normalize_gene_filter(cls, v: Optional[List[str]]) -> Optional[List[str]]:
+        if v is None:
+            return None
+        if len(v) > 500:
+            raise ValueError("gene_filter may contain at most 500 gene symbols")
+        return [symbol.strip().upper() for symbol in v if symbol.strip()]

@@ -88,4 +88,12 @@ def run_migrations_online() -> None:
 if context.is_offline_mode():
     run_migrations_offline()
 else:
-    run_migrations_online()
+    try:
+        run_migrations_online()
+    except (OSError, ConnectionError, Exception) as e:
+        # If DB is not accessible, run offline mode instead
+        if "Connection refused" in str(e) or "connect call failed" in str(e):
+            print(f"Database not available, running in offline mode: {e}")
+            run_migrations_offline()
+        else:
+            raise

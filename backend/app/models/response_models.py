@@ -16,6 +16,14 @@ class KMCurveData(BaseModel):
     n_events: int
 
 
+class HeterogeneityStats(BaseModel):
+    """Meta-analysis heterogeneity statistics across datasets"""
+    q_statistic: Optional[float] = None
+    i_squared: Optional[float] = None      # 0-100 scale
+    p_heterogeneity: Optional[float] = None
+    tau_squared: Optional[float] = None
+
+
 class GeneDatasetResult(BaseModel):
     """Survival analysis result for a gene in a specific dataset"""
     dataset_id: str
@@ -32,11 +40,15 @@ class GeneDatasetResult(BaseModel):
     # KM curve data for visualization
     km_curve_high: Optional[KMCurveData] = None
     km_curve_low: Optional[KMCurveData] = None
+    # Multivariate Cox results (F13)
+    adjusted_hazard_ratio: Optional[float] = None
+    multivariate_cox_p: Optional[float] = None
+    covariates_used: Optional[List[str]] = None
 
 
 class GeneSurvivalResponse(BaseModel):
     """Response model for survival-associated gene with per-dataset results"""
-    
+
     gene_id: str
     gene_symbol: Optional[str]
     n_datasets: int
@@ -48,6 +60,8 @@ class GeneSurvivalResponse(BaseModel):
     datasets: List[str]
     # Per-dataset detailed results for meta-analysis view
     per_dataset_results: Optional[List[GeneDatasetResult]] = None
+    # Cross-dataset heterogeneity statistics (F16)
+    heterogeneity_stats: Optional[HeterogeneityStats] = None
 
 
 class AnalysisResponse(BaseModel):
@@ -62,6 +76,8 @@ class AnalysisResponse(BaseModel):
     # Ranking feedback for user
     ranking_quality_score: Optional[float] = None
     ranking_recommendations: Optional[str] = None
+    # Persistent result ID (F07) — set after DB save, enables shareable URLs
+    result_id: Optional[str] = None
 
 
 class HealthResponse(BaseModel):

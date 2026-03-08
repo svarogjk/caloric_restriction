@@ -1,6 +1,7 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
-import { chatApi, ConversationListItem } from '../services/chatApi'
-import { searchDatasets } from '../services/api'
+import { chatApi, sendMessageStream, ConversationListItem } from '../services/chatApi'
+import { getStoredToken } from '../services/authApi'
+import { streamAnalysis, SurvivalAnalysisResponse, listAnalysisResults, AnalysisHistoryItem } from '../services/api'
 
 // ==================== Types ====================
 
@@ -29,6 +30,13 @@ export interface GeneDatasetResult {
     km_curve_low: KMCurveData | null
 }
 
+export interface HeterogeneityStats {
+    q_statistic?: number | null
+    i_squared?: number | null
+    p_heterogeneity?: number | null
+    tau_squared?: number | null
+}
+
 export interface GeneSurvival {
     gene_id: string
     gene_symbol: string | null
@@ -40,6 +48,7 @@ export interface GeneSurvival {
     risk_direction_consistency: number
     datasets: string[]
     per_dataset_results: GeneDatasetResult[] | null
+    heterogeneity_stats?: HeterogeneityStats | null
 }
 
 export interface AnalysisResult {
@@ -51,6 +60,7 @@ export interface AnalysisResult {
     timestamp: string
     ranking_quality_score?: number
     ranking_recommendations?: string
+    result_id?: string | null
 }
 
 export interface Message {
@@ -102,6 +112,13 @@ export interface Conversation {
     messages: Message[]
 }
 
+export interface AnalysisProgress {
+    stage: string
+    message: string
+    current?: number
+    total?: number
+}
+
 export interface ChatState {
     conversations: ConversationListItem[]
     activeConversationId: string | null
@@ -117,11 +134,20 @@ export interface ChatState {
     rankingMultiplier: number
     organism: string | null
     cancerGenesOnly: boolean
+    geneFilterInput: string
     // Analysis state
     analysisResults: AnalysisResult | null
     analysisLoading: boolean
     analysisError: string | null
+    analysisProgress: AnalysisProgress | null
     conversationsLastFetched: number | null
+    // Streaming state
+    streamingMessageId: string | null
+    streamingContent: string
+    isStreaming: boolean
+    // Analysis history
+    analysisHistory: AnalysisHistoryItem[]
+    historyLoading: boolean
 }
 
 const initialState: ChatState = {
@@ -139,11 +165,20 @@ const initialState: ChatState = {
     rankingMultiplier: 3,
     organism: null,
     cancerGenesOnly: false,
+    geneFilterInput: '',
     // Analysis state
     analysisResults: null,
     analysisLoading: false,
     analysisError: null,
+    analysisProgress: null,
     conversationsLastFetched: null,
+    // Streaming state
+    streamingMessageId: null,
+    streamingContent: '',
+    isStreaming: false,
+    // Analysis history
+    analysisHistory: [],
+    historyLoading: false,
 }
 
 // ==================== Async Thunks ====================
@@ -204,19 +239,47 @@ export const sendMessage = createAsyncThunk(
     ) => {
         try {
             // Add user message immediately (optimistic update)
+            const tempId = `temp-${Date.now()}`
             const userMessage: Message = {
-                id: `temp-${Date.now()}`,
+                id: tempId,
                 role: 'user',
                 content,
                 createdAt: new Date().toISOString(),
             }
             dispatch(addMessage(userMessage))
 
-            // Send to API
-            const response = await chatApi.sendMessage(conversationId, content, model)
+            // Get auth token
+            const token = getStoredToken()
+            if (!token) {
+                return rejectWithValue('Not authenticated')
+            }
 
-            return response
+            // Start streaming
+            dispatch(startStreaming(tempId))
+
+            return await new Promise<import('../services/chatApi').MessageResponse>((resolve, reject) => {
+                sendMessageStream(
+                    conversationId,
+                    content,
+                    model,
+                    token,
+                    (token) => {
+                        dispatch(appendStreamToken(token))
+                    },
+                    (message) => {
+                        dispatch(finalizeStreaming())
+                        resolve(message)
+                    },
+                    (errorMsg) => {
+                        dispatch(finalizeStreaming())
+                        reject(new Error(errorMsg))
+                    },
+                )
+            }).catch((error: unknown) => {
+                return rejectWithValue(error instanceof Error ? error.message : 'Failed to send message')
+            })
         } catch (error) {
+            dispatch(finalizeStreaming())
             return rejectWithValue(error instanceof Error ? error.message : 'Failed to send message')
         }
     }
@@ -251,31 +314,64 @@ export const runAnalysis = createAsyncThunk(
         { query }: { query: string },
         { getState, dispatch, rejectWithValue }
     ) => {
-        try {
-            const state = getState() as { chat: ChatState }
-            const { selectedModel, datasetCount, rankingMultiplier, organism, cancerGenesOnly } = state.chat
+        const state = getState() as { chat: ChatState }
+        const { selectedModel, datasetCount, rankingMultiplier, organism, cancerGenesOnly, geneFilterInput } = state.chat
 
-            // Add a system message indicating analysis is starting
-            const systemMessage: Message = {
-                id: `analysis-start-${Date.now()}`,
-                role: 'system',
-                content: `Running survival analysis for: "${query}"`,
-                createdAt: new Date().toISOString(),
-            }
-            dispatch(addMessage(systemMessage))
+        // Parse gene filter input: split by newlines and commas, trim, filter empty, uppercase
+        const geneFilter: string[] | null = geneFilterInput.trim()
+            ? geneFilterInput
+                .split(/[\n,]+/)
+                .map((g) => g.trim().toUpperCase())
+                .filter((g) => g.length > 0)
+            : null
 
-            const results = await searchDatasets(
+        // Add a system message indicating analysis is starting
+        const systemMessage: Message = {
+            id: `analysis-start-${Date.now()}`,
+            role: 'system',
+            content: `Running survival analysis for: "${query}"${geneFilter ? ` (${geneFilter.length} candidate genes)` : ''}`,
+            createdAt: new Date().toISOString(),
+        }
+        dispatch(addMessage(systemMessage))
+
+        return new Promise<SurvivalAnalysisResponse>((resolve, reject) => {
+            streamAnalysis(
                 query,
                 selectedModel,
                 datasetCount,
                 rankingMultiplier,
                 organism,
-                cancerGenesOnly
+                cancerGenesOnly,
+                geneFilter,
+                2,
+                (progress) => {
+                    dispatch(setAnalysisProgress({
+                        stage: progress.stage,
+                        message: progress.message,
+                        current: progress.current ?? undefined,
+                        total: progress.total ?? undefined,
+                    }))
+                },
+                (result) => {
+                    resolve(result)
+                },
+                (errorMessage) => {
+                    reject(new Error(errorMessage))
+                },
             )
-
-            return results
-        } catch (error) {
+        }).catch((error: unknown) => {
             return rejectWithValue(error instanceof Error ? error.message : 'Failed to run analysis')
+        })
+    }
+)
+
+export const fetchAnalysisHistory = createAsyncThunk(
+    'chat/fetchAnalysisHistory',
+    async (_, { rejectWithValue }) => {
+        try {
+            return await listAnalysisResults()
+        } catch (error) {
+            return rejectWithValue(error instanceof Error ? error.message : 'Failed to fetch analysis history')
         }
     }
 )
@@ -317,9 +413,29 @@ const chatSlice = createSlice({
         setCancerGenesOnly: (state, action: PayloadAction<boolean>) => {
             state.cancerGenesOnly = action.payload
         },
+        setGeneFilterInput: (state, action: PayloadAction<string>) => {
+            state.geneFilterInput = action.payload
+        },
         clearAnalysisResults: (state) => {
             state.analysisResults = null
             state.analysisError = null
+            state.analysisProgress = null
+        },
+        setAnalysisProgress: (state, action: PayloadAction<AnalysisProgress | null>) => {
+            state.analysisProgress = action.payload
+        },
+        startStreaming: (state, action: PayloadAction<string>) => {
+            state.streamingMessageId = action.payload
+            state.streamingContent = ''
+            state.isStreaming = true
+        },
+        appendStreamToken: (state, action: PayloadAction<string>) => {
+            state.streamingContent += action.payload
+        },
+        finalizeStreaming: (state) => {
+            state.streamingMessageId = null
+            state.streamingContent = ''
+            state.isStreaming = false
         },
     },
     extraReducers: (builder) => {
@@ -453,20 +569,36 @@ const chatSlice = createSlice({
                 }
             })
 
+        // Fetch analysis history
+        builder
+            .addCase(fetchAnalysisHistory.pending, (state) => {
+                state.historyLoading = true
+            })
+            .addCase(fetchAnalysisHistory.fulfilled, (state, action) => {
+                state.historyLoading = false
+                state.analysisHistory = action.payload
+            })
+            .addCase(fetchAnalysisHistory.rejected, (state) => {
+                state.historyLoading = false
+            })
+
         // Run analysis
         builder
             .addCase(runAnalysis.pending, (state) => {
                 state.analysisLoading = true
                 state.analysisError = null
+                state.analysisProgress = null
             })
             .addCase(runAnalysis.fulfilled, (state, action) => {
                 state.analysisLoading = false
-                state.analysisResults = action.payload
+                state.analysisResults = action.payload as AnalysisResult
+                state.analysisProgress = null
                 state.currentEstimation = null
             })
             .addCase(runAnalysis.rejected, (state, action) => {
                 state.analysisLoading = false
                 state.analysisError = action.payload as string
+                state.analysisProgress = null
             })
     },
 })
@@ -481,7 +613,12 @@ export const {
     setRankingMultiplier,
     setOrganism,
     setCancerGenesOnly,
+    setGeneFilterInput,
     clearAnalysisResults,
+    setAnalysisProgress,
+    startStreaming,
+    appendStreamToken,
+    finalizeStreaming,
 } = chatSlice.actions
 
 export default chatSlice.reducer

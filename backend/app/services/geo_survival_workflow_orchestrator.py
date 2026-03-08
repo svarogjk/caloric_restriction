@@ -7,11 +7,13 @@ Identifies genes associated with survival/lifespan across multiple datasets
 import hashlib
 import logging
 import asyncio
-from typing import List, Optional, Dict, Any, Tuple
+import math
+from typing import List, Optional, Dict, Any, Tuple, Callable, Awaitable
 from dataclasses import dataclass
 from datetime import datetime
 from collections import Counter, OrderedDict
 import pandas as pd
+from scipy.stats import chi2
 
 from app.services.geo_client import GEOClient, GEODataset, GEOSearchResult
 from app.services.geo_ranking_service import GEODatasetRankingService
@@ -113,8 +115,10 @@ class GEOSurvivalWorkflowOrchestrator:
         organism: Optional[str],
         model: str,
         cancer_genes_only: bool,
+        gene_filter: Optional[List[str]] = None,
     ) -> str:
-        raw = f"{query.lower().strip()}|{max_datasets}|{organism}|{model}|{cancer_genes_only}"
+        gene_filter_key = "|".join(sorted(gene_filter)) if gene_filter else ""
+        raw = f"{query.lower().strip()}|{max_datasets}|{organism}|{model}|{cancer_genes_only}|{gene_filter_key}"
         return hashlib.md5(raw.encode()).hexdigest()
 
     async def analyze_query(
@@ -126,6 +130,8 @@ class GEOSurvivalWorkflowOrchestrator:
         model: Optional[str] = None,
         ranking_multiplier: int = 3,
         cancer_genes_only: bool = False,
+        gene_filter: Optional[List[str]] = None,
+        progress_callback: Optional[Callable[[str, str, Optional[int], Optional[int]], Awaitable[None]]] = None,
     ) -> CrossDatasetSurvivalAnalysis:
         """
         Complete survival analysis workflow for a query
@@ -141,35 +147,49 @@ class GEOSurvivalWorkflowOrchestrator:
         Returns:
             CrossDatasetSurvivalAnalysis with survival-associated genes
         """
+        async def _cb(stage: str, message: str, current: Optional[int], total: Optional[int]) -> None:
+            if progress_callback is not None:
+                try:
+                    await progress_callback(stage, message, current, total)
+                except Exception as cb_err:
+                    logger.warning(f"Progress callback error (ignored): {cb_err}")
+
         start_time = datetime.now()
 
         use_model = model if model else self.current_model
 
-        cache_key = self._make_cache_key(query, max_datasets, organism, use_model, cancer_genes_only)
+        gene_filter_set: Optional[set] = (
+            set(g.upper() for g in gene_filter) if gene_filter else None
+        )
+
+        cache_key = self._make_cache_key(query, max_datasets, organism, use_model, cancer_genes_only, gene_filter)
         if cache_key in self._analysis_cache:
             self._analysis_cache.move_to_end(cache_key)
             logger.info(f"Returning cached analysis result for '{query}'")
             return self._analysis_cache[cache_key]
 
         logger.info(f"Starting GEO survival analysis workflow for: {query} with model: {use_model}")
-        
+
         # Update services to use the specified model
         if model and model != self.current_model:
             self.ranking_service.set_model(model)
             self.loader_service.set_model(model)
             self.survival_service.set_model(model)
             self.current_model = model
-        
+
         # Step 1: Search GEO for datasets with survival/clinical data
+        await _cb("searching_geo", "Searching GEO for matching datasets...", None, None)
         search_result = await self._search_geo(query, organism, max_datasets, ranking_multiplier)
-        
+
         if not search_result.datasets:
             logger.warning("No datasets found from search")
             return self._create_empty_result(query, start_time)
-        
-        logger.info(f"Found {len(search_result.datasets)} datasets")
-        
+
+        n_found = len(search_result.datasets)
+        logger.info(f"Found {n_found} datasets")
+
         # Step 2: Rank datasets
+        await _cb("ranking_datasets", f"Ranking {n_found} datasets by survival potential...", None, n_found)
         datasets_for_ranking = min(len(search_result.datasets), max_datasets * ranking_multiplier)
         ranked_datasets, ranking_quality, ranking_recommendations = await self._rank_datasets(
             search_result.datasets, query, datasets_for_ranking
@@ -181,10 +201,14 @@ class GEOSurvivalWorkflowOrchestrator:
         logger.info(f"Ranked {datasets_for_ranking} datasets, analyzing initial batch of {len(top_datasets)}")
 
         # Step 3: Pre-load platform mappings
+        await _cb("loading_dataset", f"Loading datasets (0/{len(top_datasets)})...", 0, len(top_datasets))
         await self._preload_platforms(top_datasets)
 
         # Step 4: Load and analyze each dataset for survival
-        survival_results = await self._analyze_datasets_survival(top_datasets, cancer_genes_only=cancer_genes_only)
+        await _cb("analyzing_genes", "Running survival analysis across datasets...", None, None)
+        survival_results = await self._analyze_datasets_survival(
+            top_datasets, cancer_genes_only=cancer_genes_only, gene_filter=gene_filter_set
+        )
 
         # Retry with next batch if too few datasets yielded results
         min_desired_results = min(3, max_datasets)
@@ -195,8 +219,11 @@ class GEOSurvivalWorkflowOrchestrator:
             if not next_batch:
                 break
             logger.info(f"Only {len(survival_results)} results so far, retrying with next batch of {len(next_batch)} datasets (indices {already_tried}-{next_batch_end})")
+            await _cb("loading_dataset", f"Loading additional datasets ({already_tried}/{len(ranked_datasets)})...", already_tried, len(ranked_datasets))
             await self._preload_platforms(next_batch)
-            extra_results = await self._analyze_datasets_survival(next_batch, cancer_genes_only=cancer_genes_only)
+            extra_results = await self._analyze_datasets_survival(
+                next_batch, cancer_genes_only=cancer_genes_only, gene_filter=gene_filter_set
+            )
             survival_results.extend(extra_results)
             already_tried = next_batch_end
 
@@ -205,7 +232,15 @@ class GEOSurvivalWorkflowOrchestrator:
         # Step 5: Identify common survival-associated genes
         common_genes = self._find_common_survival_genes(survival_results, min_occurrence) if survival_results else []
 
-        logger.info(f"Found {len(common_genes)} genes associated with survival across datasets")
+        n_genes = len(common_genes)
+        n_datasets_with_survival = len(survival_results)
+        await _cb(
+            "complete",
+            f"Analysis complete: {n_genes} genes found across {n_datasets_with_survival} datasets",
+            None,
+            None,
+        )
+        logger.info(f"Found {n_genes} genes associated with survival across datasets")
 
         processing_time = (datetime.now() - start_time).total_seconds()
 
@@ -482,6 +517,7 @@ class GEOSurvivalWorkflowOrchestrator:
         self,
         datasets: List[GEODataset],
         cancer_genes_only: bool = False,
+        gene_filter: Optional[set] = None,
     ) -> List[SurvivalAnalysisResult]:
         """Load and analyze datasets for survival associations"""
 
@@ -545,6 +581,25 @@ class GEOSurvivalWorkflowOrchestrator:
                             f"{len(loaded_data.expression_matrix)} cancer gene probes"
                         )
 
+                    # Filter to user-specified genes if batch mode is active
+                    if gene_filter:
+                        gene_filter_probes = {
+                            probe
+                            for probe, gene in loaded_data.probe_to_gene_mapping.items()
+                            if gene.upper() in gene_filter
+                        }
+                        gene_filter_mask = loaded_data.expression_matrix.index.isin(gene_filter_probes)
+                        loaded_data.expression_matrix = loaded_data.expression_matrix[gene_filter_mask]
+                        if len(loaded_data.expression_matrix) == 0:
+                            logger.warning(
+                                f"Dataset {dataset.accession}: no gene_filter genes found after filter"
+                            )
+                            return None
+                        logger.info(
+                            f"Dataset {dataset.accession}: gene_filter applied, "
+                            f"{len(loaded_data.expression_matrix)} probes remaining"
+                        )
+
                     # Perform survival analysis
                     survival_result = await self.survival_service.analyze_survival(
                         loaded_data=loaded_data
@@ -602,6 +657,71 @@ class GEOSurvivalWorkflowOrchestrator:
         # Fall back to the original gene_id (might be Entrez ID or probe ID)
         return gene_id, gene_symbol
 
+    @staticmethod
+    def _compute_heterogeneity(
+        log_hrs: List[float],
+        ci_lowers: List[float],
+        ci_uppers: List[float],
+    ) -> Dict[str, Any]:
+        """
+        Compute Cochran's Q, I², τ² (DerSimonian-Laird), and p-heterogeneity.
+
+        Args:
+            log_hrs: Per-dataset log(hazard ratio) values
+            ci_lowers: Per-dataset CI lower bounds (on HR scale)
+            ci_uppers: Per-dataset CI upper bounds (on HR scale)
+
+        Returns:
+            Dict with q_statistic, i_squared, p_heterogeneity, tau_squared.
+            All values are None when fewer than 2 valid datasets are available.
+        """
+        k = len(log_hrs)
+        if k < 2:
+            return {"q_statistic": None, "i_squared": None, "p_heterogeneity": None, "tau_squared": None}
+
+        # Standard errors from CI: SE = (log(CI_upper) - log(CI_lower)) / (2 * 1.96)
+        ses: List[Optional[float]] = []
+        for cl, cu in zip(ci_lowers, ci_uppers):
+            if cl is not None and cu is not None and cl > 0 and cu > 0:
+                ses.append((math.log(cu) - math.log(cl)) / (2 * 1.96))
+            else:
+                ses.append(None)
+
+        # Filter out None SE values
+        valid = [(lhr, se) for lhr, se in zip(log_hrs, ses) if se is not None and se > 0]
+        if len(valid) < 2:
+            return {"q_statistic": None, "i_squared": None, "p_heterogeneity": None, "tau_squared": None}
+
+        log_hrs_v, ses_v = zip(*valid)
+        k_v = len(valid)
+
+        # Inverse variance weights
+        weights = [1 / (se ** 2) for se in ses_v]
+        pooled_log_hr = sum(w * lhr for w, lhr in zip(weights, log_hrs_v)) / sum(weights)
+
+        # Cochran's Q
+        q = sum(w * (lhr - pooled_log_hr) ** 2 for w, lhr in zip(weights, log_hrs_v))
+        df = k_v - 1
+
+        # I²
+        i_squared = max(0.0, (q - df) / q * 100) if q > 0 else 0.0
+
+        # p-heterogeneity
+        p_het = float(1 - chi2.cdf(q, df))
+
+        # τ² (DerSimonian-Laird)
+        sum_w = sum(weights)
+        sum_w2 = sum(w ** 2 for w in weights)
+        c = sum_w - sum_w2 / sum_w
+        tau_sq = max(0.0, (q - df) / c) if c > 0 else 0.0
+
+        return {
+            "q_statistic": round(q, 4),
+            "i_squared": round(i_squared, 2),
+            "p_heterogeneity": round(p_het, 4),
+            "tau_squared": round(tau_sq, 4),
+        }
+
     def _find_common_survival_genes(
         self,
         survival_results: List[SurvivalAnalysisResult],
@@ -623,6 +743,8 @@ class GEOSurvivalWorkflowOrchestrator:
                         'symbol': display_symbol or gene.gene_symbol,
                         'datasets': [],
                         'hazard_ratios': [],
+                        'ci_lowers': [],
+                        'ci_uppers': [],
                         'cox_p_values': [],
                         'log_rank_p_values': [],
                         'risk_directions': [],
@@ -636,12 +758,14 @@ class GEOSurvivalWorkflowOrchestrator:
                 
                 gene_data[gene_identifier]['datasets'].append(result.accession)
                 gene_data[gene_identifier]['hazard_ratios'].append(gene.hazard_ratio)
+                gene_data[gene_identifier]['ci_lowers'].append(gene.hazard_ratio_ci_lower)
+                gene_data[gene_identifier]['ci_uppers'].append(gene.hazard_ratio_ci_upper)
                 gene_data[gene_identifier]['cox_p_values'].append(gene.cox_p_value)
                 gene_data[gene_identifier]['log_rank_p_values'].append(gene.log_rank_p_value)
                 gene_data[gene_identifier]['risk_directions'].append(gene.expression_direction)
-                
+
                 # Store per-dataset result for meta-analysis
-                per_dataset_entry = {
+                per_dataset_entry: Dict[str, Any] = {
                     'dataset_id': result.accession,
                     'dataset_title': result.title,
                     'hazard_ratio': gene.hazard_ratio,
@@ -653,6 +777,10 @@ class GEOSurvivalWorkflowOrchestrator:
                     'n_samples': gene.n_samples_high + gene.n_samples_low,
                     'median_survival_high': gene.median_survival_high,
                     'median_survival_low': gene.median_survival_low,
+                    # Multivariate Cox results (F13)
+                    'adjusted_hazard_ratio': gene.adjusted_hazard_ratio,
+                    'multivariate_cox_p': gene.multivariate_cox_p,
+                    'covariates_used': gene.covariates_used,
                 }
                 
                 # Include KM curve data if available

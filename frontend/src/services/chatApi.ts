@@ -266,3 +266,87 @@ export const chatApi = {
     },
 
 }
+
+// ==================== Streaming ====================
+
+/**
+ * Send a message and consume the SSE stream, calling callbacks for each event.
+ * The token is passed explicitly so this function has no implicit dependencies.
+ */
+export async function sendMessageStream(
+    conversationId: string,
+    content: string,
+    model: string,
+    token: string,
+    onToken: (token: string) => void,
+    onComplete: (message: MessageResponse) => void,
+    onError: (error: string) => void,
+): Promise<void> {
+    const response = await fetch(`/api/chat/conversations/${conversationId}/messages?stream=true`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ content, model, stream: true }),
+    })
+
+    if (!response.ok) {
+        onError(`HTTP ${response.status}`)
+        return
+    }
+
+    if (!response.body) {
+        onError('No response body')
+        return
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+
+        for (const line of lines) {
+            if (!line.startsWith('data: ')) continue
+            const data = line.slice(6).trim()
+            if (!data || data === '[DONE]') continue
+
+            try {
+                const parsed = JSON.parse(data) as Record<string, unknown>
+
+                if (parsed['type'] === 'token' && parsed['content']) {
+                    onToken(parsed['content'] as string)
+                } else if (parsed['type'] === 'message_complete' && parsed['message']) {
+                    const msg = parsed['message'] as {
+                        message_id: string
+                        role: 'user' | 'assistant'
+                        content: string
+                        created_at: string
+                        model_used?: string
+                        suggested_actions?: string[]
+                    }
+                    const completeMessage: MessageResponse = {
+                        messageId: msg.message_id,
+                        role: msg.role,
+                        content: msg.content,
+                        createdAt: msg.created_at,
+                        modelUsed: msg.model_used,
+                        suggestedActions: msg.suggested_actions,
+                    }
+                    onComplete(completeMessage)
+                } else if (parsed['type'] === 'error') {
+                    onError((parsed['message'] as string | undefined) ?? 'Stream error')
+                }
+            } catch {
+                // skip unparseable lines
+            }
+        }
+    }
+}

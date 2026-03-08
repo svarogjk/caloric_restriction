@@ -11,6 +11,7 @@ import {
   ReferenceLine,
 } from 'recharts'
 import { GeneSurvival } from '../store/chatSlice'
+import { ForestPlot } from './ForestPlot'
 
 interface KaplanMeierPlotProps {
   gene: GeneSurvival
@@ -41,6 +42,23 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
   const [visibleDatasets, setVisibleDatasets] = React.useState<Set<string>>(() =>
     new Set(displayDatasets.map(ds => ds.dataset_id))
   )
+
+  // Tab selection: 'km' | 'forest'
+  type PlotTab = 'km' | 'forest'
+  const [activeTab, setActiveTab] = React.useState<PlotTab>('km')
+
+  // Forest plot: datasets that have valid HR and CI data (need at least 2)
+  const forestDatasets = React.useMemo(() => {
+    if (!gene.per_dataset_results) return []
+    return gene.per_dataset_results.filter(
+      ds =>
+        Number.isFinite(ds.hazard_ratio) &&
+        Number.isFinite(ds.hazard_ratio_ci_lower) &&
+        Number.isFinite(ds.hazard_ratio_ci_upper)
+    )
+  }, [gene.per_dataset_results])
+
+  const showForestTab = forestDatasets.length >= 2
 
   const toggleDataset = (datasetId: string) => {
     setVisibleDatasets(prev => {
@@ -76,28 +94,29 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
           i === low.times.length - 1 || low.times[i + 1] > time
         )
 
-        row[`${ds.dataset_id}_high`] = high.survival_probabilities[Math.max(0, highIdx)] * 100
-        row[`${ds.dataset_id}_low`] = low.survival_probabilities[Math.max(0, lowIdx)] * 100
+        const safeHighIdx = Math.max(0, highIdx)
+        const safeLowIdx = Math.max(0, lowIdx)
+
+        row[`${ds.dataset_id}_high`] = high.survival_probabilities[safeHighIdx] * 100
+        row[`${ds.dataset_id}_low`] = low.survival_probabilities[safeLowIdx] * 100
+
+        if (high.ci_lower && high.ci_lower.length > 0) {
+          row[`${ds.dataset_id}_high_ci_lower`] = high.ci_lower[safeHighIdx] * 100
+        }
+        if (high.ci_upper && high.ci_upper.length > 0) {
+          row[`${ds.dataset_id}_high_ci_upper`] = high.ci_upper[safeHighIdx] * 100
+        }
+        if (low.ci_lower && low.ci_lower.length > 0) {
+          row[`${ds.dataset_id}_low_ci_lower`] = low.ci_lower[safeLowIdx] * 100
+        }
+        if (low.ci_upper && low.ci_upper.length > 0) {
+          row[`${ds.dataset_id}_low_ci_upper`] = low.ci_upper[safeLowIdx] * 100
+        }
       })
       return row
     })
   }, [displayDatasets, visibleDatasets])
 
-  // Generate mock data if no real KM data available
-  const mockKMData = React.useMemo(() => {
-    const timePoints = [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60]
-    const hr = gene.avg_hazard_ratio
-    const baseLambda = 0.015
-
-    return timePoints.map((time) => ({
-      time,
-      highExpression: Math.exp(-baseLambda * hr * time) * 100,
-      lowExpression: Math.exp(-baseLambda * time) * 100,
-    }))
-  }, [gene.avg_hazard_ratio])
-
-  const chartData = allKmChartData || mockKMData
-  const hasRealData = allKmChartData !== null
   const visibleList = displayDatasets.filter(ds => visibleDatasets.has(ds.dataset_id))
 
   const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
@@ -201,93 +220,195 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
             </p>
           </div>
 
-          {/* Dataset visibility toggles */}
-          {displayDatasets.length > 0 && (
-            <div className="mb-4">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Toggle datasets (solid = high expression, dashed = low expression):
-              </label>
-              <div className="flex flex-wrap gap-2">
-                {displayDatasets.map((ds, idx) => {
-                  const color = DATASET_COLORS[idx % DATASET_COLORS.length]
-                  const isVisible = visibleDatasets.has(ds.dataset_id)
-                  return (
-                    <button
-                      key={ds.dataset_id}
-                      onClick={() => toggleDataset(ds.dataset_id)}
-                      style={{
-                        borderColor: color,
-                        backgroundColor: isVisible ? color : 'transparent',
-                        color: isVisible ? 'white' : color,
-                      }}
-                      className="px-3 py-1.5 rounded-lg text-sm font-medium transition border-2"
-                    >
-                      {ds.dataset_id}
-                    </button>
-                  )
-                })}
-              </div>
+          {/* Tab toggle: KM Curves | Forest Plot */}
+          {showForestTab && (
+            <div className="flex border-b border-gray-200 mb-4">
+              <button
+                onClick={() => setActiveTab('km')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+                  activeTab === 'km'
+                    ? 'border-indigo-500 text-indigo-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                KM Curves
+              </button>
+              <button
+                onClick={() => setActiveTab('forest')}
+                className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
+                  activeTab === 'forest'
+                    ? 'border-indigo-500 text-indigo-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
+              >
+                Forest Plot
+              </button>
             </div>
           )}
 
-          {/* Kaplan-Meier Plot */}
-          <div className="h-96 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData} margin={{ top: 20, right: 30, bottom: 20, left: 20 }}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis
-                  dataKey="time"
-                  label={{ value: 'Time (months)', position: 'insideBottomRight', offset: -5 }}
-                />
-                <YAxis
-                  domain={[0, 100]}
-                  label={{ value: 'Survival Probability (%)', angle: -90, position: 'insideLeft' }}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend />
-                <ReferenceLine y={50} stroke="#9ca3af" strokeDasharray="5 5" />
-                {hasRealData
-                  ? visibleList.map((ds, idx) => {
+          {/* Forest Plot panel */}
+          {activeTab === 'forest' && showForestTab ? (
+            <ForestPlot
+              geneName={gene.gene_symbol || gene.gene_id}
+              datasets={forestDatasets.map(ds => ({
+                dataset_id: ds.dataset_id,
+                dataset_title: ds.dataset_title,
+                hazard_ratio: ds.hazard_ratio,
+                hazard_ratio_ci_lower: ds.hazard_ratio_ci_lower,
+                hazard_ratio_ci_upper: ds.hazard_ratio_ci_upper,
+                n_samples: ds.n_samples,
+                cox_p_value: ds.cox_p_value,
+              }))}
+              pooledHR={gene.avg_hazard_ratio}
+              heterogeneityStats={gene.heterogeneity_stats}
+            />
+          ) : (
+            <>
+              {/* Dataset visibility toggles (KM tab only) */}
+              {displayDatasets.length > 0 && (
+                <div className="mb-4">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Toggle datasets (solid = high expression, dashed = low expression):
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {displayDatasets.map((ds, idx) => {
                       const color = DATASET_COLORS[idx % DATASET_COLORS.length]
-                      return [
-                        <Line
-                          key={`${ds.dataset_id}_high`}
-                          type="stepAfter"
-                          dataKey={`${ds.dataset_id}_high`}
-                          name={`${ds.dataset_id} High`}
-                          stroke={color}
-                          strokeWidth={2}
-                          dot={false}
-                          connectNulls
-                        />,
-                        <Line
-                          key={`${ds.dataset_id}_low`}
-                          type="stepAfter"
-                          dataKey={`${ds.dataset_id}_low`}
-                          name={`${ds.dataset_id} Low`}
-                          stroke={color}
-                          strokeWidth={2}
-                          strokeDasharray="5 5"
-                          dot={false}
-                          connectNulls
-                        />,
-                      ]
-                    }).flat()
-                  : [
-                    <Line key="high" type="stepAfter" dataKey="highExpression" name="High Expression" stroke="#ef4444" strokeWidth={2} dot={false} />,
-                    <Line key="low" type="stepAfter" dataKey="lowExpression" name="Low Expression" stroke="#3b82f6" strokeWidth={2} dot={false} />,
-                  ]
-                }
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
+                      const isVisible = visibleDatasets.has(ds.dataset_id)
+                      return (
+                        <button
+                          key={ds.dataset_id}
+                          onClick={() => toggleDataset(ds.dataset_id)}
+                          style={{
+                            borderColor: color,
+                            backgroundColor: isVisible ? color : 'transparent',
+                            color: isVisible ? 'white' : color,
+                          }}
+                          className="px-3 py-1.5 rounded-lg text-sm font-medium transition border-2"
+                        >
+                          {ds.dataset_id}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
 
-          {/* Note about data source */}
-          <p className="text-gray-500 text-sm mt-4 text-center italic">
-            {hasRealData
-              ? `Showing ${visibleList.length} of ${displayDatasets.length} dataset(s). Click toggles above to show/hide individual datasets.`
-              : 'Note: This is an illustrative representation based on the average hazard ratio. No raw KM data available.'}
-          </p>
+              {/* Kaplan-Meier Plot */}
+              {allKmChartData !== null ? (
+                <>
+                  <div className="h-96 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={allKmChartData} margin={{ top: 20, right: 30, bottom: 20, left: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis
+                          dataKey="time"
+                          label={{ value: 'Time (months)', position: 'insideBottomRight', offset: -5 }}
+                        />
+                        <YAxis
+                          domain={[0, 100]}
+                          label={{ value: 'Survival Probability (%)', angle: -90, position: 'insideLeft' }}
+                        />
+                        <Tooltip content={<CustomTooltip />} />
+                        <Legend />
+                        <ReferenceLine y={50} stroke="#9ca3af" strokeDasharray="5 5" />
+                        {visibleList.map((ds, idx) => {
+                          const color = DATASET_COLORS[idx % DATASET_COLORS.length]
+                          const hasHighCI = !!(ds.km_curve_high?.ci_lower?.length && ds.km_curve_high?.ci_upper?.length)
+                          const hasLowCI = !!(ds.km_curve_low?.ci_lower?.length && ds.km_curve_low?.ci_upper?.length)
+                          return [
+                            <Line
+                              key={`${ds.dataset_id}_high`}
+                              type="stepAfter"
+                              dataKey={`${ds.dataset_id}_high`}
+                              name={`${ds.dataset_id} High`}
+                              stroke={color}
+                              strokeWidth={2}
+                              dot={false}
+                              connectNulls
+                            />,
+                            <Line
+                              key={`${ds.dataset_id}_low`}
+                              type="stepAfter"
+                              dataKey={`${ds.dataset_id}_low`}
+                              name={`${ds.dataset_id} Low`}
+                              stroke={color}
+                              strokeWidth={2}
+                              strokeDasharray="5 5"
+                              dot={false}
+                              connectNulls
+                            />,
+                            ...(hasHighCI ? [
+                              <Line
+                                key={`${ds.dataset_id}_high_ci_lower`}
+                                type="stepAfter"
+                                dataKey={`${ds.dataset_id}_high_ci_lower`}
+                                stroke={color}
+                                strokeOpacity={0.3}
+                                strokeWidth={1}
+                                strokeDasharray="3 3"
+                                legendType="none"
+                                dot={false}
+                                connectNulls
+                              />,
+                              <Line
+                                key={`${ds.dataset_id}_high_ci_upper`}
+                                type="stepAfter"
+                                dataKey={`${ds.dataset_id}_high_ci_upper`}
+                                stroke={color}
+                                strokeOpacity={0.3}
+                                strokeWidth={1}
+                                strokeDasharray="3 3"
+                                legendType="none"
+                                dot={false}
+                                connectNulls
+                              />,
+                            ] : []),
+                            ...(hasLowCI ? [
+                              <Line
+                                key={`${ds.dataset_id}_low_ci_lower`}
+                                type="stepAfter"
+                                dataKey={`${ds.dataset_id}_low_ci_lower`}
+                                stroke={color}
+                                strokeOpacity={0.3}
+                                strokeWidth={1}
+                                strokeDasharray="3 3"
+                                legendType="none"
+                                dot={false}
+                                connectNulls
+                              />,
+                              <Line
+                                key={`${ds.dataset_id}_low_ci_upper`}
+                                type="stepAfter"
+                                dataKey={`${ds.dataset_id}_low_ci_upper`}
+                                stroke={color}
+                                strokeOpacity={0.3}
+                                strokeWidth={1}
+                                strokeDasharray="3 3"
+                                legendType="none"
+                                dot={false}
+                                connectNulls
+                              />,
+                            ] : []),
+                          ]
+                        }).flat()}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <p className="text-gray-500 text-sm mt-4 text-center italic">
+                    Showing {visibleList.length} of {displayDatasets.length} dataset(s). Click toggles above to show/hide individual datasets.
+                  </p>
+                </>
+              ) : (
+                <div className="h-48 w-full flex flex-col items-center justify-center bg-gray-50 rounded-lg border border-gray-200">
+                  <svg className="w-10 h-10 text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                  </svg>
+                  <p className="text-gray-500 font-medium">No survival curve data available for this gene</p>
+                  <p className="text-gray-400 text-sm mt-1">The per-study statistics below are still valid.</p>
+                </div>
+              )}
+            </>
+          )}
 
           {/* Per-dataset results table */}
           {gene.per_dataset_results && gene.per_dataset_results.length > 0 && (
