@@ -154,6 +154,28 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
 
   const interpretation = getRiskInterpretation()
 
+  // F04: KM CSV export
+  const exportKMCSV = () => {
+    if (!allKmChartData || allKmChartData.length === 0) return
+    const visibleIds = visibleList.map(ds => ds.dataset_id)
+    const headers = ['Time', ...visibleIds.flatMap(id => [`${id}_High`, `${id}_Low`])]
+    const rows = allKmChartData.map(row => [
+      row.time,
+      ...visibleIds.flatMap(id => [
+        row[`${id}_high`] != null ? (row[`${id}_high`] as number).toFixed(2) : '',
+        row[`${id}_low`] != null ? (row[`${id}_low`] as number).toFixed(2) : '',
+      ])
+    ])
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `km_curves_${gene.gene_symbol || gene.gene_id}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-auto">
@@ -170,14 +192,24 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
               )}
             </p>
           </div>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 transition p-2 hover:bg-gray-100 rounded-full"
-          >
-            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="flex items-center gap-2">
+            {allKmChartData && allKmChartData.length > 0 && (
+              <button
+                onClick={exportKMCSV}
+                className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:bg-gray-50 text-gray-600"
+              >
+                Export CSV
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="text-gray-400 hover:text-gray-600 transition p-2 hover:bg-gray-100 rounded-full"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
         </div>
 
         {/* Content */}
