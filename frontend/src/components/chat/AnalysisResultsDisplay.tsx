@@ -13,6 +13,7 @@ import {
 import { toPng } from 'html-to-image'
 import { AnalysisResult, GeneSurvival } from '../../store/chatSlice'
 import KaplanMeierPlot from '../KaplanMeierPlot'
+import { ForestPlot } from '../ForestPlot'
 import PathwayEnrichmentPanel from '../PathwayEnrichmentPanel'
 import { getStoredToken } from '../../services/authApi'
 
@@ -39,7 +40,12 @@ const PAGE_SIZE = 20
 const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results, onClose }) => {
     const [selectedGene, setSelectedGene] = useState<GeneSurvival | null>(null)
     const [expandedGeneId, setExpandedGeneId] = useState<string | null>(null)
-    const [activeTab, setActiveTab] = useState<'summary' | 'volcano' | 'genes' | 'methods'>('summary')
+    const [activeTab, setActiveTab] = useState<'summary' | 'volcano' | 'genes' | 'forest' | 'methods'>('summary')
+
+    // F08: Forest plot gene selector
+    const [selectedForestGeneId, setSelectedForestGeneId] = useState<string | null>(null)
+    const selectedForestGene = results.common_genes.find(g => g.gene_id === selectedForestGeneId)
+        ?? results.common_genes[0]
 
     // F02: Gene search + pagination state
     const [geneSearch, setGeneSearch] = useState('')
@@ -337,6 +343,16 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                     }`}
                 >
                     Genes ({results.common_genes.length})
+                </button>
+                <button
+                    onClick={() => setActiveTab('forest')}
+                    className={`flex-1 px-4 py-2 text-sm font-medium ${
+                        activeTab === 'forest'
+                            ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50'
+                            : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                >
+                    Forest Plot
                 </button>
                 <button
                     onClick={() => setActiveTab('methods')}
@@ -660,6 +676,46 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                                 <PathwayEnrichmentPanel geneSymbols={significantGenes} />
                             )
                         })()}
+                    </div>
+                )}
+
+                {/* ===== FOREST PLOT TAB ===== */}
+                {activeTab === 'forest' && (
+                    <div>
+                        <div className="flex items-center gap-2 mb-3">
+                            <label className="text-xs text-gray-600">Gene:</label>
+                            <select
+                                value={selectedForestGeneId ?? selectedForestGene?.gene_id ?? ''}
+                                onChange={(e) => setSelectedForestGeneId(e.target.value)}
+                                className="text-sm border border-gray-300 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            >
+                                {results.common_genes.slice(0, 20).map((g) => (
+                                    <option key={g.gene_id} value={g.gene_id}>
+                                        {g.gene_symbol || g.gene_id}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                        {selectedForestGene?.per_dataset_results && selectedForestGene.per_dataset_results.length >= 2 ? (
+                            <ForestPlot
+                                geneName={selectedForestGene.gene_symbol || selectedForestGene.gene_id}
+                                datasets={selectedForestGene.per_dataset_results.map((ds) => ({
+                                    dataset_id: ds.dataset_id,
+                                    dataset_title: ds.dataset_title,
+                                    hazard_ratio: ds.hazard_ratio,
+                                    hazard_ratio_ci_lower: ds.hazard_ratio_ci_lower,
+                                    hazard_ratio_ci_upper: ds.hazard_ratio_ci_upper,
+                                    n_samples: ds.n_samples,
+                                    cox_p_value: ds.cox_p_value,
+                                }))}
+                                pooledHR={selectedForestGene.avg_hazard_ratio}
+                                heterogeneityStats={selectedForestGene.heterogeneity_stats}
+                            />
+                        ) : (
+                            <p className="text-sm text-gray-400 text-center py-8">
+                                Not enough per-dataset data for this gene (need ≥ 2 datasets with CI).
+                            </p>
+                        )}
                     </div>
                 )}
 
