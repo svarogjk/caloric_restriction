@@ -11,7 +11,9 @@ import {
     ReferenceLine,
 } from 'recharts'
 import { toPng } from 'html-to-image'
-import { AnalysisResult, GeneSurvival } from '../../store/chatSlice'
+import { AnalysisResult, GeneSurvival, saveAnalysisResult, setAutoSave } from '../../store/chatSlice'
+import { useDispatch, useSelector } from 'react-redux'
+import { AppDispatch, RootState } from '../../store/store'
 import KaplanMeierPlot from '../KaplanMeierPlot'
 import { ForestPlot } from '../ForestPlot'
 import PathwayEnrichmentPanel from '../PathwayEnrichmentPanel'
@@ -38,6 +40,13 @@ interface TransformedGene {
 const PAGE_SIZE = 20
 
 const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results, onClose }) => {
+    const dispatch = useDispatch<AppDispatch>()
+    const { autoSave, isSaving } = useSelector((state: RootState) => state.chat)
+
+    const handleSave = () => {
+        dispatch(saveAnalysisResult(results))
+    }
+
     const [selectedGene, setSelectedGene] = useState<GeneSurvival | null>(null)
     const [expandedGeneId, setExpandedGeneId] = useState<string | null>(null)
     const [activeTab, setActiveTab] = useState<'summary' | 'volcano' | 'genes' | 'forest' | 'methods'>('summary')
@@ -260,6 +269,29 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                     <p className="text-indigo-100 text-sm">Query: {results.query}</p>
                 </div>
                 <div className="flex items-center gap-2">
+                    {/* Auto-save toggle */}
+                    <label className="flex items-center gap-1 cursor-pointer" title="Auto-save results to database">
+                        <span className="text-xs text-indigo-200">Auto-save</span>
+                        <div
+                            onClick={() => dispatch(setAutoSave(!autoSave))}
+                            className={`relative w-8 h-4 rounded-full transition-colors cursor-pointer ${autoSave ? 'bg-green-400' : 'bg-white/30'}`}
+                        >
+                            <div className={`absolute top-0.5 w-3 h-3 bg-white rounded-full shadow transition-transform ${autoSave ? 'translate-x-4' : 'translate-x-0.5'}`} />
+                        </div>
+                    </label>
+
+                    {/* Save button — shown when not yet saved */}
+                    {!results.result_id && (
+                        <button
+                            onClick={handleSave}
+                            disabled={isSaving}
+                            className="text-xs px-2 py-1 rounded border transition-colors bg-white/20 text-white border-white/30 hover:bg-white/30 disabled:opacity-60 disabled:cursor-not-allowed"
+                            title="Save result to database for sharing and history"
+                        >
+                            {isSaving ? 'Saving...' : 'Save'}
+                        </button>
+                    )}
+
                     {results.result_id && (
                         <button
                             onClick={handleExportZip}

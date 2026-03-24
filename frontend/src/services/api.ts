@@ -121,7 +121,6 @@ export function streamAnalysis(
             params.append('gene_filter', gene)
         }
     }
-
     const es = new EventSource(`/api/search/stream?${params.toString()}`)
 
     es.onmessage = (event: MessageEvent) => {

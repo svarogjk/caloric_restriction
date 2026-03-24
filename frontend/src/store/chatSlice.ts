@@ -148,6 +148,9 @@ export interface ChatState {
     // Analysis history
     analysisHistory: AnalysisHistoryItem[]
     historyLoading: boolean
+    // Save settings
+    autoSave: boolean
+    isSaving: boolean
 }
 
 const initialState: ChatState = {
@@ -179,6 +182,9 @@ const initialState: ChatState = {
     // Analysis history
     analysisHistory: [],
     historyLoading: false,
+    // Save settings
+    autoSave: false,
+    isSaving: false,
 }
 
 // ==================== Async Thunks ====================
@@ -365,6 +371,28 @@ export const runAnalysis = createAsyncThunk(
     }
 )
 
+export const saveAnalysisResult = createAsyncThunk(
+    'chat/saveAnalysisResult',
+    async (result: AnalysisResult, { rejectWithValue }) => {
+        try {
+            const token = getStoredToken()
+            const response = await fetch('/api/results', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                body: JSON.stringify(result),
+            })
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+            const data = await response.json() as { result_id: string }
+            return data.result_id
+        } catch (error) {
+            return rejectWithValue(error instanceof Error ? error.message : 'Save failed')
+        }
+    }
+)
+
 export const fetchAnalysisHistory = createAsyncThunk(
     'chat/fetchAnalysisHistory',
     async (_, { rejectWithValue }) => {
@@ -436,6 +464,14 @@ const chatSlice = createSlice({
             state.streamingMessageId = null
             state.streamingContent = ''
             state.isStreaming = false
+        },
+        setAutoSave: (state, action: PayloadAction<boolean>) => {
+            state.autoSave = action.payload
+        },
+        setResultId: (state, action: PayloadAction<string>) => {
+            if (state.analysisResults) {
+                state.analysisResults.result_id = action.payload
+            }
         },
     },
     extraReducers: (builder) => {
@@ -600,6 +636,21 @@ const chatSlice = createSlice({
                 state.analysisError = action.payload as string
                 state.analysisProgress = null
             })
+
+        // Save analysis result
+        builder
+            .addCase(saveAnalysisResult.pending, (state) => {
+                state.isSaving = true
+            })
+            .addCase(saveAnalysisResult.fulfilled, (state, action) => {
+                state.isSaving = false
+                if (state.analysisResults) {
+                    state.analysisResults.result_id = action.payload
+                }
+            })
+            .addCase(saveAnalysisResult.rejected, (state) => {
+                state.isSaving = false
+            })
     },
 })
 
@@ -619,6 +670,8 @@ export const {
     startStreaming,
     appendStreamToken,
     finalizeStreaming,
+    setAutoSave,
+    setResultId,
 } = chatSlice.actions
 
 export default chatSlice.reducer

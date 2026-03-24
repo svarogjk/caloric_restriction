@@ -339,6 +339,26 @@ async def stream_analysis(
 
 # ==================== Analysis Result Endpoints (F07) ====================
 
+@router.post("/results")
+async def save_analysis_result(
+    result: dict,
+    db: AsyncSession = Depends(get_db),
+    current_user=Depends(get_optional_current_user),
+):
+    """
+    Explicitly save an analysis result to the database.
+    Called by the frontend Save button (or auto-save when the toggle is on).
+    Returns the result_id for use in shareable links.
+    """
+    user_id = current_user.id if current_user else None
+    try:
+        result_id = await analysis_result_service.save_result(db, result, user_id=user_id)
+        return {"result_id": result_id}
+    except Exception as e:
+        logger.error(f"Failed to save analysis result: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to save result")
+
+
 @router.get("/results/{result_id}")
 async def get_analysis_result(
     result_id: str,

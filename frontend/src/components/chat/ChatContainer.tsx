@@ -14,6 +14,7 @@ import {
     setCancerGenesOnly,
     setGeneFilterInput,
     runAnalysis,
+    saveAnalysisResult,
     clearAnalysisResults,
 } from '../../store/chatSlice'
 import ConversationList from './ConversationList'
@@ -45,6 +46,7 @@ const ChatContainer: React.FC = () => {
         analysisProgress,
         isStreaming,
         streamingContent,
+        autoSave,
     } = useSelector((state: RootState) => state.chat)
 
     const [settingsOpen, setSettingsOpen] = useState(false)
@@ -90,9 +92,12 @@ const ChatContainer: React.FC = () => {
         setInputValue(query)
     }
 
-    const handleRunAnalysis = (query: string) => {
+    const handleRunAnalysis = async (query: string) => {
         dispatch(clearEstimation())
-        dispatch(runAnalysis({ query }))
+        const resultAction = await dispatch(runAnalysis({ query }))
+        if (autoSave && runAnalysis.fulfilled.match(resultAction)) {
+            dispatch(saveAnalysisResult(resultAction.payload))
+        }
     }
 
     const handleModelChange = (model: 'mistral' | 'anthropic') => {
