@@ -9,27 +9,27 @@ Check off features as they are implemented and verified. Use `/implement-feature
 
 ## Phase 1 — Immediate Wins (S/M)
 
-- [ ] **F01** Remove mock KM data [S] — `KaplanMeierPlot.tsx`
-- [ ] **F02** Gene search + filter + pagination [S] — `AnalysisResultsDisplay.tsx`
-- [ ] **F03** CI bands on KM curves [S] — `KaplanMeierPlot.tsx`
-- [ ] **F04** CSV + PNG export [S] — `AnalysisResultsDisplay.tsx` + `KaplanMeierPlot.tsx`
-- [ ] **F05** Analysis progress SSE [M] — `routes.py` + `orchestrator.py` + `ChatContainer.tsx`
-- [ ] **F06** Enable chat streaming [M] — `chatApi.ts` + `chatSlice.ts` + `MessageList.tsx`
-- [ ] **F07** Persist analysis results to database [M] — `database.py` + `routes.py` + `chatSlice.ts`
+- [x] **F01** Remove mock KM data [S] — `KaplanMeierPlot.tsx`
+- [x] **F02** Gene search + filter + pagination [S] — `AnalysisResultsDisplay.tsx`
+- [x] **F03** CI bands on KM curves [S] — `KaplanMeierPlot.tsx`
+- [x] **F04** CSV + PNG export [S] — `AnalysisResultsDisplay.tsx` + `KaplanMeierPlot.tsx`
+- [x] **F05** Analysis progress SSE [M] — `routes.py` + `orchestrator.py` + `ChatContainer.tsx`
+- [x] **F06** Enable chat streaming [M] — `chatApi.ts` + `chatSlice.ts` + `MessageList.tsx`
+- [x] **F07** Persist analysis results to database [M] — `database.py` + `routes.py` + `chatSlice.ts`
 
 ## Phase 2 — Core Differentiators (M)
 
-- [ ] **F08** Forest plot tab [M] — `AnalysisResultsDisplay.tsx` + new `ForestPlot.tsx`
-- [ ] **F09** Shareable result URLs [M] — `routes.py` + `App.tsx` *(requires F07)*
-- [ ] **F10** Gene batch input mode [M] — `request_models.py` + `orchestrator.py`
+- [x] **F08** Forest plot tab [M] — `AnalysisResultsDisplay.tsx` + new `ForestPlot.tsx`
+- [x] **F09** Shareable result URLs [M] — `routes.py` + `App.tsx` *(requires F07)*
+- [x] **F10** Gene batch input mode [M] — `request_models.py` + `orchestrator.py`
 - [ ] **F11** Pathway/GO enrichment [M] — new `enrichment_service.py`
 
 ## Phase 3 — Power User Features (L)
 
-- [ ] **F12** Analysis history dashboard [M] — `routes.py` + new `AnalysisHistoryPage.tsx` *(requires F07)*
+- [x] **F12** Analysis history dashboard [M] — `routes.py` + new `AnalysisHistoryPage.tsx` *(requires F07)*
 - [ ] **F13** Multivariate Cox regression [L] — `survival_analysis_service.py`
-- [ ] **F14** Analysis comparison mode [L] — new `comparison_service.py` *(requires F07, F12)*
-- [ ] **F15** Publication export package [L] — new `export_service.py` *(requires F07)*
+- [x] **F14** Analysis comparison mode [L] — new `comparison_service.py` *(requires F07, F12)*
+- [x] **F15** Publication export package [L] — new `export_service.py` *(requires F07)*
 
 ## Competitive Positioning
 

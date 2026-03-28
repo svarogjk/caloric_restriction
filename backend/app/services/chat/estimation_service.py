@@ -176,8 +176,11 @@ class QueryEstimationService:
         if self.geo_preview_service:
             # Run both in parallel for better performance
             try:
-                geo_task = self.geo_preview_service.get_preview(query)
-                ai_task = self._ai_estimate(query)
+                # Wrap with timeouts: GEO preview 15s, AI estimation 20s
+                geo_task = asyncio.wait_for(
+                    self.geo_preview_service.get_preview(query), timeout=15.0
+                )
+                ai_task = asyncio.wait_for(self._ai_estimate(query), timeout=20.0)
                 geo_preview, ai_estimation = await asyncio.gather(
                     geo_task, ai_task, return_exceptions=True
                 )

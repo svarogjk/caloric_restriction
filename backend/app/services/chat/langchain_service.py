@@ -317,14 +317,30 @@ class LangChainService:
                 if event["event"] == "on_chat_model_stream":
                     chunk = event["data"].get("chunk")
                     if chunk and hasattr(chunk, "content") and chunk.content:
-                        yield chunk.content
+                        content = chunk.content
+                        if isinstance(content, list):
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    yield block["text"]
+                                elif isinstance(block, str):
+                                    yield block
+                        else:
+                            yield content
         else:
             chain = self._create_chain(model)
             async for chunk in chain.astream(
                 {"history": history, "input": augmented_input}
             ):
                 if hasattr(chunk, "content") and chunk.content:
-                    yield chunk.content
+                    content = chunk.content
+                    if isinstance(content, list):
+                        for block in content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                yield block["text"]
+                            elif isinstance(block, str):
+                                yield block
+                    else:
+                        yield content
 
     def get_available_models(self) -> list[str]:
         """Get list of available model names."""

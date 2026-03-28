@@ -4,7 +4,9 @@ API routes for AI Chat functionality.
 Provides endpoints for conversation management, messaging, and query estimation.
 """
 
+import json
 import logging
+import uuid
 from datetime import datetime
 from typing import Optional
 
@@ -298,12 +300,17 @@ async def send_message(
     if request.stream:
         # Return streaming response
         async def generate():
+            full_content = ""
             async for chunk in chat_service.stream_message(
                 conversation_id=conversation_id,
                 content=request.content,
                 model=model,
             ):
-                yield f"data: {chunk}\n\n"
+                full_content += chunk
+                yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+
+            # Send message_complete so the frontend Promise resolves
+            yield f"data: {json.dumps({'type': 'message_complete', 'message': {'message_id': str(uuid.uuid4()), 'role': 'assistant', 'content': full_content, 'created_at': datetime.utcnow().isoformat(), 'model_used': model, 'suggested_actions': []}})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
