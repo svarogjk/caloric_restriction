@@ -397,10 +397,16 @@ class ChatService:
         content_lower = content.lower()
 
         # Check for action-like phrases in response
-        if "run the analysis" in content_lower or "perform the analysis" in content_lower:
+        run_analysis_phrases = [
+            "run the analysis", "perform the analysis", "run analysis",
+            "click \"run analysis\"", "click 'run analysis'",
+            "proceed with", "start the analysis", "launch the analysis",
+            "to proceed", "run it", "go ahead",
+        ]
+        if any(phrase in content_lower for phrase in run_analysis_phrases):
             actions.append("run_analysis")
 
-        if "modify" in content_lower or "try" in content_lower:
+        if "modify" in content_lower or "refine" in content_lower:
             actions.append("modify_query")
 
         # Add actions based on estimation

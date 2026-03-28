@@ -309,8 +309,11 @@ async def send_message(
                 full_content += chunk
                 yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
 
+            # Compute suggested actions from the full response
+            suggested_actions = chat_service._extract_actions(full_content, estimation=None)
+
             # Send message_complete so the frontend Promise resolves
-            yield f"data: {json.dumps({'type': 'message_complete', 'message': {'message_id': str(uuid.uuid4()), 'role': 'assistant', 'content': full_content, 'created_at': datetime.utcnow().isoformat(), 'model_used': model, 'suggested_actions': []}})}\n\n"
+            yield f"data: {json.dumps({'type': 'message_complete', 'message': {'message_id': str(uuid.uuid4()), 'role': 'assistant', 'content': full_content, 'created_at': datetime.utcnow().isoformat(), 'model_used': model, 'suggested_actions': suggested_actions}})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
