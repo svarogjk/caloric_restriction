@@ -2,6 +2,8 @@
 
 > Cross-dataset biomarker discovery from NCBI GEO — no coding required.
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19300334.svg)](https://doi.org/10.5281/zenodo.19300334)
+
 Run a natural language query. Get a ranked, cross-validated list of survival-associated genes backed by independent cohorts, complete with Kaplan-Meier curves, forest plots, hazard ratios, and a publication-ready export — in under 5 minutes.
 
 <!-- Add demo GIF here: docs/demo.gif -->
@@ -196,7 +198,7 @@ If you use GEO Survival Analysis in your research, please cite:
 
 > Korkodnov I. et al. GEO Survival Analysis: cross-cohort biomarker discovery from NCBI GEO.
 > *Nucleic Acids Research*, Web Server Issue, 2026.
-> DOI: [ZENODO DOI PLACEHOLDER]
+> DOI: [10.5281/zenodo.19300334](https://doi.org/10.5281/zenodo.19300334)
 
 ---
 
