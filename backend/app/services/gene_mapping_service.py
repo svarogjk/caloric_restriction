@@ -15,6 +15,8 @@ from pathlib import Path
 import pandas as pd
 import httpx
 
+from app.utils.memory_tracker import track_memory, log_memory_checkpoint
+
 logger = logging.getLogger(__name__)
 
 
@@ -385,6 +387,7 @@ class GeneMappingService:
                 pass
         
         # Fetch from GEO with timeout protection
+        log_memory_checkpoint("fetch_platform_mapping_start", context_id=normalized_id)
         try:
             mapping = await asyncio.wait_for(
                 self._fetch_platform_mapping(platform_id),
@@ -393,6 +396,7 @@ class GeneMappingService:
         except asyncio.TimeoutError:
             logger.error(f"Platform mapping download timed out for {platform_id}")
             return None
+        log_memory_checkpoint("fetch_platform_mapping_end", context_id=normalized_id)
         
         if mapping:
             # Only keep small mappings in memory
@@ -574,12 +578,15 @@ class GeneMappingService:
                 async for chunk in response.aiter_bytes(chunk_size=self.CHUNK_SIZE):
                     downloaded_data.extend(chunk)
                     bytes_downloaded += len(chunk)
-                    
+
                     # Log progress for large files
                     if expected_size > 100 * 1024 * 1024:  # Only log for files > 100MB
                         progress_pct = (bytes_downloaded / expected_size) * 100
                         if bytes_downloaded % (10 * 1024 * 1024) == 0:  # Log every 10MB
                             logger.debug(f"{gpl_id} download progress: {progress_pct:.1f}%")
+                        # Memory checkpoint every 200 MB (one CHUNK_SIZE) for very large files
+                        if bytes_downloaded % self.CHUNK_SIZE == 0:
+                            log_memory_checkpoint("platform_download_chunk", context_id=gpl_id)
             
             # Validate Content-Length after download
             actual_size = len(downloaded_data)

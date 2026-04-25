@@ -254,11 +254,8 @@ export const sendMessage = createAsyncThunk(
             }
             dispatch(addMessage(userMessage))
 
-            // Get auth token
+            // Get auth token (optional — guest users can still chat)
             const token = getStoredToken()
-            if (!token) {
-                return rejectWithValue('Not authenticated')
-            }
 
             // Start streaming
             dispatch(startStreaming(tempId))

@@ -5,21 +5,25 @@ Provides REST API endpoints for survival analysis on GEO data
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.services.geo_survival_workflow_orchestrator import GEOSurvivalWorkflowOrchestrator
 from app.services.chat.dataset_rag_service import DatasetRAGService
 from app.services.chat.geo_preview_service import GEOPreviewService
-from app.services.chat.agent_tools import build_tools
+from app.services.chat.agent_tools import AgentDeps
 from app.api import routes, chat_routes, auth_routes
 from app.api.enrichment_routes import router as enrichment_router
 from app.api.compare_routes import router as compare_router
 from app.config.logging_config import setup_logging, get_logger
 from app.config.database import init_db, close_db
 from app.config.settings import settings
+from app.utils.memory_tracker import log_memory_checkpoint
 
 # Setup logging to console and file
 setup_logging(level=logging.DEBUG)
@@ -48,7 +52,7 @@ async def lifespan(app: FastAPI):
     )
     routes.set_orchestrator(orchestrator)
 
-    # Initialize RAG service and index local datasets into pgvector
+    # Initialize RAG service and index local datasets into in-memory store
     rag_service = DatasetRAGService.from_env()
     try:
         n_indexed = await rag_service.index_datasets()
@@ -56,16 +60,17 @@ async def lifespan(app: FastAPI):
     except (ConnectionError, RuntimeError) as exc:
         logger.warning(f"RAG indexing skipped (DB may be offline): {exc}")
 
-    # Build and inject agent tools
+    # Inject service dependencies into the PydanticAI agent
     geo_preview_service = GEOPreviewService()
     estimation_service = chat_routes.get_estimation_service()
-    tools = build_tools(
+    deps = AgentDeps(
         rag_service=rag_service,
         estimation_service=estimation_service,
         geo_preview_service=geo_preview_service,
-        orchestrator=orchestrator,
     )
-    chat_routes.set_tools(tools)
+    chat_routes.set_deps(deps)
+
+    log_memory_checkpoint("startup_complete")
 
     yield
 
@@ -97,6 +102,15 @@ app.include_router(chat_routes.router, prefix="/api")
 app.include_router(auth_routes.router, prefix="/api")
 app.include_router(enrichment_router, prefix="/api")
 app.include_router(compare_router, prefix="/api")
+
+# Serve compiled React frontend (present in Docker image, absent in dev)
+_DIST = Path("frontend/dist")
+if _DIST.exists():
+    app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str) -> FileResponse:  # noqa: ARG001
+        return FileResponse(_DIST / "index.html")
 
 
 if __name__ == "__main__":

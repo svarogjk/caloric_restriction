@@ -55,7 +55,7 @@ export const UserMenu: React.FC = () => {
                     <div className="py-1">
                         <div className="px-4 py-2 border-b border-gray-100">
                             <p className="text-sm font-medium text-gray-900">{displayName}</p>
-                            <p className="text-xs text-gray-500">{user.email}</p>
+                            {user.email && <p className="text-xs text-gray-500">{user.email}</p>}
                         </div>
                         <button
                             onClick={handleLogout}

@@ -19,7 +19,6 @@ from sqlalchemy import (
     ForeignKey,
     JSON,
     Index,
-    func,
 )
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlalchemy.orm import DeclarativeBase, relationship, Mapped, mapped_column
@@ -47,8 +46,8 @@ class User(Base):
     username: Mapped[str] = mapped_column(
         String(50), unique=True, nullable=False, index=True
     )
-    email: Mapped[str] = mapped_column(
-        String(255), unique=True, nullable=False, index=True
+    email: Mapped[Optional[str]] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
     )
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -243,7 +242,7 @@ class AnalysisResult(Base):
     processing_time_seconds: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     result_data: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), index=True
+        DateTime, default=datetime.utcnow, index=True
     )
 
     # Relationship back to user

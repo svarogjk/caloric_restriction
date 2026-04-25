@@ -24,6 +24,7 @@ from app.services.survival_analysis_service import (
     GeneSurvivalResult
 )
 from app.config.logging_config import get_logger
+from app.utils.memory_tracker import track_memory, log_memory_checkpoint, log_analysis_summary
 
 logger = get_logger(__name__)
 
@@ -169,6 +170,7 @@ class GEOSurvivalWorkflowOrchestrator:
             return self._analysis_cache[cache_key]
 
         logger.info(f"Starting GEO survival analysis workflow for: {query} with model: {use_model}")
+        _workflow_rss_before = log_memory_checkpoint("analyze_query_start", context_id=query[:50])
 
         # Update services to use the specified model
         if model and model != self.current_model:
@@ -260,6 +262,14 @@ class GEOSurvivalWorkflowOrchestrator:
         self._analysis_cache.move_to_end(cache_key)
         if len(self._analysis_cache) > self._ANALYSIS_CACHE_MAX:
             self._analysis_cache.popitem(last=False)
+            log_memory_checkpoint("analysis_cache_eviction")
+
+        log_analysis_summary(
+            query=query,
+            n_datasets=result.n_datasets_analyzed,
+            n_genes=len(result.common_survival_genes),
+            processing_time=processing_time,
+        )
 
         return result
     
@@ -729,6 +739,7 @@ class GEOSurvivalWorkflowOrchestrator:
     ) -> List[GeneSurvivalOccurrence]:
         """Identify genes commonly associated with survival across datasets"""
 
+        log_memory_checkpoint("common_genes_aggregation_start")
         gene_data = {}
 
         for result in survival_results:
@@ -838,8 +849,9 @@ class GEOSurvivalWorkflowOrchestrator:
         # Sort by number of datasets and then by average p-value
         common_genes.sort(key=lambda x: (-x.n_datasets, x.avg_cox_p_value))
         
+        log_memory_checkpoint("common_genes_aggregation_end")
         logger.info(f"Found {len(common_genes)} common survival-associated genes")
-        
+
         if common_genes:
             sample_genes = common_genes[:10]
             logger.info("Top survival-associated genes:")

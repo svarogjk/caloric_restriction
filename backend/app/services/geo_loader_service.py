@@ -22,6 +22,7 @@ from pydantic_ai import Agent
 from app.models.llm_models import model_dict
 from app.services.geo_client import GEODataset
 from app.services.gene_mapping_service import GeneMappingService
+from app.utils.memory_tracker import track_memory, log_memory_checkpoint
 
 logger = logging.getLogger(__name__)
 
@@ -174,65 +175,67 @@ class GEODataLoaderService:
             LoadedGEOData or None if loading fails
         """
         logger.info(f"Loading dataset {dataset.accession}")
-        
-        # Check datasets folder first
-        dataset_path = self.DATASETS_DIR / f"{dataset.accession}.parquet"
-        if dataset_path.exists():
-            logger.info(f"Loading from datasets folder: {dataset_path}")
-            try:
-                return self._load_from_storage(dataset_path, dataset)
-            except Exception as e:
-                logger.warning(f"Storage load failed: {e}, loading from source")
-        
-        # Load from GEO source
-        logger.info(f"Dataset {dataset.accession} not found in storage, loading from GEO")
-        
-        # Try series matrix first (most structured format)
-        loaded_data = await self._try_series_matrix(dataset)
-        
-        # If that fails, try supplementary files
-        if loaded_data is None:
-            loaded_data = await self._try_supplementary_files(dataset)
-        
-        if loaded_data is None:
-            logger.error(f"Failed to load dataset {dataset.accession}: Could not retrieve any data files")
-            return None
-        
-        # Validate data is not empty with detailed error reporting
-        if loaded_data.expression_matrix.empty or len(loaded_data.expression_matrix) == 0:
-            logger.error(f"Dataset {dataset.accession} has no expression data (empty matrix). "
-                        f"Shape: {loaded_data.expression_matrix.shape}")
-            return None
-        
-        if len(loaded_data.expression_matrix.columns) < 2:
-            logger.error(f"Dataset {dataset.accession} has too few samples ({len(loaded_data.expression_matrix.columns)}). "
-                        f"Minimum 2 samples required. Total genes: {len(loaded_data.expression_matrix)}")
-            return None
-        
-        # Perform comprehensive data quality checks
-        quality_issues = self._validate_data_quality(loaded_data, dataset.accession)
-        if quality_issues:
-            logger.warning(f"Dataset {dataset.accession} quality issues: {quality_issues}")
-            # Don't reject - just warn, some issues may be acceptable
-        
-        # Normalize if requested
-        if normalize:
-            loaded_data = self._normalize_expression(loaded_data)
-        
-        # Calculate quality metrics
-        loaded_data.quality_metrics = self._calculate_quality_metrics(loaded_data)
-        
-        # Apply gene symbol mapping
-        loaded_data = await self.apply_gene_mapping(loaded_data)
-        
-        # Save to datasets folder
-        self._save_to_storage(loaded_data)
-        
-        logger.info(f"Successfully loaded {dataset.accession}: "
-                   f"{loaded_data.expression_matrix.shape[0]} genes, "
-                   f"{loaded_data.expression_matrix.shape[1]} samples")
-        
-        return loaded_data
+
+        async with track_memory("load_dataset", context_id=dataset.accession):
+            # Check datasets folder first
+            dataset_path = self.DATASETS_DIR / f"{dataset.accession}.parquet"
+            if dataset_path.exists():
+                logger.info(f"Loading from datasets folder: {dataset_path}")
+                try:
+                    return self._load_from_storage(dataset_path, dataset)
+                except Exception as e:
+                    logger.warning(f"Storage load failed: {e}, loading from source")
+
+            # Load from GEO source
+            logger.info(f"Dataset {dataset.accession} not found in storage, loading from GEO")
+
+            # Try series matrix first (most structured format)
+            loaded_data = await self._try_series_matrix(dataset)
+
+            # If that fails, try supplementary files
+            if loaded_data is None:
+                loaded_data = await self._try_supplementary_files(dataset)
+
+            if loaded_data is None:
+                logger.error(f"Failed to load dataset {dataset.accession}: Could not retrieve any data files")
+                return None
+
+            # Validate data is not empty with detailed error reporting
+            if loaded_data.expression_matrix.empty or len(loaded_data.expression_matrix) == 0:
+                logger.error(f"Dataset {dataset.accession} has no expression data (empty matrix). "
+                            f"Shape: {loaded_data.expression_matrix.shape}")
+                return None
+
+            if len(loaded_data.expression_matrix.columns) < 2:
+                logger.error(f"Dataset {dataset.accession} has too few samples ({len(loaded_data.expression_matrix.columns)}). "
+                            f"Minimum 2 samples required. Total genes: {len(loaded_data.expression_matrix)}")
+                return None
+
+            # Perform comprehensive data quality checks
+            quality_issues = self._validate_data_quality(loaded_data, dataset.accession)
+            if quality_issues:
+                logger.warning(f"Dataset {dataset.accession} quality issues: {quality_issues}")
+                # Don't reject - just warn, some issues may be acceptable
+
+            # Normalize if requested
+            if normalize:
+                loaded_data = self._normalize_expression(loaded_data)
+
+            # Calculate quality metrics
+            loaded_data.quality_metrics = self._calculate_quality_metrics(loaded_data)
+
+            # Apply gene symbol mapping
+            loaded_data = await self.apply_gene_mapping(loaded_data)
+
+            # Save to datasets folder
+            self._save_to_storage(loaded_data)
+
+            logger.info(f"Successfully loaded {dataset.accession}: "
+                       f"{loaded_data.expression_matrix.shape[0]} genes, "
+                       f"{loaded_data.expression_matrix.shape[1]} samples")
+            log_memory_checkpoint("dataset_loaded", context_id=dataset.accession)
+
+            return loaded_data
     
     async def _try_series_matrix(self, dataset: GEODataset) -> Optional[LoadedGEOData]:
         """Try loading from series matrix file"""
@@ -254,6 +257,7 @@ class GEODataLoaderService:
             
             # Decompress and preview
             content = gzip.decompress(response.content).decode('utf-8')
+            log_memory_checkpoint("series_matrix_decompressed", context_id=dataset.accession)
             preview_lines = content.split('\n')[:100]
             preview_text = '\n'.join(preview_lines)
             

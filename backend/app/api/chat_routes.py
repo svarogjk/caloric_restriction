@@ -17,24 +17,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
 from app.models.database import User
-from app.api.dependencies import get_current_active_user
-from app.services.chat import ChatService, LangChainService, QueryEstimationService
+from app.api.dependencies import get_current_active_user, get_optional_current_user
+from app.services.chat import ChatService, PydanticAIService, QueryEstimationService
+from app.services.chat.agent_tools import AgentDeps
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 # Shared service instances
-_langchain_service: Optional[LangChainService] = None
+_pydantic_ai_service: Optional[PydanticAIService] = None
 _estimation_service: Optional[QueryEstimationService] = None
 
 
-def get_langchain_service() -> LangChainService:
-    """Get or create LangChain service singleton."""
-    global _langchain_service
-    if _langchain_service is None:
-        _langchain_service = LangChainService()
-    return _langchain_service
+def get_pydantic_ai_service() -> PydanticAIService:
+    """Get or create PydanticAI service singleton."""
+    global _pydantic_ai_service
+    if _pydantic_ai_service is None:
+        _pydantic_ai_service = PydanticAIService()
+    return _pydantic_ai_service
 
 
 def get_estimation_service() -> QueryEstimationService:
@@ -45,14 +46,14 @@ def get_estimation_service() -> QueryEstimationService:
     return _estimation_service
 
 
-def set_tools(tools: list) -> None:
+def set_deps(deps: AgentDeps) -> None:
     """
-    Inject agent tools into the LangChain service singleton.
+    Inject service dependencies into the PydanticAI service singleton.
 
     Called from app lifespan once all services are ready.
     """
-    get_langchain_service().set_tools(tools)
-    logger.info(f"Injected {len(tools)} tools into LangChainService")
+    get_pydantic_ai_service().set_deps(deps)
+    logger.info("AgentDeps injected into PydanticAIService")
 
 
 async def get_chat_service(
@@ -61,7 +62,7 @@ async def get_chat_service(
     """Dependency to get ChatService instance."""
     return ChatService(
         session=db,
-        langchain_service=get_langchain_service(),
+        langchain_service=get_pydantic_ai_service(),
         estimation_service=get_estimation_service(),
     )
 
@@ -152,21 +153,16 @@ class EstimateQueryResponse(BaseModel):
 async def create_conversation(
     request: CreateConversationRequest,
     chat_service: ChatService = Depends(get_chat_service),
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_optional_current_user),
 ):
     """
-    Create a new conversation.
-
-    Args:
-        request: CreateConversationRequest with optional title and context
-
-    Returns:
-        CreateConversationResponse with the new conversation ID
+    Create a new conversation. Works for both authenticated and anonymous users.
+    Anonymous conversations are ephemeral and not tied to a user account.
     """
     conversation = await chat_service.create_conversation(
         title=request.title,
         context_type=request.context_type,
-        user_id=current_user.id,
+        user_id=current_user.id if current_user else None,
     )
 
     return CreateConversationResponse(
@@ -181,18 +177,13 @@ async def list_conversations(
     limit: int = 20,
     offset: int = 0,
     chat_service: ChatService = Depends(get_chat_service),
-    current_user: User = Depends(get_current_active_user),
+    current_user=Depends(get_optional_current_user),
 ):
     """
-    List conversations for the authenticated user, ordered by most recent.
-
-    Args:
-        limit: Maximum number of conversations to return
-        offset: Number of conversations to skip
-
-    Returns:
-        List of conversation summaries
+    List conversations for the authenticated user. Returns empty list for anonymous users.
     """
+    if not current_user:
+        return []
     conversations = await chat_service.list_conversations(
         limit=limit, offset=offset, user_id=current_user.id
     )
@@ -377,5 +368,4 @@ async def get_chat_models():
     Returns:
         List of available model names
     """
-    langchain = get_langchain_service()
-    return langchain.get_available_models()
+    return get_pydantic_ai_service().get_available_models()

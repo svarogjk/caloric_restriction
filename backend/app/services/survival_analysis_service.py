@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.config.logging_config import get_logger
 from app.services.geo_loader_service import LoadedGEOData
+from app.utils.memory_tracker import track_memory, log_memory_checkpoint
 
 logger = get_logger(__name__)
 warnings.filterwarnings('ignore')
@@ -428,6 +429,7 @@ Determine if this dataset contains survival data and identify the relevant colum
             SurvivalAnalysisResult or None if analysis fails
         """
         logger.info(f"Starting survival analysis for {loaded_data.accession}")
+        log_memory_checkpoint("analyze_survival_start", context_id=loaded_data.accession)
         
         # Validate data
         if loaded_data.expression_matrix is None or loaded_data.expression_matrix.empty:
@@ -497,6 +499,7 @@ Determine if this dataset contains survival data and identify the relevant colum
         
         expression_matrix = loaded_data.expression_matrix[common_samples]
         survival_df = survival_df.loc[common_samples]
+        log_memory_checkpoint("expression_matrix_sliced", context_id=loaded_data.accession)
 
         # Align metadata to common_samples for multivariate Cox (F13)
         metadata_aligned: Optional[pd.DataFrame] = None
@@ -539,6 +542,7 @@ Determine if this dataset contains survival data and identify the relevant colum
         
         logger.info(f"Found {len(significant_genes)} significant genes out of {n_analyzed} analyzed")
         
+        log_memory_checkpoint("analyze_survival_end", context_id=loaded_data.accession)
         return SurvivalAnalysisResult(
             accession=loaded_data.accession,
             title=loaded_data.title,

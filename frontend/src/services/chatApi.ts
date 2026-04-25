@@ -277,17 +277,17 @@ export async function sendMessageStream(
     conversationId: string,
     content: string,
     model: string,
-    token: string,
+    token: string | null,
     onToken: (token: string) => void,
     onComplete: (message: MessageResponse) => void,
     onError: (error: string) => void,
 ): Promise<void> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (token) headers['Authorization'] = `Bearer ${token}`
+
     const response = await fetch(`/api/chat/conversations/${conversationId}/messages?stream=true`, {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-        },
+        headers,
         body: JSON.stringify({ content, model, stream: true }),
     })
 

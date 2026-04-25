@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field
-from langchain_mistralai import ChatMistralAI
-from langchain_core.messages import HumanMessage
+from pydantic_ai import Agent
+from pydantic_ai.models.mistral import MistralModel
+from pydantic_ai.providers.mistral import MistralProvider
 
 _SERVICES_DIR = Path(__file__).parent.parent
 
@@ -141,20 +142,27 @@ class QueryEstimationService:
         self.geo_preview_service = geo_preview_service
         self._structured_llm = self._init_structured_llm()
 
-    def _init_structured_llm(self):
-        """Initialize LLM with structured output for estimation."""
+    def _init_structured_llm(self) -> Agent:
+        """Initialize PydanticAI Agent with structured output for estimation."""
         mistral_key = os.getenv("MISTRAL_KEY", "")
         if not mistral_key:
             key_file = _SERVICES_DIR / "mistral_key.txt"
             if key_file.exists():
                 mistral_key = key_file.read_text().strip()
 
-        llm = ChatMistralAI(
-            api_key=mistral_key,
-            model="mistral-small-latest",
-            temperature=0.1,
+        model = MistralModel(
+            "mistral-small-latest",
+            provider=MistralProvider(api_key=mistral_key),
         )
-        return llm.with_structured_output(AIEstimationResult)
+        return Agent(
+            model,
+            output_type=AIEstimationResult,
+            system_prompt=(
+                "You are a query estimation assistant for a bioinformatics tool. "
+                "Evaluate survival analysis queries for GEO datasets and return "
+                "structured confidence estimates."
+            ),
+        )
 
     async def estimate_query(self, query: str) -> EstimationResult:
         """
@@ -283,7 +291,7 @@ class QueryEstimationService:
         }
 
     async def _ai_estimate(self, query: str) -> AIEstimationResult:
-        """Get AI-powered estimation using LangChain structured output."""
+        """Get AI-powered estimation using PydanticAI structured output."""
         prompt = (
             f'Evaluate this survival analysis query for GEO datasets:\n\nQuery: "{query}"\n\n'
             "Consider:\n"
@@ -293,10 +301,8 @@ class QueryEstimationService:
             "Provide your estimation."
         )
         try:
-            result: AIEstimationResult = await self._structured_llm.ainvoke(
-                [HumanMessage(content=prompt)]
-            )
-            return result
+            result = await self._structured_llm.run(prompt)
+            return result.output
         except (ValueError, RuntimeError) as exc:
             logger.warning(f"AI estimation failed: {exc}")
             return AIEstimationResult(

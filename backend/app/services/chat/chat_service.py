@@ -1,7 +1,7 @@
 """
 Chat Service - Main orchestrator for chat functionality.
 
-Coordinates conversation management, LangChain responses, query estimation,
+Coordinates conversation management, PydanticAI responses, query estimation,
 and GEO preview functionality.
 """
 
@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.chat.conversation_service import ConversationService, ConversationData
 from app.services.chat.estimation_service import QueryEstimationService, EstimationResult
-from app.services.chat.langchain_service import LangChainService
+from app.services.chat.pydantic_ai_service import PydanticAIService
 from app.services.chat.geo_preview_service import GEOPreviewService
 
 logger = logging.getLogger(__name__)
@@ -63,12 +63,12 @@ class ChatService:
     def __init__(
         self,
         session: AsyncSession,
-        langchain_service: Optional[LangChainService] = None,
+        langchain_service: Optional[PydanticAIService] = None,
         estimation_service: Optional[QueryEstimationService] = None,
         geo_preview_service: Optional[GEOPreviewService] = None,
     ):
         self.conversation_service = ConversationService(session)
-        self.langchain_service = langchain_service or LangChainService()
+        self.langchain_service = langchain_service or PydanticAIService()
 
         # Create GEO preview service for real-time GEO search previews
         self.geo_preview_service = geo_preview_service or GEOPreviewService()

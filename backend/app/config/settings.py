@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Database
-    database_url: str = "postgresql+asyncpg://geo_user:geo_password@localhost:5432/geo_chat"
+    database_url: str = "sqlite+aiosqlite:///./geo_chat.db"
 
     # JWT Authentication
     jwt_secret_key: str = "changeme-generate-with-openssl-rand-hex-32"

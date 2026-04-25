@@ -39,8 +39,8 @@ async def register(
             detail="Username already registered",
         )
 
-    # Check email uniqueness
-    if await auth_service.get_user_by_email(user_data.email):
+    # Check email uniqueness (only when email is provided)
+    if user_data.email and await auth_service.get_user_by_email(user_data.email):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Email already registered",

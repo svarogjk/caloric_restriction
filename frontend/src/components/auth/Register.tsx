@@ -6,9 +6,10 @@ import { registerUser, clearError, clearRegisterSuccess } from '../../store/auth
 interface RegisterProps {
     onSwitchToLogin: () => void
     onRegisterSuccess: () => void
+    modal?: boolean
 }
 
-export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin, onRegisterSuccess }) => {
+export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin, onRegisterSuccess, modal = false }) => {
     const dispatch = useDispatch<AppDispatch>()
     const { loading, error, registerSuccess } = useSelector((state: RootState) => state.auth)
 
@@ -48,7 +49,7 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin, onRegisterS
 
         dispatch(registerUser({
             username,
-            email,
+            email: email || undefined,
             password,
             full_name: fullName || undefined,
         }))
@@ -56,11 +57,14 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin, onRegisterS
 
     const displayError = validationError || error
 
+    const wrapper = modal ? 'py-6 px-6' : 'min-h-screen flex items-center justify-center bg-gray-100 py-12 px-4'
+    const inner = modal ? 'w-full space-y-4' : 'max-w-md w-full space-y-6'
+
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-100 py-12 px-4">
-            <div className="max-w-md w-full space-y-8">
+        <div className={wrapper}>
+            <div className={inner}>
                 <div>
-                    <h2 className="mt-6 text-center text-3xl font-bold text-gray-900">
+                    <h2 className="mt-2 text-center text-2xl font-bold text-gray-900">
                         Create your account
                     </h2>
                     <p className="mt-2 text-center text-sm text-gray-600">
@@ -103,18 +107,17 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin, onRegisterS
 
                         <div>
                             <label htmlFor="email" className="block text-sm font-medium text-gray-700">
-                                Email *
+                                Email <span className="text-gray-400 font-normal">(optional)</span>
                             </label>
                             <input
                                 id="email"
                                 name="email"
                                 type="email"
                                 autoComplete="email"
-                                required
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 className="mt-1 appearance-none relative block w-full px-3 py-2 border border-gray-300 rounded-md placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                                placeholder="email@example.com"
+                                placeholder="email@example.com (optional)"
                             />
                         </div>
 

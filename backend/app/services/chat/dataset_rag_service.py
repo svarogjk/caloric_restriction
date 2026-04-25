@@ -1,11 +1,11 @@
 """
 Dataset RAG Service.
 
-Embeds GEO dataset metadata (strategy + metrics JSON files) into a pgvector
-store so the chat agent can perform semantic search over known datasets.
+Embeds GEO dataset metadata (strategy + metrics JSON files) and provides
+semantic search using cosine similarity on in-memory numpy arrays.
 
-- Embeddings: MistralAIEmbeddings("mistral-embed", dim=1024)
-- Store: PGVector via langchain-postgres (psycopg3 driver)
+- Embeddings: mistral-embed via Mistral SDK (dim=1024)
+- Store: numpy array + JSON metadata persisted on disk
 - Idempotency: hash-based — only re-embeds files that have changed
 - Embedding model is always Mistral regardless of which chat LLM is active
   (Anthropic has no embedding API)
@@ -18,22 +18,26 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from langchain_core.documents import Document
-from langchain_mistralai import MistralAIEmbeddings
-from langchain_postgres import PGVector
+import numpy as np
+from mistralai import Mistral
 
 logger = logging.getLogger(__name__)
 
 # Directory where *.strategy.json and *.metrics.json live
 DATASETS_DIR = Path(__file__).parent.parent.parent.parent / "datasets"
 
-# Persisted index so we don't re-embed unchanged files across restarts
-INDEX_FILE = Path(__file__).parent.parent.parent.parent / "data" / "rag_index.json"
+DATA_DIR = Path(__file__).parent.parent.parent.parent / "data"
+INDEX_FILE = DATA_DIR / "rag_index.json"
+DOCS_FILE = DATA_DIR / "rag_docs.json"
+EMBEDDINGS_FILE = DATA_DIR / "rag_embeddings.npy"
 
 
 class DatasetRAGService:
     """
-    Manages pgvector-backed semantic search over GEO dataset metadata.
+    In-memory semantic search over GEO dataset metadata.
+
+    Embeddings are generated via Mistral and stored as a numpy array on disk
+    so they survive restarts without re-embedding unchanged files.
 
     Usage:
         service = DatasetRAGService.from_env()
@@ -41,21 +45,14 @@ class DatasetRAGService:
         docs = await service.search("bladder cancer survival")
     """
 
-    COLLECTION = "geo_datasets"
-
-    def __init__(self, connection_string: str, mistral_key: str) -> None:
-        self.embeddings = MistralAIEmbeddings(
-            api_key=mistral_key,
-            model="mistral-embed",
-        )
-        self.store = PGVector(
-            embeddings=self.embeddings,
-            collection_name=self.COLLECTION,
-            connection=connection_string,
-            use_jsonb=True,
-            async_mode=True,
-        )
+    def __init__(self, mistral_key: str) -> None:
+        self._mistral = Mistral(api_key=mistral_key)
         self._index: dict[str, str] = self._load_index()
+        # doc_id → document dict (accession, content, metadata)
+        self._docs: dict[str, dict] = {}
+        # doc_id → embedding (list[float], dim=1024)
+        self._emb: dict[str, list[float]] = {}
+        self._load_store()
 
     # ------------------------------------------------------------------
     # Factory
@@ -64,22 +61,24 @@ class DatasetRAGService:
     @classmethod
     def from_env(cls) -> "DatasetRAGService":
         """Create service from environment variables."""
-        raw_url = os.getenv(
-            "DATABASE_URL",
-            "postgresql+asyncpg://geo_user:geo_password@localhost:5432/geo_chat",
-        )
-        # langchain-postgres async methods require psycopg3 async driver
-        psycopg_url = raw_url.replace(
-            "postgresql+asyncpg://", "postgresql+psycopg_async://"
-        )
-
         mistral_key = os.getenv("MISTRAL_KEY", "")
         if not mistral_key:
-            key_file = Path(__file__).parent.parent.parent / "services" / "mistral_key.txt"
+            key_file = Path(__file__).parent.parent / "mistral_key.txt"
             if key_file.exists():
                 mistral_key = key_file.read_text().strip()
+        return cls(mistral_key=mistral_key)
 
-        return cls(connection_string=psycopg_url, mistral_key=mistral_key)
+    # ------------------------------------------------------------------
+    # Embeddings
+    # ------------------------------------------------------------------
+
+    async def _embed(self, text: str) -> list[float]:
+        """Generate a 1024-dim embedding via Mistral embed API."""
+        resp = await self._mistral.embeddings.create_async(
+            model="mistral-embed",
+            inputs=[text],
+        )
+        return resp.data[0].embedding
 
     # ------------------------------------------------------------------
     # Indexing
@@ -97,37 +96,37 @@ class DatasetRAGService:
             logger.warning(f"Datasets directory not found: {datasets_dir}")
             return 0
 
-        docs_to_add: list[Document] = []
-        ids_to_add: list[str] = []
+        indexed = 0
 
         for json_file in sorted(datasets_dir.glob("*.json")):
-            doc_id, document = self._build_document(json_file)
-            if document is None:
+            doc_id, doc = self._build_doc(json_file)
+            if doc is None:
                 continue
 
             file_hash = self._hash_file(json_file)
             if self._index.get(doc_id) == file_hash:
                 continue  # unchanged — skip
 
-            docs_to_add.append(document)
-            ids_to_add.append(doc_id)
+            embedding = await self._embed(doc["content"])
+            self._docs[doc_id] = doc
+            self._emb[doc_id] = embedding
             self._index[doc_id] = file_hash
+            indexed += 1
 
-        if not docs_to_add:
+        if indexed == 0:
             logger.info("RAG index up-to-date — no new datasets to embed")
-            return 0
+        else:
+            self._save_store()
+            self._save_index()
+            logger.info(f"RAG index updated: {indexed} documents added/updated")
 
-        logger.info(f"Embedding {len(docs_to_add)} dataset documents into pgvector...")
-        await self.store.aadd_documents(docs_to_add, ids=ids_to_add)
-        self._save_index()
-        logger.info(f"RAG index updated: {len(docs_to_add)} documents added")
-        return len(docs_to_add)
+        return indexed
 
     # ------------------------------------------------------------------
     # Search
     # ------------------------------------------------------------------
 
-    async def search(self, query: str, k: int = 5) -> list[Document]:
+    async def search(self, query: str, k: int = 5) -> list[dict]:
         """
         Semantic similarity search over indexed dataset metadata.
 
@@ -136,18 +135,45 @@ class DatasetRAGService:
             k: Number of results to return
 
         Returns:
-            List of matching Documents with metadata (accession, n_samples, etc.)
+            List of dicts with keys: accession, content, metadata
         """
-        return await self.store.asimilarity_search(query, k=k)
+        if not self._docs:
+            return []
+
+        query_emb = await self._embed(query)
+        q = np.array(query_emb, dtype=np.float32)
+
+        doc_ids = list(self._docs.keys())
+        emb_matrix = np.array(
+            [self._emb[did] for did in doc_ids], dtype=np.float32
+        )  # shape (n, 1024)
+
+        # Cosine similarity: (emb_matrix @ q) / (||emb_matrix|| * ||q||)
+        q_norm = np.linalg.norm(q)
+        if q_norm == 0:
+            return []
+        row_norms = np.linalg.norm(emb_matrix, axis=1)
+        row_norms = np.where(row_norms == 0, 1e-8, row_norms)
+        sims = (emb_matrix @ q) / (row_norms * q_norm)
+
+        top_k = min(k, len(doc_ids))
+        top_idx = np.argsort(sims)[::-1][:top_k]
+
+        return [
+            {
+                "accession": self._docs[doc_ids[i]]["accession"],
+                "content": self._docs[doc_ids[i]]["content"],
+                "metadata": self._docs[doc_ids[i]]["metadata"],
+            }
+            for i in top_idx
+        ]
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _build_document(
-        self, json_file: Path
-    ) -> tuple[str, Optional[Document]]:
-        """Build a LangChain Document from a strategy or metrics JSON file."""
+    def _build_doc(self, json_file: Path) -> tuple[str, Optional[dict]]:
+        """Build a document dict from a strategy or metrics JSON file."""
         try:
             data = json.loads(json_file.read_text())
         except (json.JSONDecodeError, OSError) as exc:
@@ -156,7 +182,7 @@ class DatasetRAGService:
 
         stem = json_file.stem  # e.g. "GSE11121.strategy" or "GSE11121.metrics"
         parts = stem.split(".")
-        accession = parts[0]  # e.g. "GSE11121"
+        accession = parts[0]
         file_type = parts[1] if len(parts) > 1 else "unknown"
 
         if file_type == "strategy":
@@ -166,22 +192,25 @@ class DatasetRAGService:
                 f"Notes: {data.get('notes', '')}"
             )
         elif file_type == "metrics":
-            content = (
-                f"Dataset: {accession}\n"
-                f"Genes: {data.get('n_genes', 'unknown')}\n"
-                f"Samples: {data.get('n_samples', 'unknown')}\n"
-                f"Missing rate: {data.get('missing_rate', 'unknown'):.3f}"
-                if isinstance(data.get("missing_rate"), float)
-                else f"Dataset: {accession} metrics: {json.dumps(data)}"
-            )
+            missing = data.get("missing_rate")
+            if isinstance(missing, float):
+                content = (
+                    f"Dataset: {accession}\n"
+                    f"Genes: {data.get('n_genes', 'unknown')}\n"
+                    f"Samples: {data.get('n_samples', 'unknown')}\n"
+                    f"Missing rate: {missing:.3f}"
+                )
+            else:
+                content = f"Dataset: {accession} metrics: {json.dumps(data)}"
         else:
             content = f"Dataset: {accession}\n{json.dumps(data)}"
 
         doc_id = f"{accession}_{file_type}"
-        return doc_id, Document(
-            page_content=content,
-            metadata={"accession": accession, "type": file_type, **data},
-        )
+        return doc_id, {
+            "accession": accession,
+            "content": content,
+            "metadata": {"accession": accession, "type": file_type, **data},
+        }
 
     @staticmethod
     def _hash_file(path: Path) -> str:
@@ -198,5 +227,33 @@ class DatasetRAGService:
 
     def _save_index(self) -> None:
         """Persist the hash index to disk."""
-        INDEX_FILE.parent.mkdir(parents=True, exist_ok=True)
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
         INDEX_FILE.write_text(json.dumps(self._index, indent=2))
+
+    def _load_store(self) -> None:
+        """Load persisted documents and embeddings from disk."""
+        if not DOCS_FILE.exists() or not EMBEDDINGS_FILE.exists():
+            return
+        try:
+            docs_list: list[dict] = json.loads(DOCS_FILE.read_text())
+            emb_array = np.load(str(EMBEDDINGS_FILE), allow_pickle=False)
+            for i, entry in enumerate(docs_list):
+                doc_id = entry.pop("_id")
+                self._docs[doc_id] = entry
+                self._emb[doc_id] = emb_array[i].tolist()
+            logger.info(f"RAG store loaded: {len(self._docs)} documents")
+        except (OSError, ValueError, KeyError) as exc:
+            logger.warning(f"Failed to load RAG store, will rebuild: {exc}")
+            self._docs = {}
+            self._emb = {}
+
+    def _save_store(self) -> None:
+        """Persist documents and embeddings to disk."""
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        doc_ids = list(self._docs.keys())
+        docs_list = [{"_id": did, **self._docs[did]} for did in doc_ids]
+        emb_array = np.array(
+            [self._emb[did] for did in doc_ids], dtype=np.float32
+        )
+        DOCS_FILE.write_text(json.dumps(docs_list))
+        np.save(str(EMBEDDINGS_FILE), emb_array)

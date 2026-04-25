@@ -6,9 +6,10 @@ import { loginUser, clearError } from '../../store/authSlice'
 interface LoginProps {
     onSwitchToRegister: () => void
     onLoginSuccess: () => void
+    modal?: boolean
 }
 
-export const Login: React.FC<LoginProps> = ({ onSwitchToRegister, onLoginSuccess }) => {
+export const Login: React.FC<LoginProps> = ({ onSwitchToRegister, onLoginSuccess, modal = false }) => {
     const dispatch = useDispatch<AppDispatch>()
     const { loading, error, isAuthenticated } = useSelector((state: RootState) => state.auth)
 
@@ -32,11 +33,14 @@ export const Login: React.FC<LoginProps> = ({ onSwitchToRegister, onLoginSuccess
         dispatch(loginUser({ username, password }))
     }
 
+    const wrapper = modal ? 'py-6 px-6' : 'min-h-screen flex items-center justify-center bg-gray-100 py-12 px-4'
+    const inner = modal ? 'w-full space-y-6' : 'max-w-md w-full space-y-8'
+
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-100 py-12 px-4">
-            <div className="max-w-md w-full space-y-8">
+        <div className={wrapper}>
+            <div className={inner}>
                 <div>
-                    <h2 className="mt-6 text-center text-3xl font-bold text-gray-900">
+                    <h2 className="mt-2 text-center text-2xl font-bold text-gray-900">
                         Sign in to your account
                     </h2>
                     <p className="mt-2 text-center text-sm text-gray-600">
@@ -50,7 +54,7 @@ export const Login: React.FC<LoginProps> = ({ onSwitchToRegister, onLoginSuccess
                     </p>
                 </div>
 
-                <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
+                <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
                     {error && (
                         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded relative">
                             {error}

@@ -11,7 +11,7 @@ class UserCreate(BaseModel):
     """Request to register a new user."""
 
     username: str = Field(..., min_length=3, max_length=50)
-    email: EmailStr
+    email: Optional[EmailStr] = None
     password: str = Field(..., min_length=8, max_length=100)
     full_name: Optional[str] = None
 
@@ -21,7 +21,7 @@ class UserResponse(BaseModel):
 
     id: str
     username: str
-    email: str
+    email: Optional[str]
     full_name: Optional[str]
     disabled: bool
 

@@ -1,14 +1,15 @@
 """
 Database configuration and session management.
 
-Uses PostgreSQL with asyncpg.
+Uses SQLite with aiosqlite for zero-infrastructure local storage.
 """
 
-import os
 import logging
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+import os
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -19,22 +20,18 @@ from app.models.database import Base
 
 logger = logging.getLogger(__name__)
 
-# Database URL - from environment or default PostgreSQL
+# Database URL - from environment or default SQLite
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql+asyncpg://geo_user:geo_password@localhost:5432/geo_chat",
+    "sqlite+aiosqlite:///./geo_chat.db",
 )
 
-logger.info(f"Using database: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else DATABASE_URL}")
+logger.info(f"Using database: {DATABASE_URL}")
 
-# PostgreSQL engine with connection pooling
+# SQLite async engine (no connection pool needed — aiosqlite is in-process)
 engine = create_async_engine(
     DATABASE_URL,
     echo=False,  # Set to True for SQL logging
-    pool_size=5,
-    max_overflow=10,
-    pool_pre_ping=True,  # Verify connections before use
-    pool_recycle=300,  # Recycle connections after 5 minutes
 )
 
 # Session factory
@@ -47,17 +44,9 @@ async_session_factory = async_sessionmaker(
 
 async def init_db() -> None:
     """Initialize the database, creating all tables."""
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database initialized successfully (PostgreSQL)")
-    except Exception as e:
-        if "Connection refused" in str(e):
-            logger.error(
-                "PostgreSQL connection failed. "
-                "Run '/postgres install' to set up the database."
-            )
-        raise
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logger.info("Database initialized successfully (SQLite)")
 
 
 async def close_db() -> None:
@@ -75,7 +64,7 @@ async def check_db_connection() -> bool:
     """
     try:
         async with engine.connect() as conn:
-            await conn.execute("SELECT 1")
+            await conn.execute(text("SELECT 1"))
         return True
     except Exception as e:
         logger.error(f"Database connection check failed: {e}")
