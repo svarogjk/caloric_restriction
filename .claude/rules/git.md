@@ -2,8 +2,8 @@
 
 ## Branch
 
-- Main branch is `development`
-- Always pull before pushing: `git pull --rebase origin development`
+- Main branch is `main`
+- Always pull before pushing: `git pull --rebase origin main`
 
 ## Commit Prefixes (Required)
 
@@ -18,7 +18,7 @@
 
 ## Safety
 
-- **NEVER** force push to development
+- **NEVER** force push to main
 - **NEVER** `git reset --hard` without permission
 - **NEVER** commit `.env` or credentials
 - **NEVER** skip hooks (`--no-verify`)
