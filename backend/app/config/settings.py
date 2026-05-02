@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     # External services
     mistral_key: str = ""
     email: str = ""
+    ncbi_api_key: str = ""
 
     class Config:
         env_file = ".env"

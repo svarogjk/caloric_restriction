@@ -67,6 +67,7 @@ jobs:
             ANTHROPIC_KEY=${{ secrets.ANTHROPIC_KEY }}
             JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
             EMAIL=${{ secrets.APP_EMAIL }}
+            NCBI_API_KEY=${{ secrets.NCBI_API_KEY }}
             ENVEOF
             docker compose pull
             docker compose up -d

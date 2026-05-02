@@ -47,6 +47,7 @@ async def lifespan(app: FastAPI):
 
     # Initialize survival analysis orchestrator
     orchestrator = GEOSurvivalWorkflowOrchestrator(
+        api_key=settings.ncbi_api_key or None,
         email=settings.email,
         model="mistral"
     )
