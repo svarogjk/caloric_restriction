@@ -1,0 +1,7 @@
+# Replace geosurv.io with your actual domain
+geosurv.io {
+    reverse_proxy app:8000 {
+        # SSE streaming — disable buffering for real-time progress
+        flush_interval -1
+    }
+}
