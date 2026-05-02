@@ -4,6 +4,7 @@ Provides REST API endpoints for survival analysis on GEO data
 """
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -89,9 +90,10 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+_cors_origin = os.getenv("CORS_ORIGIN", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[_cors_origin],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

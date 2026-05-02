@@ -16,7 +16,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from app.models.database import Base
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +42,9 @@ async_session_factory = async_sessionmaker(
 
 
 async def init_db() -> None:
-    """Initialize the database, creating all tables."""
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("Database initialized successfully (SQLite)")
+    """Verify database connection on startup. Schema is managed by Alembic."""
+    await check_db_connection()
+    logger.info("Database connection verified")
 
 
 async def close_db() -> None:
