@@ -164,18 +164,24 @@ class QueryEstimationService:
             ),
         )
 
-    async def estimate_query(self, query: str) -> EstimationResult:
+    async def estimate_query(
+        self,
+        query: str,
+        user_settings: Optional[dict] = None,
+    ) -> EstimationResult:
         """
         Estimate the success likelihood for a survival analysis query.
 
         Args:
             query: The user's search query
+            user_settings: User's pre-configured settings (organism, cancer_genes_only, etc.)
 
         Returns:
             EstimationResult with confidence score, suggestions, and improved query
         """
         # 1. Rule-based validation (fast, synchronous)
-        validation = self._validate_query(query)
+        # Treat pre-configured user settings as equivalent to query keywords
+        validation = self._validate_query(query, user_settings)
 
         # 2. Run AI estimation and GEO preview in parallel
         geo_preview = None
@@ -222,7 +228,7 @@ class QueryEstimationService:
         )
 
         # 5. Generate improvement suggestions (combining rule-based and data-driven)
-        suggestions = self._generate_suggestions(validation, query)
+        suggestions = self._generate_suggestions(validation, query, user_settings)
 
         # Add data-driven suggestions from GEO preview
         if geo_preview and self.geo_preview_service:
@@ -263,7 +269,9 @@ class QueryEstimationService:
             geo_preview=geo_preview_dict,
         )
 
-    def _validate_query(self, query: str) -> dict:
+    def _validate_query(
+        self, query: str, user_settings: Optional[dict] = None
+    ) -> dict:
         """Perform rule-based query validation."""
         query_lower = query.lower()
 
@@ -273,11 +281,16 @@ class QueryEstimationService:
         # Check for cancer type
         has_cancer = any(ct in query_lower for ct in self.CANCER_TYPES)
 
-        # Check for organism
+        # Check for organism — treat pre-configured user setting as present
         has_organism = any(org in query_lower for org in self.ORGANISMS)
+        if not has_organism and user_settings and user_settings.get("organism"):
+            has_organism = True
 
-        # Check for gene focus
+        # Check for gene focus — treat candidate_genes or cancer_genes_only as present
         has_gene_focus = any(term in query_lower for term in self.GENE_TERMS)
+        if not has_gene_focus and user_settings:
+            if user_settings.get("candidate_genes") or user_settings.get("cancer_genes_only"):
+                has_gene_focus = True
 
         # Query length validation
         query_length_ok = 10 < len(query) < 500
@@ -398,8 +411,17 @@ class QueryEstimationService:
 
         return min(1.0, max(0.0, score))
 
-    def _generate_suggestions(self, validation: dict, query: str) -> list[str]:
+    def _generate_suggestions(
+        self,
+        validation: dict,
+        query: str,
+        user_settings: Optional[dict] = None,
+    ) -> list[str]:
         """Generate improvement suggestions based on validation."""
+        settings = user_settings or {}
+        organism_configured = bool(settings.get("organism"))
+        genes_configured = bool(settings.get("candidate_genes") or settings.get("cancer_genes_only"))
+
         suggestions = []
 
         if not validation["has_survival_keywords"]:
@@ -414,13 +436,15 @@ class QueryEstimationService:
                 "for more targeted results"
             )
 
-        if not validation["has_organism"]:
+        # Only suggest organism if it is NOT already configured in user settings
+        if not validation["has_organism"] and not organism_configured:
             suggestions.append(
                 "Consider specifying the organism (e.g., 'human' for cancer studies, "
                 "'mouse' for aging studies)"
             )
 
-        if not validation["has_gene_focus"]:
+        # Only suggest gene focus if candidate genes are NOT already configured
+        if not validation["has_gene_focus"] and not genes_configured:
             suggestions.append(
                 "Adding terms like 'gene expression' or 'biomarker' may help "
                 "find relevant expression datasets"

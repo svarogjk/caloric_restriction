@@ -77,20 +77,30 @@ def _build_settings_block(user_settings: dict) -> str:
     lines = ["\n## Active User Configuration (ALREADY SET — do NOT re-suggest these)"]
     lines.append(f"- Organism: {organism}")
     if cancer_only:
-        lines.append("- Cancer genes only: True (~600 COSMIC driver genes)")
+        lines.append("- Cancer genes only: True → analysis is RESTRICTED to ~600 COSMIC driver genes")
     else:
-        lines.append("- Cancer genes only: False (genome-wide)")
+        lines.append("- Cancer genes only: False → genome-wide analysis")
     lines.append(f"- Max datasets to analyze: {n_datasets}")
+
     if genes:
         genes_str = ", ".join(genes[:10])
         if len(genes) > 10:
             genes_str += f" … ({len(genes)} total)"
-        lines.append(f"- Candidate genes: {genes_str}")
+        lines.append(f"- Candidate genes: {genes_str} (analysis restricted to this list)")
+    elif cancer_only:
+        lines.append("- Candidate genes: COSMIC cancer driver list (~600 genes) — NOT genome-wide")
     else:
-        lines.append("- Candidate genes: none (genome-wide analysis)")
+        lines.append("- Candidate genes: none — genome-wide analysis across all expressed genes")
+
+    # Explicit constraints derived from settings
+    lines.append("\n## Constraints from user settings (state these accurately, never contradict):")
+    if cancer_only and not genes:
+        lines.append("- NEVER say 'test all ~20,000 genes' or 'genome-wide' — the user has restricted to ~600 COSMIC genes")
+    if genes:
+        lines.append(f"- NEVER suggest a genome-wide run — the user has {len(genes)} candidate genes pre-selected")
     lines.append(
-        f"\nWhen calling search_geo_datasets or get_gene_info, use organism='{organism}' "
-        "unless the user explicitly specifies a different organism in their message."
+        f"- When calling search_geo_datasets or get_gene_info, use organism='{organism}' "
+        "unless the user explicitly overrides it in their message"
     )
     return "\n".join(lines)
 

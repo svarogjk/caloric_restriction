@@ -154,7 +154,7 @@ class ChatService:
         estimation_dict = None
         saved_estimation_id = None
         if self._looks_like_analysis_query(content):
-            estimation = await self.estimation_service.estimate_query(content)
+            estimation = await self.estimation_service.estimate_query(content, user_settings=user_settings)
             estimation_dict = {
                 "confidence_score": estimation.confidence_score,
                 "estimated_datasets": estimation.estimated_datasets,
@@ -278,7 +278,7 @@ class ChatService:
         estimation_context = None
         saved_estimation_id = None
         if self._looks_like_analysis_query(content):
-            estimation = await self.estimation_service.estimate_query(content)
+            estimation = await self.estimation_service.estimate_query(content, user_settings=user_settings)
             estimation_context = {
                 "confidence_score": estimation.confidence_score,
                 "estimated_datasets": estimation.estimated_datasets,
