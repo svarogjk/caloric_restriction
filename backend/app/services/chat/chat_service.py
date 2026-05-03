@@ -70,12 +70,9 @@ class ChatService:
         self.conversation_service = ConversationService(session)
         self.langchain_service = langchain_service or PydanticAIService()
 
-        # Create GEO preview service for real-time GEO search previews
-        self.geo_preview_service = geo_preview_service or GEOPreviewService()
-
-        # Inject GEO preview service into estimation service
+        _geo_preview = geo_preview_service or GEOPreviewService()
         self.estimation_service = estimation_service or QueryEstimationService(
-            geo_preview_service=self.geo_preview_service
+            geo_preview_service=_geo_preview
         )
 
     async def create_conversation(
@@ -219,12 +216,8 @@ class ChatService:
             tokens_used=tokens_used,
         )
 
-        # 6. Update conversation title if this is the first exchange
-        conversation = await self.conversation_service.get_conversation(
-            conversation_id, include_messages=False
-        )
-        if conversation and conversation.title == "New Conversation":
-            # Generate title from first user message
+        # 6. Update conversation title on first user message (messages includes the one just saved)
+        if len(messages) == 1:
             title = self._generate_title(content)
             await self.conversation_service.update_conversation(
                 conversation_id, title=title

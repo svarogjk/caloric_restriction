@@ -5,13 +5,12 @@ Identifies genes associated with survival/lifespan across multiple datasets
 """
 
 import hashlib
-import logging
 import asyncio
 import math
 from typing import List, Optional, Dict, Any, Tuple, Callable, Awaitable
 from dataclasses import dataclass
 from datetime import datetime
-from collections import Counter, OrderedDict
+from collections import OrderedDict
 import pandas as pd
 from scipy.stats import chi2
 
@@ -27,17 +26,6 @@ from app.config.logging_config import get_logger
 from app.utils.memory_tracker import track_memory, log_memory_checkpoint, log_analysis_summary
 
 logger = get_logger(__name__)
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-    ]
-)
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

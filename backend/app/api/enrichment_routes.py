@@ -3,6 +3,7 @@ Pathway enrichment endpoint wrapping g:Profiler.
 """
 import logging
 from typing import List
+import httpx
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, field_validator
 
@@ -78,6 +79,6 @@ async def run_enrichment(request: EnrichmentRequest):
     except httpx.RequestError as e:
         logger.error(f"g:Profiler connection error: {e}", exc_info=True)
         raise HTTPException(status_code=502, detail=f"g:Profiler unreachable: {str(e)}")
-    except Exception as e:
+    except (KeyError, ValueError) as e:
         logger.error(f"Enrichment analysis failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Enrichment failed: {str(e)}")

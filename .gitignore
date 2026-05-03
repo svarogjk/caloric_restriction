@@ -34,3 +34,4 @@ backend/platform_mappings/*
 backend/datasets/*
 presentations/*
 practice_exercises/
+backend/data/rag_embeddings.npy
