@@ -30,6 +30,7 @@ class AgentDeps:
     user_settings: dict | None = None  # per-request user configuration
     user_id: str | None = None         # authenticated user ID (None for guests)
     db_session: Any | None = None      # per-request DB session for history queries
+    model: str = "mistral"             # active LLM selection, forwarded to sub-services
 
 
 async def search_known_datasets(ctx: RunContext["AgentDeps"], query: str) -> str:
@@ -82,7 +83,7 @@ async def estimate_query(ctx: RunContext["AgentDeps"], query: str) -> str:
         Confidence score, estimated dataset count, and improvement suggestions
     """
     try:
-        result = await ctx.deps.estimation_service.estimate_query(query)
+        result = await ctx.deps.estimation_service.estimate_query(query, model=ctx.deps.model)
         parts = [
             f"Confidence: {result.confidence_score:.0%}",
             f"Estimated datasets: {result.estimated_datasets}",

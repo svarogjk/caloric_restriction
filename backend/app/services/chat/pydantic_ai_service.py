@@ -184,10 +184,10 @@ class PydanticAIService:
 
         if mistral_key:
             models["mistral"] = MistralModel(
-                "mistral-small-latest",
+                "magistral-small-latest",
                 provider=MistralProvider(api_key=mistral_key),
             )
-            logger.info("Initialized Mistral model")
+            logger.info("Initialized Magistral Small model")
 
         anthropic_key = os.getenv("ANTHROPIC_KEY")
         if not anthropic_key:
@@ -198,7 +198,7 @@ class PydanticAIService:
 
         if anthropic_key:
             models["anthropic"] = AnthropicModel(
-                "claude-3-haiku-20240307",
+                "claude-haiku-4-5-20251001",
                 provider=AnthropicProvider(api_key=anthropic_key),
             )
             logger.info("Initialized Anthropic model")

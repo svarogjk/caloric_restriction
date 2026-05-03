@@ -20,6 +20,8 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 from pydantic_ai.models.mistral import MistralModel
 from pydantic_ai.providers.mistral import MistralProvider
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.anthropic import AnthropicProvider
 
 _SERVICES_DIR = Path(__file__).parent.parent
 
@@ -140,34 +142,49 @@ class QueryEstimationService:
     ):
         self.model = model
         self.geo_preview_service = geo_preview_service
-        self._structured_llm = self._init_structured_llm()
+        self._agents = self._init_agents()
 
-    def _init_structured_llm(self) -> Agent:
-        """Initialize PydanticAI Agent with structured output for estimation."""
+    _ESTIMATION_SYSTEM_PROMPT = (
+        "You are a query estimation assistant for a bioinformatics tool. "
+        "Evaluate survival analysis queries for GEO datasets and return "
+        "structured confidence estimates."
+    )
+
+    def _init_agents(self) -> dict[str, Agent]:
+        """Initialize estimation agents for all available LLM providers."""
+        agents: dict[str, Agent] = {}
+
         mistral_key = os.getenv("MISTRAL_KEY", "")
         if not mistral_key:
             key_file = _SERVICES_DIR / "mistral_key.txt"
             if key_file.exists():
                 mistral_key = key_file.read_text().strip()
+        if mistral_key:
+            agents["mistral"] = Agent(
+                MistralModel("mistral-small-latest", provider=MistralProvider(api_key=mistral_key)),
+                output_type=AIEstimationResult,
+                system_prompt=self._ESTIMATION_SYSTEM_PROMPT,
+            )
 
-        model = MistralModel(
-            "mistral-small-latest",
-            provider=MistralProvider(api_key=mistral_key),
-        )
-        return Agent(
-            model,
-            output_type=AIEstimationResult,
-            system_prompt=(
-                "You are a query estimation assistant for a bioinformatics tool. "
-                "Evaluate survival analysis queries for GEO datasets and return "
-                "structured confidence estimates."
-            ),
-        )
+        anthropic_key = os.getenv("ANTHROPIC_KEY", "")
+        if not anthropic_key:
+            key_file = _SERVICES_DIR / "anthropic_key.txt"
+            if key_file.exists():
+                anthropic_key = key_file.read_text().strip()
+        if anthropic_key:
+            agents["anthropic"] = Agent(
+                AnthropicModel("claude-haiku-4-5-20251001", provider=AnthropicProvider(api_key=anthropic_key)),
+                output_type=AIEstimationResult,
+                system_prompt=self._ESTIMATION_SYSTEM_PROMPT,
+            )
+
+        return agents
 
     async def estimate_query(
         self,
         query: str,
         user_settings: Optional[dict] = None,
+        model: str = "mistral",
     ) -> EstimationResult:
         """
         Estimate the success likelihood for a survival analysis query.
@@ -194,7 +211,7 @@ class QueryEstimationService:
                 geo_task = asyncio.wait_for(
                     self.geo_preview_service.get_preview(query), timeout=15.0
                 )
-                ai_task = asyncio.wait_for(self._ai_estimate(query), timeout=20.0)
+                ai_task = asyncio.wait_for(self._ai_estimate(query, model), timeout=20.0)
                 geo_preview, ai_estimation = await asyncio.gather(
                     geo_task, ai_task, return_exceptions=True
                 )
@@ -213,10 +230,10 @@ class QueryEstimationService:
                     )
             except Exception as e:
                 logger.warning(f"Parallel estimation failed: {e}")
-                ai_estimation = await self._ai_estimate(query)
+                ai_estimation = await self._ai_estimate(query, model)
         else:
             # No GEO preview service, just run AI estimation
-            ai_estimation = await self._ai_estimate(query)
+            ai_estimation = await self._ai_estimate(query, model)
 
         # 3. Convert geo_preview to dict if available
         if geo_preview:
@@ -303,8 +320,11 @@ class QueryEstimationService:
             "query_length_ok": query_length_ok,
         }
 
-    async def _ai_estimate(self, query: str) -> AIEstimationResult:
+    async def _ai_estimate(self, query: str, model: str = "mistral") -> AIEstimationResult:
         """Get AI-powered estimation using PydanticAI structured output."""
+        agent = self._agents.get(model) or self._agents.get("mistral") or next(iter(self._agents.values()), None)
+        if agent is None:
+            raise RuntimeError("No estimation agent available — check API keys")
         prompt = (
             f'Evaluate this survival analysis query for GEO datasets:\n\nQuery: "{query}"\n\n'
             "Consider:\n"
@@ -314,7 +334,7 @@ class QueryEstimationService:
             "Provide your estimation."
         )
         try:
-            result = await self._structured_llm.run(prompt)
+            result = await agent.run(prompt)
             return result.output
         except (ValueError, RuntimeError) as exc:
             logger.warning(f"AI estimation failed: {exc}")

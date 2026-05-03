@@ -206,6 +206,7 @@ class ChatService:
                 user_settings=user_settings,
                 user_id=user_id,
                 db_session=self.db,
+                model=model,
             )
 
         # 5. Generate AI response
@@ -332,6 +333,7 @@ class ChatService:
                 user_settings=user_settings,
                 user_id=user_id,
                 db_session=self.db,
+                model=model,
             )
 
         # Stream response — inner_sink is populated after generator exhausts
