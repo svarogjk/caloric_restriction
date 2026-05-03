@@ -68,6 +68,14 @@ export interface GeoPreview {
     searchQuery: string
 }
 
+export interface UserSettings {
+    organism: string | null
+    cancer_genes_only: boolean
+    num_datasets: number
+    ranking_multiplier: number
+    candidate_genes: string[] | null
+}
+
 export interface MessageResponse {
     messageId: string
     role: 'user' | 'assistant'
@@ -84,6 +92,7 @@ export interface MessageResponse {
         geoPreview?: GeoPreview
     }
     suggestedActions?: string[]
+    domainScore?: number
 }
 
 export interface ConversationResponse {
@@ -278,6 +287,7 @@ export async function sendMessageStream(
     content: string,
     model: string,
     token: string | null,
+    userSettings: UserSettings | null,
     onToken: (token: string) => void,
     onComplete: (message: MessageResponse) => void,
     onError: (error: string) => void,
@@ -288,7 +298,7 @@ export async function sendMessageStream(
     const response = await fetch(`/api/chat/conversations/${conversationId}/messages?stream=true`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ content, model, stream: true }),
+        body: JSON.stringify({ content, model, stream: true, user_settings: userSettings }),
     })
 
     if (!response.ok) {
@@ -331,6 +341,7 @@ export async function sendMessageStream(
                         created_at: string
                         model_used?: string
                         suggested_actions?: string[]
+                        domain_score?: number
                     }
                     const completeMessage: MessageResponse = {
                         messageId: msg.message_id,
@@ -339,6 +350,7 @@ export async function sendMessageStream(
                         createdAt: msg.created_at,
                         modelUsed: msg.model_used,
                         suggestedActions: msg.suggested_actions,
+                        domainScore: msg.domain_score,
                     }
                     onComplete(completeMessage)
                 } else if (parsed['type'] === 'error') {

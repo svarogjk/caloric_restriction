@@ -86,6 +86,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRunAnalysis, o
                     {message.modelUsed && (
                         <span>{message.modelUsed}</span>
                     )}
+                    {!isUser && message.domainScore !== undefined && message.domainScore !== null && (
+                        <DomainScoreBadge score={message.domainScore} />
+                    )}
                 </div>
 
                 {/* Suggested Actions */}
@@ -144,6 +147,26 @@ const ActionButton: React.FC<ActionButtonProps> = ({ action, onRunAnalysis, onMo
         >
             {actionLabels[action] || action}
         </button>
+    )
+}
+
+interface DomainScoreBadgeProps {
+    score: number
+}
+
+const DomainScoreBadge: React.FC<DomainScoreBadgeProps> = ({ score }) => {
+    const colorClass =
+        score >= 70 ? 'bg-green-100 text-green-700' :
+        score >= 40 ? 'bg-amber-100 text-amber-700' :
+                      'bg-gray-100 text-gray-500'
+
+    return (
+        <span
+            className={`px-1.5 py-0.5 rounded text-xs font-medium cursor-help ${colorClass}`}
+            title="Domain Score: measures how much of this answer came from real GEO data vs. general AI knowledge. 100 = fully grounded in your datasets."
+        >
+            DS {score}
+        </span>
     )
 }
 

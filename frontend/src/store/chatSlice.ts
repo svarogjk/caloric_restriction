@@ -1,5 +1,5 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
-import { chatApi, sendMessageStream, ConversationListItem } from '../services/chatApi'
+import { chatApi, sendMessageStream, ConversationListItem, UserSettings } from '../services/chatApi'
 import { getStoredToken } from '../services/authApi'
 import { streamAnalysis, SurvivalAnalysisResponse, listAnalysisResults, AnalysisHistoryItem } from '../services/api'
 
@@ -71,6 +71,7 @@ export interface Message {
     modelUsed?: string
     estimation?: QueryEstimation
     suggestedActions?: string[]
+    domainScore?: number
 }
 
 export interface DatasetPreview {
@@ -241,9 +242,23 @@ export const sendMessage = createAsyncThunk(
             content: string
             model: string
         },
-        { dispatch, rejectWithValue }
+        { dispatch, getState, rejectWithValue }
     ) => {
         try {
+            // Read current user settings from Redux state
+            const state = (getState() as { chat: ChatState }).chat
+            const { organism, cancerGenesOnly, datasetCount, rankingMultiplier, geneFilterInput } = state
+            const candidateGenes: string[] | null = geneFilterInput.trim()
+                ? geneFilterInput.split(/[\n,]+/).map((g) => g.trim().toUpperCase()).filter((g) => g.length > 0)
+                : null
+            const userSettings: UserSettings = {
+                organism,
+                cancer_genes_only: cancerGenesOnly,
+                num_datasets: datasetCount,
+                ranking_multiplier: rankingMultiplier,
+                candidate_genes: candidateGenes,
+            }
+
             // Add user message immediately (optimistic update)
             const tempId = `temp-${Date.now()}`
             const userMessage: Message = {
@@ -266,6 +281,7 @@ export const sendMessage = createAsyncThunk(
                     content,
                     model,
                     token,
+                    userSettings,
                     (token) => {
                         dispatch(appendStreamToken(token))
                     },
@@ -551,6 +567,7 @@ const chatSlice = createSlice({
                     createdAt: action.payload.createdAt,
                     modelUsed: action.payload.modelUsed || undefined,
                     suggestedActions: action.payload.suggestedActions,
+                    domainScore: action.payload.domainScore,
                 }
 
                 // Handle estimation

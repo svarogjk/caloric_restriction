@@ -30,6 +30,7 @@ class ChatResponse:
     model_used: str
     estimation: Optional[dict] = None
     suggested_actions: list[str] = field(default_factory=list)
+    domain_score: int = 0
 
 
 class ChatService:
@@ -67,6 +68,7 @@ class ChatService:
         estimation_service: Optional[QueryEstimationService] = None,
         geo_preview_service: Optional[GEOPreviewService] = None,
     ):
+        self.db = session
         self.conversation_service = ConversationService(session)
         self.langchain_service = langchain_service or PydanticAIService()
 
@@ -132,6 +134,8 @@ class ChatService:
         conversation_id: str,
         content: str,
         model: str = "mistral",
+        user_settings: Optional[dict] = None,
+        user_id: Optional[str] = None,
     ) -> ChatResponse:
         """
         Send a user message and get AI response.
@@ -191,12 +195,27 @@ class ChatService:
             conversation_id
         )
 
-        # 4. Generate AI response
+        # 4. Build per-request AgentDeps with user context
+        from app.services.chat.agent_tools import AgentDeps
+        request_deps: Optional[AgentDeps] = None
+        if self.langchain_service._deps is not None:
+            request_deps = AgentDeps(
+                rag_service=self.langchain_service._deps.rag_service,
+                estimation_service=self.langchain_service._deps.estimation_service,
+                geo_preview_service=self.langchain_service._deps.geo_preview_service,
+                user_settings=user_settings,
+                user_id=user_id,
+                db_session=self.db,
+            )
+
+        # 5. Generate AI response
+        domain_score = 0
         try:
-            response_content, tokens_used = await self.langchain_service.generate_response(
+            response_content, tokens_used, domain_score = await self.langchain_service.generate_response(
                 messages=messages,
                 model=model,
                 estimation_context=estimation_dict,
+                deps_override=request_deps,
             )
         except (httpx.HTTPStatusError, httpx.RequestError, anthropic.APIStatusError) as exc:
             logger.warning(f"LLM call failed ({type(exc).__name__}): {exc}")
@@ -207,7 +226,7 @@ class ChatService:
             )
             tokens_used = None
 
-        # 5. Save assistant message
+        # 6. Save assistant message
         assistant_message = await self.conversation_service.add_message(
             conversation_id=conversation_id,
             role="assistant",
@@ -216,14 +235,14 @@ class ChatService:
             tokens_used=tokens_used,
         )
 
-        # 6. Update conversation title on first user message (messages includes the one just saved)
+        # 7. Update conversation title on first user message
         if len(messages) == 1:
             title = self._generate_title(content)
             await self.conversation_service.update_conversation(
                 conversation_id, title=title
             )
 
-        # 7. Extract suggested actions
+        # 8. Extract suggested actions
         suggested_actions = self._extract_actions(response_content, estimation)
 
         return ChatResponse(
@@ -232,6 +251,7 @@ class ChatService:
             model_used=model,
             estimation=estimation_dict,
             suggested_actions=suggested_actions,
+            domain_score=domain_score,
         )
 
     async def stream_message(
@@ -239,6 +259,9 @@ class ChatService:
         conversation_id: str,
         content: str,
         model: str = "mistral",
+        user_settings: Optional[dict] = None,
+        user_id: Optional[str] = None,
+        result_sink: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream AI response token by token.
@@ -298,13 +321,36 @@ class ChatService:
             conversation_id
         )
 
-        # Stream response
+        # Build per-request AgentDeps with user context
+        from app.services.chat.agent_tools import AgentDeps
+        request_deps: Optional[AgentDeps] = None
+        if self.langchain_service._deps is not None:
+            request_deps = AgentDeps(
+                rag_service=self.langchain_service._deps.rag_service,
+                estimation_service=self.langchain_service._deps.estimation_service,
+                geo_preview_service=self.langchain_service._deps.geo_preview_service,
+                user_settings=user_settings,
+                user_id=user_id,
+                db_session=self.db,
+            )
+
+        # Stream response — inner_sink is populated after generator exhausts
+        inner_sink: dict = {}
         full_response = ""
         async for chunk in self.langchain_service.stream_response(
-            messages, model, estimation_context=estimation_context
+            messages,
+            model,
+            estimation_context=estimation_context,
+            deps_override=request_deps,
+            result_sink=inner_sink,
         ):
             full_response += chunk
             yield chunk
+
+        # Propagate domain_score to caller's result_sink
+        if result_sink is not None:
+            result_sink["domain_score"] = inner_sink.get("domain_score", 0)
+            result_sink["tools"] = inner_sink.get("tools", [])
 
         # Save complete response (tokens not available from streaming)
         await self.conversation_service.add_message(

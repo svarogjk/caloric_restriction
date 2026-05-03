@@ -87,12 +87,23 @@ class CreateConversationResponse(BaseModel):
     created_at: str
 
 
+class UserSettings(BaseModel):
+    """User's active analysis configuration, forwarded from the frontend UI."""
+
+    organism: Optional[str] = None
+    cancer_genes_only: bool = False
+    num_datasets: int = 10
+    ranking_multiplier: float = 3.0
+    candidate_genes: Optional[list[str]] = None
+
+
 class SendMessageRequest(BaseModel):
     """Request to send a message."""
 
     content: str = Field(..., min_length=1, max_length=5000)
     model: str = Field(default="mistral", pattern="^(mistral|anthropic|claude)$")
     stream: bool = False
+    user_settings: Optional[UserSettings] = None
 
 
 class MessageResponse(BaseModel):
@@ -105,6 +116,7 @@ class MessageResponse(BaseModel):
     model_used: Optional[str] = None
     estimation: Optional[dict] = None
     suggested_actions: list[str] = []
+    domain_score: Optional[int] = None
 
 
 class ConversationResponse(BaseModel):
@@ -267,16 +279,17 @@ async def send_message(
     conversation_id: str,
     request: SendMessageRequest,
     chat_service: ChatService = Depends(get_chat_service),
+    current_user=Depends(get_optional_current_user),
 ):
     """
     Send a message and get AI response.
 
     Args:
         conversation_id: The conversation ID
-        request: SendMessageRequest with content and model
+        request: SendMessageRequest with content, model, and optional user_settings
 
     Returns:
-        MessageResponse with the AI's reply
+        MessageResponse with the AI's reply and domain_score
     """
     # Check if conversation exists
     conversation = await chat_service.get_conversation(conversation_id)
@@ -288,23 +301,29 @@ async def send_message(
     if model == "claude":
         model = "anthropic"
 
+    user_settings_dict = request.user_settings.model_dump() if request.user_settings else None
+    user_id = current_user.id if current_user else None
+
     if request.stream:
         # Return streaming response
         async def generate():
             full_content = ""
+            stream_sink: dict = {}
             async for chunk in chat_service.stream_message(
                 conversation_id=conversation_id,
                 content=request.content,
                 model=model,
+                user_settings=user_settings_dict,
+                user_id=user_id,
+                result_sink=stream_sink,
             ):
                 full_content += chunk
                 yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
 
-            # Compute suggested actions from the full response
             suggested_actions = chat_service._extract_actions(full_content, estimation=None)
+            domain_score = stream_sink.get("domain_score", 0)
 
-            # Send message_complete so the frontend Promise resolves
-            yield f"data: {json.dumps({'type': 'message_complete', 'message': {'message_id': str(uuid.uuid4()), 'role': 'assistant', 'content': full_content, 'created_at': datetime.utcnow().isoformat(), 'model_used': model, 'suggested_actions': suggested_actions}})}\n\n"
+            yield f"data: {json.dumps({'type': 'message_complete', 'message': {'message_id': str(uuid.uuid4()), 'role': 'assistant', 'content': full_content, 'created_at': datetime.utcnow().isoformat(), 'model_used': model, 'suggested_actions': suggested_actions, 'domain_score': domain_score}})}\n\n"
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(
@@ -317,6 +336,8 @@ async def send_message(
         conversation_id=conversation_id,
         content=request.content,
         model=model,
+        user_settings=user_settings_dict,
+        user_id=user_id,
     )
 
     return MessageResponse(
@@ -327,6 +348,7 @@ async def send_message(
         model_used=response.model_used,
         estimation=response.estimation,
         suggested_actions=response.suggested_actions,
+        domain_score=response.domain_score,
     )
 
 
