@@ -11,11 +11,11 @@ React 18, TypeScript, Redux Toolkit, Tailwind CSS.
 
 | File | Purpose |
 |------|---------|
-| `frontend/src/store/searchSlice.ts` | Redux state |
-| `frontend/src/store/chatSlice.ts` | Chat Redux state |
-| `frontend/src/services/api.ts` | API client |
+| `frontend/src/store/chatSlice.ts` | Chat + analysis Redux state |
+| `frontend/src/store/authSlice.ts` | Auth Redux state |
+| `frontend/src/services/api.ts` | Analysis API client |
 | `frontend/src/components/KaplanMeierPlot.tsx` | Survival curves |
-| `frontend/src/components/VolcanoPlot.tsx` | Volcano visualization |
+| `frontend/src/components/ForestPlot.tsx` | Forest plot visualization |
 
 ## Patterns
 

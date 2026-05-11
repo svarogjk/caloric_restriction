@@ -1,146 +1,187 @@
-# LangChain Chat Integration (LangChain 1.x)
+---
+name: pydantic-ai-chat
+description: PydanticAI Chat Integration — Agent setup, tool calling, streaming, history trimming, and multi-model support. Use when implementing or modifying the chat agent, tools, streaming, or conversation history.
+---
 
-> **Installed version: LangChain 1.2.7**
-> API is entirely different from 0.3.x.
-> AgentExecutor, create_tool_calling_agent, and langchain.memory are all REMOVED.
+# PydanticAI Chat Integration
 
-## Agent (primary pattern)
+> **Installed version: pydantic-ai 1.14+**
+> Framework: `pydantic_ai.Agent` with `run_stream()` for streaming responses.
 
-Use create_agent from langchain.agents — returns a CompiledStateGraph (LangGraph-based).
+## Agent Setup (primary pattern)
 
 ```python
-from langchain.agents import create_agent
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, BaseMessage
+from pydantic_ai import Agent, RunContext
+from app.services.chat.agent_tools import AgentDeps, AGENT_TOOLS
 
-# Create once, reuse
-agent = create_agent(
-    model=llm,          # ChatMistralAI or ChatAnthropic instance
-    tools=tools,        # list of @tool-decorated coroutines
-    system_prompt="...",
+agent: Agent[AgentDeps, str] = Agent(
+    model,                  # MistralModel or AnthropicModel instance
+    deps_type=AgentDeps,
+    system_prompt=BASE_SYSTEM_PROMPT,
+    tools=AGENT_TOOLS,
 )
 
-# Invoke — input is a messages list
-result = await agent.ainvoke({
-    "messages": [*history, HumanMessage(content=user_input)]
-})
-
-# Last AI reply in returned state
-ai_reply = result["messages"][-1].content
+# Dynamic per-request system prompt block — reads ctx.deps at run time
+@agent.system_prompt
+async def _settings_prompt(ctx: RunContext[AgentDeps]) -> str:
+    return build_settings_block(ctx.deps.user_settings)
 ```
 
-## Tool Definition
-
-Tools live in backend/app/services/chat/agent_tools.py.
+## Model Initialisation
 
 ```python
-from langchain_core.tools import tool
+from pydantic_ai.models.mistral import MistralModel
+from pydantic_ai.models.anthropic import AnthropicModel
+from pydantic_ai.providers.mistral import MistralProvider
+from pydantic_ai.providers.anthropic import AnthropicProvider
 
-@tool
-async def search_known_datasets(query: str) -> str:
-    """Search indexed GEO dataset metadata using semantic similarity."""
-    docs = await rag_service.search(query, k=5)
-    return "
-".join(doc.page_content for doc in docs)
+mistral = MistralModel("magistral-small-latest", provider=MistralProvider(api_key=key))
+claude  = AnthropicModel("claude-haiku-4-5-20251001", provider=AnthropicProvider(api_key=key))
 ```
 
-Registered tools: search_known_datasets, estimate_query, search_geo_datasets, run_survival_analysis, get_gene_info.
-Tools injected at startup via LangChainService.set_tools(tools) — invalidates cached agents.
-
-## History Management (replaces ConversationSummaryBufferMemory)
-
-langchain.memory is removed in 1.x. Use trim_messages from langchain_core.messages instead.
+## Non-streaming Invocation
 
 ```python
-from langchain_core.messages import trim_messages, BaseMessage
-
-def trim_history(messages: list[BaseMessage]) -> list[BaseMessage]:
-    return trim_messages(
-        messages,
-        strategy="last",
-        max_tokens=16_000,
-        token_counter=lambda msgs: sum(len(getattr(m, "content", "")) for m in msgs),
-        start_on="human",
-        end_on=("human", "tool"),
-        include_system=False,
-    )
+result = await agent.run(
+    user_content,
+    message_history=history,   # list[ModelMessage]
+    deps=deps,                  # AgentDeps instance
+)
+response_text = result.output
 ```
 
 ## Streaming
 
 ```python
-async for event in agent.astream_events({"messages": agent_messages}, version="v2"):
-    if event["event"] == "on_chat_model_stream":
-        chunk = event["data"].get("chunk")
-        if chunk and chunk.content:
-            yield chunk.content
+async with agent.run_stream(
+    user_content,
+    message_history=history,
+    deps=deps,
+) as result:
+    async for chunk in result.stream_text(delta=True):
+        yield chunk
+
+# After exhaustion — extract tool calls from this run
+tools_invoked = [
+    part.tool_name
+    for msg in result.new_messages()
+    for part in getattr(msg, "parts", [])
+    if hasattr(part, "tool_name")
+]
 ```
 
-For a plain chain (no tools):
+## History Format
+
 ```python
-async for chunk in chain.astream({"history": history, "input": user_input}):
-    if chunk.content:
-        yield chunk.content
+from pydantic_ai.messages import ModelRequest, ModelResponse, UserPromptPart, TextPart
+
+# Convert DB dicts to pydantic-ai message objects
+def convert_history(messages: list[dict]) -> list[ModelMessage]:
+    result = []
+    for msg in messages:
+        if msg["role"] == "user":
+            result.append(ModelRequest(parts=[UserPromptPart(content=msg["content"])]))
+        elif msg["role"] == "assistant":
+            result.append(ModelResponse(parts=[TextPart(content=msg["content"])]))
+        # system messages handled via system_prompt parameter — skip here
+    return result
 ```
 
-## Structured Output (estimation)
+## History Trimming
+
+LangChain's `trim_messages` does not exist. Use char-count trimming instead:
 
 ```python
-from langchain_mistralai import ChatMistralAI
-from pydantic import BaseModel
+_MAX_HISTORY_CHARS = 16_000  # ≈ 4000 tokens at 4 chars/token
 
-class AIEstimationResult(BaseModel):
-    confidence_score: float
-    estimated_datasets: int
-    suggestions: list[str]
+def trim_history(messages: list[ModelMessage]) -> list[ModelMessage]:
+    def char_count(msgs):
+        return sum(
+            len(part.content)
+            for m in msgs
+            for part in m.parts
+            if hasattr(part, "content") and isinstance(part.content, str)
+        )
 
-structured_llm = ChatMistralAI(model="mistral-small-latest").with_structured_output(AIEstimationResult)
-result = await structured_llm.ainvoke([HumanMessage(content=prompt)])
-# result is an AIEstimationResult instance
+    while messages and char_count(messages) > _MAX_HISTORY_CHARS:
+        messages = messages[1:]
+
+    # History must start with a user (ModelRequest) message
+    while messages and not isinstance(messages[0], ModelRequest):
+        messages = messages[1:]
+
+    return messages
 ```
 
-## pgvector RAG
+## Tool Definition
+
+Tools live in `backend/app/services/chat/agent_tools.py` and are registered at agent creation:
 
 ```python
-from langchain_postgres import PGVector
-from langchain_mistralai import MistralAIEmbeddings
+from pydantic_ai import RunContext
+from dataclasses import dataclass
 
-embeddings = MistralAIEmbeddings(model="mistral-embed", api_key=mistral_key)
-store = PGVector(
-    embeddings=embeddings,
-    collection_name="geo_datasets",
-    connection=postgresql_psycopg_url,  # must use postgresql+psycopg:// (psycopg3)
-)
-docs = await store.asimilarity_search(query, k=5)
+@dataclass
+class AgentDeps:
+    rag_service: DatasetRAGService
+    geo_client: GEOClient
+    user_settings: dict | None
+    user_id: str | None
+
+async def search_known_datasets(ctx: RunContext[AgentDeps], query: str) -> str:
+    """Search indexed GEO dataset metadata using semantic similarity."""
+    docs = await ctx.deps.rag_service.search(query, k=5)
+    return "\n".join(d["content"] for d in docs)
+
+AGENT_TOOLS = [search_known_datasets, estimate_query, search_geo_datasets, get_gene_info, get_user_recent_results]
 ```
 
-Always use mistral-embed regardless of chat model — Anthropic has no embedding API.
+## RAG (numpy, not pgvector)
 
-## Model Initialisation
+RAG is implemented in `dataset_rag_service.py` using Mistral embeddings + numpy cosine similarity. No PostgreSQL or pgvector required.
 
 ```python
-from langchain_mistralai import ChatMistralAI
-from langchain_anthropic import ChatAnthropic
+# Index at startup
+await rag_service.index_datasets()   # embeds new/changed JSON files in backend/datasets/
 
-mistral = ChatMistralAI(api_key=key, model="mistral-small-latest", streaming=True)
-claude  = ChatAnthropic(api_key=key, model="claude-3-haiku-20240307", streaming=True)
+# Search
+docs = await rag_service.search("bladder cancer survival", k=5)
+# returns list[dict] with keys: accession, content, metadata
+```
+
+Index files persist in `backend/data/` (`rag_index.json`, `rag_docs.json`, `rag_embeddings.npy`).
+
+## Dependency Injection
+
+```python
+# At startup, after all services are initialised:
+pydantic_ai_service.set_deps(AgentDeps(
+    rag_service=rag_service,
+    geo_client=geo_client,
+    user_settings=None,   # overridden per-request
+    user_id=None,
+))
+# set_deps() clears self._agents so they are rebuilt with fresh deps
 ```
 
 ## File Locations
 
 | File | Role |
 |------|------|
-| backend/app/services/chat/langchain_service.py | Core agent/chain service |
-| backend/app/services/chat/agent_tools.py | @tool definitions |
-| backend/app/services/chat/dataset_rag_service.py | pgvector RAG indexing/search |
-| backend/app/services/chat/estimation_service.py | query estimation with structured output |
-| backend/app/api/chat_routes.py | FastAPI endpoints; exposes set_tools() |
-| backend/app/main.py | Startup wiring — calls set_tools() after RAG init |
+| `backend/app/services/chat/pydantic_ai_service.py` | Core agent service — streaming, history, metrics |
+| `backend/app/services/chat/agent_tools.py` | Tool definitions + `AgentDeps` dataclass |
+| `backend/app/services/chat/dataset_rag_service.py` | numpy RAG indexing and search |
+| `backend/app/services/chat/estimation_service.py` | Query pre-flight validation |
+| `backend/app/api/chat_routes.py` | FastAPI endpoints; injects `AgentDeps` per-request |
+| `backend/app/main.py` | Startup wiring — calls `set_deps()` after RAG init |
 
 ## Common Mistakes
 
-| Wrong (0.3.x) | Correct (1.x) |
-|---------------|---------------|
-| from langchain.agents import create_tool_calling_agent, AgentExecutor | from langchain.agents import create_agent |
-| from langchain.memory import ConversationSummaryBufferMemory | from langchain_core.messages import trim_messages |
-| AgentExecutor.ainvoke({"input": x}) | agent.ainvoke({"messages": [*history, HumanMessage(content=x)]}) |
-| result["output"] | result["messages"][-1].content |
+| Wrong | Correct |
+|-------|---------|
+| `from langchain.agents import create_agent` | `from pydantic_ai import Agent` |
+| `from langchain_core.messages import trim_messages` | char-count loop in `_trim_history()` |
+| `from langchain_postgres import PGVector` | `DatasetRAGService` (numpy cosine similarity) |
+| `from langchain_mistralai import ChatMistralAI` | `MistralModel(..., provider=MistralProvider(...))` |
+| `result["messages"][-1].content` | `result.output` |
+| `agent.astream_events(...)` | `agent.run_stream(...) → result.stream_text(delta=True)` |

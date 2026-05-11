@@ -50,9 +50,9 @@ GEO Survival Analysis searches the entire NCBI GEO archive (thousands of studies
 
 - Python 3.13+ with [uv](https://docs.astral.sh/uv/)
 - Node.js 20+
-- PostgreSQL 15+ (Docker recommended)
 - Mistral API key (for embeddings and default LLM)
 - Anthropic API key (optional, for Claude model)
+- PostgreSQL 15+ (optional; SQLite is the default database)
 
 ### 1. Clone and configure
 
@@ -65,22 +65,13 @@ Create `backend/.env`:
 
 ```env
 MISTRAL_KEY=your_mistral_key_here
-DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/geo_survival
-SECRET_KEY=your_secret_key_here
+JWT_SECRET_KEY=your_secret_key_here
+EMAIL=your_email@example.com
+# Optional: set DATABASE_URL to use PostgreSQL instead of SQLite
+# DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/geo_survival
 ```
 
-### 2. Start the database
-
-```bash
-docker run -d \
-  --name geo-postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=geo_survival \
-  -p 5432:5432 \
-  ankane/pgvector
-```
-
-### 3. Run migrations
+### 2. Run migrations
 
 ```bash
 cd backend
@@ -138,8 +129,8 @@ backend/
 
 **Key dependencies:**
 - [lifelines](https://lifelines.readthedocs.io/) — Cox regression, Kaplan-Meier estimator
-- [LangChain 1.x](https://python.langchain.com/) + LangGraph — AI chat agent
-- [pgvector](https://github.com/pgvector/pgvector) — RAG vector store
+- [pydantic-ai 1.x](https://ai.pydantic.dev/) — AI chat agent with tool calling
+- numpy — in-memory cosine similarity RAG over Mistral embeddings
 - [FastAPI](https://fastapi.tiangolo.com/) — async REST API with SSE streaming
 
 ---

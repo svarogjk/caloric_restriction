@@ -19,13 +19,15 @@ cd frontend && npx tsc --noEmit && npm run build
 
 ## Architecture
 
-- Chat uses **LangChain 1.x `create_agent`** (returns `CompiledStateGraph`, not `AgentExecutor`)
-- Input format: `{"messages": [...]}` — `AgentExecutor`, `create_tool_calling_agent`, and `langchain.memory` do not exist in 1.x
-- Tools defined in `backend/app/services/chat/agent_tools.py`
-- RAG uses **pgvector** (PostgreSQL extension) via `langchain-postgres` `PGVector` store
-- Embeddings always use `mistral-embed` (single key; Anthropic has no embedding API)
-- Estimation uses LangChain `with_structured_output()` (not pydantic-ai)
-- History trimming uses `trim_messages` from `langchain_core.messages` (replaces removed `ConversationSummaryBufferMemory`)
+- Chat uses **pydantic-ai** `Agent` with tool calling and `run_stream()` for streaming
+- Input: `agent.run(user_content, message_history=history, deps=deps)`
+- Tools defined in `backend/app/services/chat/agent_tools.py`, registered via `AGENT_TOOLS` list
+- RAG uses **numpy cosine similarity** over Mistral embeddings (no pgvector); index stored in `backend/data/`
+- Embeddings always use `mistral-embed` via Mistral SDK (Anthropic has no embedding API)
+- Estimation uses pydantic-ai structured output in `estimation_service.py`
+- History trimming: char-count based (≤16 000 chars), drops oldest messages, in `PydanticAIService._trim_history()`
+- Dynamic system prompt per request via `@agent.system_prompt` decorator reading `ctx.deps.user_settings`
+- `set_deps()` invalidates cached agents — call it after all services are ready at startup
 
 ## Workflow
 
