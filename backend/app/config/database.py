@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 
 logger = logging.getLogger(__name__)
@@ -27,12 +28,13 @@ DATABASE_URL = os.getenv(
 
 logger.info(f"Using database: {DATABASE_URL}")
 
-# SQLite async engine (no connection pool needed — aiosqlite is in-process)
-# Configure SQLite-specific settings for concurrent access
-kwargs = {"echo": False}  # Set to True for SQL logging
+# SQLite: NullPool closes connections immediately after use so DBeaver and
+# other external tools can always open the file without hitting SQLITE_BUSY.
+# PostgreSQL: use default pool (AsyncAdaptedQueuePool).
+kwargs: dict = {"echo": False}
 if DATABASE_URL.startswith("sqlite"):
+    kwargs["poolclass"] = NullPool
     kwargs["connect_args"] = {"timeout": 30}
-
 engine = create_async_engine(DATABASE_URL, **kwargs)
 
 # Enable WAL mode for SQLite to allow concurrent reads/writes

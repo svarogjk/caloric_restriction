@@ -9,7 +9,8 @@ from collections import OrderedDict
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 import warnings
-from multiprocessing import Pool, cpu_count
+from concurrent.futures import ThreadPoolExecutor
+from os import cpu_count
 from functools import partial
 
 import pandas as pd
@@ -756,12 +757,12 @@ Return your response in the required structured format."""
                 logger.info(f"Starting parallel t-tests on {n_genes} genes using {num_workers} workers")
                 
                 # Run t-tests in parallel
-                with Pool(processes=num_workers) as pool:
-                    p_val_results = pool.map(
+                with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                    p_val_results = list(executor.map(
                         _compute_ttest,
                         test_data,
-                        chunksize=max(1, n_genes // (num_workers * 4))  # Optimal chunk size
-                    )
+                        chunksize=max(1, n_genes // (num_workers * 4)),
+                    ))
                 
                 # Collect p-values from parallel results
                 for idx, p_val in p_val_results:
