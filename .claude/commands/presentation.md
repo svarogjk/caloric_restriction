@@ -13,6 +13,8 @@ cd backend && uv run python ../scripts/create_presentation.py
 
 **Output**: `presentations/app_presentation.pptx`
 
+**Skill**: For detailed helper function reference and design guidance, use the `pptx` skill — it is auto-loaded when editing slides.
+
 ## Style
 
 Dark-theme design matching `presentations/260221_survival_analysis_presentation.pptx`:
@@ -77,3 +79,7 @@ Edit `scripts/create_presentation.py`. Key helpers:
 | `add_gap_cards_slide`     | 7                     |
 | `add_pipeline_slide`      | 8                     |
 | `add_image_slide`         | 11, 12, 13            |
+
+Read `.claude/skills/pptx/references/helpers.md` for full parameter documentation.
+
+After editing, open `presentations/app_presentation.pptx` to verify visually — pptx layout issues are only visible in the rendered file.

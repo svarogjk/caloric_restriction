@@ -1,0 +1,124 @@
+---
+name: pptx
+description: Presentation creation and editing for the GEO Survival Analysis app. Use when creating, modifying, or regenerating the 14-slide PowerPoint deck, editing individual slides, changing slide content or styling, or running the presentation script. Also use when the user says things like "update slide 5", "add a new slide", "change the title", "regenerate the deck", or "fix the presentation".
+---
+
+# GEO Survival Analysis — PowerPoint Skill
+
+## Quick Generate
+
+```bash
+cd backend && uv run python ../scripts/create_presentation.py
+```
+
+Output: `presentations/app_presentation.pptx`
+
+Screenshots must exist in `presentations/screenshots/` (or a dated subfolder like `260123/`):
+- `starting_page.png`
+- `volcano_plot.png`
+- `kaplan_meier_curves.png` (or `km_curves.png`)
+
+---
+
+## When to Edit vs Re-generate
+
+**Re-generate** (run the script) when:
+- Changing content in multiple slides
+- Adding or removing a slide
+- Updating screenshots
+
+**Edit a helper call** (modify `scripts/create_presentation.py`) when:
+- Fixing wording in one slide's content
+- Adjusting a color or accent on a specific slide
+- Tweaking a stat value or bullet point
+
+After any edit to the script, re-generate to apply changes.
+
+---
+
+## Script Architecture
+
+`scripts/create_presentation.py` is organized in three layers:
+
+```
+Primitive helpers   →   Slide template functions   →   create_presentation()
+_rect, _oval,           add_title_slide,               Orchestrates all 14
+_tb, _para,             add_stat_cards_slide,          slides in order,
+_title_block            add_two_col_slide, ...         saves the .pptx
+```
+
+Every slide template calls `_set_bg(slide)` first, then `_title_block(slide, title, accent)`, then composes shapes and text using the primitives.
+
+---
+
+## Slide → Helper Mapping
+
+| Slide | Title | Helper |
+|-------|-------|--------|
+| 1 | Title | `add_title_slide` |
+| 2 | The Global Cancer Crisis | `add_stat_cards_slide` |
+| 3 | The Root Cause | `add_two_col_slide` |
+| 4 | The Untapped GEO Goldmine | `add_stat_cards_slide` |
+| 5 | Why GEO Is Inaccessible Today | `add_workflow_slide` |
+| 6 | Existing Tools and Their Limits | `add_table_slide` |
+| 7 | Six Gaps No Existing Tool Closes | `add_gap_cards_slide` |
+| 8 | Introducing GEO Survival Analysis | `add_pipeline_slide` |
+| 9 | Gene Mapping: Platform Babel Problem | `add_two_col_slide` |
+| 10 | Speed-Lightning: 600 Cancer Genes | `add_stat_cards_slide` |
+| 11 | Demo: Getting Started | `add_image_slide` |
+| 12 | Demo: Gene Results & Volcano Plot | `add_image_slide` |
+| 13 | Demo: Kaplan-Meier Survival Curves | `add_image_slide` |
+| 14 | Why GEO Survival Analysis Wins | `add_table_slide` |
+
+---
+
+## Design Warnings
+
+Adapted from Anthropic's pptx skill — these are the most common failure modes:
+
+- **Never repeat the same layout more than twice in a row.** The 14 slides use 7 distinct templates deliberately — preserve that variety when adding slides.
+- **Never center body text.** Left-align bullets in columns. Center only: stat values (38pt), pipeline step labels, and image captions.
+- **TEAL is the primary accent, not BLUE.** Blue is secondary. Don't swap them.
+- **CORAL means danger/problem.** Don't use it for neutral or positive content.
+- **Decorative ovals (`_oval`) only appear on the title slide.** Don't add them to other slides.
+- **Don't put a table slide right after another table slide.** Break it up with a two-col or stat-cards slide.
+- **Image slides have no `_title_block` underline** — they use a thinner manual `_rect` line at a different position. Don't replace them with a standard `_title_block` call.
+
+---
+
+## Quality Assurance
+
+After generating, **open the file visually** — python-pptx renders correctly but layout bugs (overlapping shapes, text clipping, wrong colors) are only visible in PowerPoint or LibreOffice.
+
+Quick check from CLI using LibreOffice (if available):
+```bash
+libreoffice --headless --convert-to png presentations/app_presentation.pptx
+```
+
+The first render is almost never pixel-perfect on new slides. Check:
+- Text is not clipped by the card boundary
+- Accent colors match the slide's theme (teal for solution, coral for problem)
+- Table rows have visible alternating fills
+- Pipeline arrows are visible and properly spaced
+
+---
+
+## Adding a New Slide
+
+1. Write a helper function following this pattern:
+   ```python
+   def add_my_slide(prs: Presentation, title: str, ...) -> None:
+       slide = prs.slides.add_slide(prs.slide_layouts[6])
+       _set_bg(slide)
+       _title_block(slide, title, TEAL)  # choose accent color
+       # compose shapes and text with _rect, _oval, _tb, _para
+   ```
+2. Call it in `create_presentation()` at the correct position.
+3. Update the docstring at the top of `create_presentation.py` with the new slide number and title.
+
+---
+
+## References
+
+- `references/helpers.md` — full signatures and parameter docs for every function
+- `references/design.md` — color palette, typography scale, and layout variety rules
