@@ -511,7 +511,7 @@ Determine if this dataset contains survival data and identify the relevant colum
             except Exception as e:
                 logger.debug(f"Could not align metadata for multivariate Cox: {e}")
 
-        logger.info(f"Analyzing {len(expression_matrix)} genes across {len(common_samples)} samples")
+        logger.info(f"Analyzing {len(expression_matrix)} genes across {len(common_samples)} samples (filtered={len(loaded_data.expression_matrix)} total genes before sample filtering)")
 
         # Perform survival analysis for each gene
         significant_genes = []

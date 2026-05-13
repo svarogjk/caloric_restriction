@@ -562,6 +562,7 @@ class GEOSurvivalWorkflowOrchestrator:
                     # Filter to cancer genes if requested
                     if cancer_genes_only:
                         from app.data.cancer_genes import CANCER_GENE_SET
+                        genes_before_filter = len(loaded_data.expression_matrix)
                         cancer_probes = {
                             probe
                             for probe, gene in loaded_data.probe_to_gene_mapping.items()
@@ -575,8 +576,8 @@ class GEOSurvivalWorkflowOrchestrator:
                             )
                             return None
                         logger.info(
-                            f"Dataset {dataset.accession}: filtered to "
-                            f"{len(loaded_data.expression_matrix)} cancer gene probes"
+                            f"Dataset {dataset.accession}: cancer genes filter applied - "
+                            f"{genes_before_filter} genes -> {len(loaded_data.expression_matrix)} cancer gene probes"
                         )
 
                     # Filter to user-specified genes if batch mode is active
