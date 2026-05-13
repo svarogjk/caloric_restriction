@@ -565,12 +565,26 @@ class GEOSurvivalWorkflowOrchestrator:
                     if cancer_genes_only:
                         from app.data.cancer_genes import CANCER_GENE_SET
                         genes_before_filter = len(loaded_data.expression_matrix)
+                        mapping_size = len(loaded_data.probe_to_gene_mapping) if loaded_data.probe_to_gene_mapping else 0
+
+                        # Find probes that map to cancer genes
                         cancer_probes = {
                             probe
                             for probe, gene in loaded_data.probe_to_gene_mapping.items()
                             if gene.upper() in CANCER_GENE_SET
                         }
+                        logger.info(
+                            f"Dataset {dataset.accession}: cancer filter - "
+                            f"mapping has {mapping_size} entries, found {len(cancer_probes)} cancer gene probes"
+                        )
+
+                        # Apply mask
                         cancer_mask = loaded_data.expression_matrix.index.isin(cancer_probes)
+                        genes_matching_mask = cancer_mask.sum()
+                        logger.info(
+                            f"Dataset {dataset.accession}: mask matches {genes_matching_mask}/{genes_before_filter} genes"
+                        )
+
                         loaded_data.expression_matrix = loaded_data.expression_matrix[cancer_mask]
                         if len(loaded_data.expression_matrix) == 0:
                             logger.warning(
