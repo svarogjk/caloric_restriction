@@ -37,14 +37,11 @@ if DATABASE_URL.startswith("sqlite"):
     kwargs["connect_args"] = {"timeout": 30}
 engine = create_async_engine(DATABASE_URL, **kwargs)
 
-# Enable WAL mode for SQLite to allow concurrent reads/writes
 if DATABASE_URL.startswith("sqlite"):
     @event.listens_for(engine.sync_engine, "connect")
     def set_sqlite_pragma(dbapi_conn, connection_record):
         cursor = dbapi_conn.cursor()
-        cursor.execute("PRAGMA journal_mode=WAL")
-        cursor.execute("PRAGMA synchronous=NORMAL")
-        cursor.execute("PRAGMA busy_timeout=30000")  # 30s in ms (belt+suspenders with connect_args timeout)
+        cursor.execute("PRAGMA busy_timeout=30000")
         cursor.close()
 
 # Session factory
