@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 import os
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -28,10 +28,21 @@ DATABASE_URL = os.getenv(
 logger.info(f"Using database: {DATABASE_URL}")
 
 # SQLite async engine (no connection pool needed — aiosqlite is in-process)
-engine = create_async_engine(
-    DATABASE_URL,
-    echo=False,  # Set to True for SQL logging
-)
+# Configure SQLite-specific settings for concurrent access
+kwargs = {"echo": False}  # Set to True for SQL logging
+if DATABASE_URL.startswith("sqlite"):
+    kwargs["connect_args"] = {"timeout": 30}
+
+engine = create_async_engine(DATABASE_URL, **kwargs)
+
+# Enable WAL mode for SQLite to allow concurrent reads/writes
+if DATABASE_URL.startswith("sqlite"):
+    @event.listens_for(engine.sync_engine, "connect")
+    def set_sqlite_pragma(dbapi_conn, connection_record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 # Session factory
 async_session_factory = async_sessionmaker(
