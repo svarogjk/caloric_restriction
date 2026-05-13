@@ -10,7 +10,7 @@ import math
 from typing import List, Optional, Dict, Any, Tuple, Callable, Awaitable
 from dataclasses import dataclass
 from datetime import datetime
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 import pandas as pd
 from scipy.stats import chi2
 

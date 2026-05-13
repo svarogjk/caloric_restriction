@@ -9,6 +9,7 @@ produce an auth error at the first API call, with a clear startup log message.
 
 import logging
 import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic_ai.models.mistral import MistralModel
@@ -18,13 +19,23 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 logger = logging.getLogger(__name__)
 
-mistral_key = os.environ.get("MISTRAL_KEY", "")
-if not mistral_key:
-    logger.error("MISTRAL_KEY not set — Mistral API calls will fail with auth errors")
+_SERVICES_DIR = Path(__file__).parent.parent / "services"
 
-anthropic_key = os.environ.get("ANTHROPIC_KEY", "")
-if not anthropic_key:
-    logger.warning("ANTHROPIC_KEY not set — Anthropic API calls will fail with auth errors")
+
+def _load_key(env_var: str, filename: str) -> str:
+    value = os.environ.get(env_var, "")
+    if not value:
+        key_file = _SERVICES_DIR / filename
+        if key_file.exists():
+            value = key_file.read_text().strip()
+            logger.info("Loaded %s from file", env_var)
+    if not value:
+        logger.error("%s not set — API calls will fail with auth errors", env_var)
+    return value
+
+
+mistral_key = _load_key("MISTRAL_KEY", "mistral_key.txt")
+anthropic_key = _load_key("ANTHROPIC_KEY", "anthropic_key.txt")
 
 mistral_model = MistralModel(
     "mistral-small-latest",

@@ -99,12 +99,6 @@ const ConversationList: React.FC<ConversationListProps> = ({
                 )}
             </div>
 
-            {/* Footer */}
-            <div className="p-4 border-t border-gray-700">
-                <p className="text-xs text-gray-500 text-center">
-                    Powered by LangChain
-                </p>
-            </div>
         </div>
     )
 }

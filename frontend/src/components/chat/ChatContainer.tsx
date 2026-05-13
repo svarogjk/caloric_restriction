@@ -147,8 +147,8 @@ const ChatContainer: React.FC = () => {
                             onChange={(e) => handleModelChange(e.target.value as 'mistral' | 'anthropic')}
                             className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
-                            <option value="mistral">Mistral</option>
-                            <option value="anthropic">Claude</option>
+                            <option value="mistral">magistral-small-latest</option>
+                            <option value="anthropic">claude-haiku-4-5-20251001</option>
                         </select>
                     </div>
                 </div>

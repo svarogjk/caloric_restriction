@@ -23,6 +23,7 @@
 - **NEVER** commit `.env` or credentials
 - **NEVER** skip hooks (`--no-verify`)
 - **ALWAYS** create NEW commits, never amend unless explicitly asked
+- **NEVER** create a commit autonomously — only the user may trigger commits
 
 ## Tags
 

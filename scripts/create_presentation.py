@@ -1,20 +1,22 @@
-"""Generate a 14-slide PowerPoint presentation about the GEO Survival Analysis app.
+"""Generate a 16-slide PowerPoint presentation about the GEO Survival Analysis app.
 
-Slide structure:
+Slide structure (PyData Yerevan edition):
   1.  Title
   2.  The Global Cancer Crisis
   3.  The Root Cause: Failing to Use the Data We Have
   4.  The Untapped GEO Goldmine
   5.  Why GEO Is Inaccessible Today
   6.  Existing Tools and Their Limits
-  7.  Six Gaps No Existing Tool Closes
-  8.  Introducing GEO Survival Analysis
-  9.  Gene Mapping: Solving the Platform Babel Problem  ← NEW
-  10. Speed-Lightning: Focus on 600 Cancer Genes        ← NEW
-  11. Demo: Getting Started (screenshot)
-  12. Demo: Gene Results & Volcano Plot (screenshot)
-  13. Demo: Kaplan-Meier Survival Curves (screenshot)
-  14. Why GEO Survival Analysis Wins
+  7.  Engineering Challenges We Had to Solve
+  8.  System Architecture
+  9.  Gene Mapping: Solving the Platform Babel Problem
+  10. Statistical Engine: lifelines
+  11. AI Chat: Why Not Just ChatGPT?
+  12. Demo: Getting Started (screenshot)
+  13. Demo: Gene Results & Volcano Plot (screenshot)
+  14. Demo: Kaplan-Meier Survival Curves (screenshot)
+  15. Deployment Pipeline
+  16. What We Learned
 """
 
 from pathlib import Path
@@ -400,6 +402,54 @@ def add_pipeline_slide(
         _para(tb_bt.text_frame, bottom_text, 18, BG, bold=True, align=PP_ALIGN.CENTER)
 
 
+# ── Architecture diagram (layered boxes) ──────────────────────────────────────
+
+def add_architecture_slide(
+    prs: Presentation,
+    title: str,
+    layers: list[tuple[str, list[str], RGBColor]],  # (label, box_texts, color)
+    accent: RGBColor = TEAL,
+) -> None:
+    """Vertical stack of labeled rows of boxes — system architecture diagram."""
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_bg(slide)
+    _title_block(slide, title, accent)
+
+    n_layers  = len(layers)
+    row_h     = 0.90
+    arrow_h   = 0.15
+    total     = n_layers * row_h + (n_layers - 1) * arrow_h
+    start_y   = 1.0 + (6.50 - total) / 2  # vertically centred in available space
+
+    label_x    = 0.30
+    label_w    = 1.50
+    box_area_x = 2.05
+    box_area_w = 11.133
+    gap        = 0.10
+
+    for i, (label, boxes, color) in enumerate(layers):
+        y  = start_y + i * (row_h + arrow_h)
+
+        # Row label (right-aligned muted)
+        tb_lbl = _tb(slide, label_x, y + 0.25, label_w, 0.40)
+        _para(tb_lbl.text_frame, label, 11, MUTED, align=PP_ALIGN.RIGHT)
+
+        # Equal-width boxes
+        n  = len(boxes)
+        bw = (box_area_w - (n - 1) * gap) / n
+        for j, text in enumerate(boxes):
+            bx = box_area_x + j * (bw + gap)
+            _rect(slide, bx, y, bw, row_h, CARD, f"ArchBox{i}_{j}")
+            _rect(slide, bx, y, bw, 0.07, color, f"ArchStripe{i}_{j}")  # colour stripe
+            tb_b = _tb(slide, bx, y + 0.18, bw, row_h - 0.25)
+            _para(tb_b.text_frame, text, 13, LIGHT, align=PP_ALIGN.CENTER)
+
+        # Down-arrow connector between layers
+        if i < n_layers - 1:
+            ax = box_area_x + box_area_w / 2 - 0.06
+            _rect(slide, ax, y + row_h, 0.12, arrow_h, accent, f"ArchArrow{i}")
+
+
 # ── Demo screenshot slide ──────────────────────────────────────────────────────
 
 def add_image_slide(
@@ -440,7 +490,7 @@ def _find_screenshot(screenshots_dir: Path, *names: str) -> Path:
 # ── Main builder ───────────────────────────────────────────────────────────────
 
 def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
-    """Create the full 14-slide presentation."""
+    """Create the full 16-slide PyData Yerevan presentation."""
     prs = Presentation()
     prs.slide_width  = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -449,8 +499,8 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
     add_title_slide(
         prs,
         "GEO Survival Analysis",
-        "AI-Powered Cancer Genomics",
-        "From Public Data to Drug Targets in Minutes",
+        "Mining 200K+ Public Datasets for Cancer Biomarkers",
+        "PyData Yerevan  ·  FastAPI · lifelines · pydantic-ai · React",
     )
 
     # ── Slide 2: The Global Cancer Crisis ─────────────────────────────────────
@@ -492,9 +542,9 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         "The Untapped GEO Goldmine",
         subtitle="NCBI Gene Expression Omnibus — the world's largest public gene expression repository",
         cards=[
-            ("200K+", "Datasets",       TEAL,   "Millions of patient samples\nacross every tumor type"),
-            ("Live",  "Gene × Survival",BLUE,   "Expression vs. patient outcomes\n— exactly the signal needed"),
-            ("Free",  "Growing Daily",  PURPLE, "Thousands of new datasets\nadded every year"),
+            ("200K+", "Datasets",        TEAL,   "Millions of patient samples\nacross every tumor type"),
+            ("Live",  "Gene × Survival", BLUE,   "Expression vs. patient outcomes\n— exactly the signal needed"),
+            ("Free",  "Growing Daily",   PURPLE, "Thousands of new datasets\nadded every year"),
         ],
     )
 
@@ -521,43 +571,62 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         col_headers=["Tool", "Key Limitation"],
         col_widths=[3.5, 8.833],
         rows=[
-            ["KMplot.com",      "Static DB — ~6 cancer types, ~25K samples; no new datasets"],
-            ["GEPIA2",          "Fixed to TCGA + GTEx only (~60K samples); no GEO mining; no AI"],
-            ["cBioPortal",      "Fixed TCGA/ICGC pool; manual dataset selection; no GEO mining"],
-            ["PrognoScan",      "Unmaintained since ~2010; ~220 fixed datasets; no AI features"],
-            ["SurvExpress",     "Small curated set; no NL interface; requires bioinformatics expertise"],
-            ["R / Python DIY",  "Unlimited scope but requires programming + full manual pipeline"],
+            ["KMplot.com",     "Static DB — ~6 cancer types, ~25K samples; no new GEO datasets"],
+            ["GEPIA2",         "Fixed to TCGA + GTEx only; no GEO mining; no natural language"],
+            ["cBioPortal",     "Curated TCGA/ICGC; no GEO mining; manual dataset selection"],
+            ["R / Python DIY", "Unlimited scope — but requires 2–6 weeks of expert pipeline work"],
         ],
     )
 
-    # ── Slide 7: Six Gaps No Existing Tool Closes ─────────────────────────────
+    # ── Slide 7: Engineering Challenges ───────────────────────────────────────
     add_gap_cards_slide(
         prs,
-        "Six Gaps No Existing Tool Closes",
+        "Engineering Challenges We Had to Solve",
         cards=[
-            ("Static Databases",    "Thousands of new GEO datasets deposited annually are ignored",          CORAL),
-            ("Narrow Coverage",     "Only 5–15 common cancers; rare cancers entirely absent",                AMBER),
-            ("No Quality Scoring",  "Researchers must manually inspect every dataset for suitability",       BLUE),
-            ("Single-Dataset Only", "No automated cross-dataset meta-analysis for robust, replicable hits",  PURPLE),
-            ("High Technical Barrier", "R/Python tools inaccessible to most cancer biologists",              CORAL),
-            ("No Iteration",        "One-shot queries with no context, refinement, or AI guidance",          TEAL),
+            ("Platform Babel",
+             "100+ GPL platforms with proprietary probe IDs — no unified gene namespace",
+             TEAL),
+            ("Multi-GB Annotation Files",
+             "GPL5175 = 4.3 GB SOFT files — stream only the platform table section (~14–36 MB)",
+             AMBER),
+            ("Metadata Heterogeneity",
+             "Column names like 'os_time' or 'vital status: dead' — heterogeneous across 200K datasets",
+             PURPLE),
+            ("Async Parallel I/O",
+             "10 datasets × 30–120 s each — sequential = 20 min; asyncio.gather = 2 min",
+             TEAL),
+            ("SSE Through Reverse Proxy",
+             "Caddy/nginx buffer SSE by default — flush_interval=-1 is one line but must be known",
+             BLUE),
+            ("Memory Budget",
+             "20K genes × 500 samples × float32 per dataset — filter to COSMIC 600 before analysis",
+             CORAL),
         ],
+        accent=TEAL,
     )
 
-    # ── Slide 8: Introducing GEO Survival Analysis ────────────────────────────
-    add_pipeline_slide(
+    # ── Slide 8: System Architecture ──────────────────────────────────────────
+    add_architecture_slide(
         prs,
-        "Introducing GEO Survival Analysis",
-        tagline="End-to-end AI platform: natural language query → ranked, validated survival genes",
-        steps=[
-            ("STEP 1", "NL Query",      "Ask in plain\nEnglish",              TEAL),
-            ("STEP 2", "Search GEO",    "Live NCBI\nAPI query",               BLUE),
-            ("STEP 3", "AI Scoring",    "LLM ranks\ndatasets 0–10",           PURPLE),
-            ("STEP 4", "Auto Analysis", "Cox + KM\nper gene",                 AMBER),
-            ("STEP 5", "Meta-Analysis", "Cross-dataset\nconsistency score",   CORAL),
-            ("STEP 6", "Results",       "Ranked\ngene list",                  TEAL),
+        "System Architecture",
+        layers=[
+            ("Client",
+             ["React 18 + Redux Toolkit", "Recharts Visualization", "SSE Progress Stream"],
+             BLUE),
+            ("API",
+             ["FastAPI Router", "JWT Auth", "SSE /search/stream"],
+             TEAL),
+            ("Orchestrator",
+             ["GEOSurvivalWorkflowOrchestrator", "asyncio.gather", "LRU Cache (max 10)"],
+             PURPLE),
+            ("Services",
+             ["GEOClient (NCBI Entrez)", "RankingService", "SurvivalAnalysisService", "GeneMappingService"],
+             AMBER),
+            ("Storage",
+             ["SQLite / PostgreSQL (env swap)", "platform_mappings/*.parquet", "datasets/*.json"],
+             MUTED),
         ],
-        bottom_text="No code  ·  No manual config  ·  Under 5 minutes",
+        accent=TEAL,
     )
 
     # ── Slide 9: Gene Mapping — Solving the Platform Babel Problem ─────────────
@@ -571,52 +640,77 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
             "Each platform uses proprietary probe IDs — e.g. \"1007_s_at\" or \"ILMN_1343291\" — not gene names",
             "Without gene-level mapping, Cox regression on raw probes is biologically meaningless",
             "Manual curation of GPL annotation files: days of expert work per platform",
-            "Inconsistent probe-to-gene relationships: one probe may target multiple genes, one gene many probes",
+            "Inconsistent probe-to-gene: one probe may target multiple genes, one gene many probes",
         ],
         right_header="OUR AUTOMATED APPROACH",
         right_bullets=[
             "Auto-fetch GPL annotation file for every dataset at analysis time",
             "Parse probe_id → gene_symbol mapping in seconds — any platform, any study",
             "Aggregate multi-probe genes: mean expression per gene per sample",
-            "Filter out non-expression platforms (methylation arrays, SNP chips, ChIP-seq) before analysis",
-            "Output: clean gene × sample matrix, ready for survival analysis — platform-agnostic",
+            "Filter out non-expression platforms (methylation arrays, SNP chips, ChIP-seq)",
+            "Disk cache: platform_mappings/*.parquet — survives restarts, never re-downloaded",
         ],
         accent=CORAL,
         bottom_badge="100+ platforms handled automatically  ·  Zero manual curation required",
     )
 
-    # ── Slide 10: Speed-Lightning — Focus on 600 Cancer Genes ─────────────────
-    add_stat_cards_slide(
+    # ── Slide 10: Statistical Engine ──────────────────────────────────────────
+    add_two_col_slide(
         prs,
-        "Speed-Lightning: Focus on 600 Cancer Genes",
-        cards=[
-            (
-                "20,000+",
-                "Full Genome",
-                CORAL,
-                "Hours per query — Cox regression\nacross all genes is impractical\nfor routine discovery",
-            ),
-            (
-                "600",
-                "Cancer Genes",
-                TEAL,
-                "Curated oncogenes, tumor\nsuppressors, kinases, and\nestablished biomarkers",
-            ),
-            (
-                "30×",
-                "Faster",
-                BLUE,
-                "Minutes to ranked results —\nno biological relevance lost,\nall critical signals retained",
-            ),
+        "Statistical Engine: lifelines",
+        left_header="METHODS",
+        left_header_color=PURPLE,
+        left_bullets=[
+            "Median split — expression → high / low groups per dataset",
+            "Log-rank test — non-parametric group comparison (p-value)",
+            "Cox PH regression — hazard ratio + 95% confidence interval",
+            "KaplanMeierFitter — time-to-event survival probability curves",
+            "Cross-cohort ranking — genes sorted by n_significant_datasets, then avg p-value",
+            "Heterogeneity — Cochran Q statistic + I² on forest plots",
         ],
-        context_line=(
-            "Sources: Cancer Gene Census  ·  Known drug targets  ·  Established prognostic biomarkers  "
-            "·  All major pathways: cell cycle, apoptosis, angiogenesis, metastasis, immune evasion"
-        ),
-        accent=BLUE,
+        right_header="DATA FLOW",
+        right_bullets=[
+            "INPUT: GSE series_matrix.txt.gz",
+            "→ probe_id × sample expression matrix  (pandas DataFrame)",
+            "→ probe → gene symbol  (GPL annotation, parquet cache)",
+            "→ high / low groups  (median split per dataset)",
+            "→ Cox PH fit  →  HR, p-value, 95% CI",
+            "→ KM fitter  →  survival probability curves",
+            "OUTPUT: ranked gene list  (cross-dataset consistency)",
+        ],
+        accent=PURPLE,
+        bottom_badge="Significance: p < 0.05  ·  min_occurrence: 2 datasets  ·  ~600 COSMIC cancer genes",
     )
 
-    # ── Slide 11: Demo — Getting Started ──────────────────────────────────────
+    # ── Slide 11: AI Chat — Domain Score ──────────────────────────────────────
+    add_two_col_slide(
+        prs,
+        "AI Chat: Why Not Just ChatGPT?",
+        left_header="THE GROUNDING MANDATE",
+        left_header_color=CORAL,
+        left_bullets=[
+            "General LLMs produce plausible text from training data — no real data access",
+            "Cannot cite a real dataset or report a reproducible survival signal",
+            "Our agent MUST call at least one tool per substantive question",
+            "Tools: search_known_datasets · search_geo_datasets · get_gene_info",
+            "          estimate_query · get_user_recent_results",
+            "Every answer is grounded in a real GSE accession and live NCBI data",
+        ],
+        right_header="DOMAIN SCORE (0–100)",
+        right_bullets=[
+            "+20 per tool called  (max 40)",
+            "+15 per GSE accession cited  (max 30)",
+            "+15 for HR / p-value / n= samples in text",
+            "+15 for user organism or candidate gene in text",
+            "DS ≥ 70  →  green badge  (target: ≥ 60% of queries)",
+            "DS 0–20  →  acceptable for conceptual questions only",
+            "Logged: grep chat_metrics geo_logs/app.log",
+        ],
+        accent=TEAL,
+        bottom_badge="Every response grounded in real GEO data — not training-set knowledge",
+    )
+
+    # ── Slide 12: Demo — Getting Started ──────────────────────────────────────
     add_image_slide(
         prs,
         "Demo: Getting Started",
@@ -624,7 +718,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         'Type a natural language query — e.g. "What genes predict poor survival in triple-negative breast cancer?"',
     )
 
-    # ── Slide 12: Demo — Gene Results & Volcano Plot ──────────────────────────
+    # ── Slide 13: Demo — Gene Results & Volcano Plot ──────────────────────────
     add_image_slide(
         prs,
         "Demo: Gene Results & Volcano Plot",
@@ -632,7 +726,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         "Ranked genes with hazard ratios, p-values, and risk direction consistency across datasets",
     )
 
-    # ── Slide 13: Demo — Survival Curves ──────────────────────────────────────
+    # ── Slide 14: Demo — Survival Curves ──────────────────────────────────────
     add_image_slide(
         prs,
         "Demo: Kaplan-Meier Survival Curves",
@@ -640,23 +734,54 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         "Compare survival probability between high and low expression groups — interpretable by clinicians",
     )
 
-    # ── Slide 14: Why We Win — Full Comparison ────────────────────────────────
-    add_table_slide(
+    # ── Slide 15: Deployment Pipeline ─────────────────────────────────────────
+    add_two_col_slide(
         prs,
-        "Why GEO Survival Analysis Wins",
-        col_headers=["Dimension", "GEO Survival Analysis vs. Existing Tools"],
-        col_widths=[4.0, 8.333],
-        rows=[
-            ["Dataset scope",              "200,000+ live GEO datasets  vs.  200–10,000 pre-curated"],
-            ["Cancer type coverage",       "Any cancer type in GEO  vs.  5–15 common types only"],
-            ["New dataset access",         "Real-time via NCBI API  vs.  Not available"],
-            ["Dataset quality filtering",  "AI-powered relevance ranking  vs.  Manual or absent"],
-            ["Gene mapping",               "100+ platforms auto-mapped  vs.  Fixed pre-processed only"],
-            ["Analysis scope",             "600 cancer genes — 30× faster  vs.  All genes or none"],
-            ["Survival metadata",          "LLM-automated detection  vs.  Manual column inspection"],
-            ["Cross-dataset meta-analysis","Core feature  vs.  Not available in any tool"],
-            ["Natural language interface", "Full conversational UI  vs.  Not available"],
-            ["Time to first result",       "Under 5 minutes  vs.  Days to weeks"],
+        "Deployment Pipeline",
+        left_header="MULTI-STAGE DOCKER BUILD",
+        left_header_color=TEAL,
+        left_bullets=[
+            "Stage 1: node:22-alpine — npm ci + vite build  (React SPA → /dist)",
+            "Stage 2: uv:python3.13 — uv sync --frozen --no-dev  (.venv)",
+            "Stage 3: python:3.13-slim runtime — copy .venv + frontend/dist",
+            "CMD: alembic upgrade head && uvicorn app.main:app --port 8000",
+            "GitHub Actions: push → build → push ghcr.io → SSH deploy",
+        ],
+        right_header="HETZNER CX32 · CADDY · DOCKER COMPOSE",
+        right_bullets=[
+            "Caddy: automatic TLS + flush_interval=-1  (enables SSE streaming)",
+            "SQLite default; DATABASE_URL env var → PostgreSQL, no code change",
+            "Named volumes: app_data · platform_mappings · geo_logs  (survive redeploy)",
+            "Why Caddy not nginx: zero-config TLS + native SSE, one-line Caddyfile",
+            "Cost: ~$10/mo  (CX32 — 4 vCPU, 8 GB RAM, 80 GB NVMe)",
+        ],
+        accent=TEAL,
+        bottom_badge="git push → live in ~3 min  ·  zero-downtime docker compose up -d",
+    )
+
+    # ── Slide 16: What We Learned ──────────────────────────────────────────────
+    add_gap_cards_slide(
+        prs,
+        "What We Learned",
+        cards=[
+            ("asyncio.gather",
+             "Parallel downloads cut wall time from 20 min → 2 min — the single biggest win",
+             TEAL),
+            ("Hybrid metadata detection",
+             "Regex catches ~70% of survival columns; pydantic-ai structured output handles the rest",
+             PURPLE),
+            ("Disk-first caching",
+             "Parquet in platform_mappings/ survives restarts; OrderedDict LRU is a fast layer on top",
+             BLUE),
+            ("uv in Docker",
+             "uv sync --frozen: reproducible, layer-cached, no requirements.txt drift",
+             AMBER),
+            ("SSE proxy config",
+             "Default Caddy/nginx buffers kill real-time streaming — flush_interval=-1 is one line",
+             CORAL),
+            ("SQLite scales further",
+             "aiosqlite + SQLAlchemy async handles concurrent requests; PostgreSQL is one env-var away",
+             TEAL),
         ],
         accent=TEAL,
     )
