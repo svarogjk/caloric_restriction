@@ -519,6 +519,8 @@ class GEOSurvivalWorkflowOrchestrator:
     ) -> List[SurvivalAnalysisResult]:
         """Load and analyze datasets for survival associations"""
 
+        logger.info(f"_analyze_datasets_survival called with cancer_genes_only={cancer_genes_only}, gene_filter={gene_filter is not None}")
+
         semaphore = asyncio.Semaphore(1)
         
         async def process_dataset(dataset: GEODataset) -> Optional[SurvivalAnalysisResult]:
