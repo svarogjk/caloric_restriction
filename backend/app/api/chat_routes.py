@@ -320,7 +320,8 @@ async def send_message(
                 full_content += chunk
                 yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
 
-            suggested_actions = chat_service._extract_actions(full_content, estimation=None)
+            estimation_for_actions = stream_sink.get("estimation")
+            suggested_actions = chat_service._extract_actions(full_content, estimation=estimation_for_actions)
             domain_score = stream_sink.get("domain_score", 0)
 
             yield f"data: {json.dumps({'type': 'message_complete', 'message': {'message_id': str(uuid.uuid4()), 'role': 'assistant', 'content': full_content, 'created_at': datetime.utcnow().isoformat(), 'model_used': model, 'suggested_actions': suggested_actions, 'domain_score': domain_score}})}\n\n"

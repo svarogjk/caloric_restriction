@@ -277,6 +277,7 @@ class ChatService:
         """
         # Run estimation first (if applicable) so estimation_id can be linked to user msg
         estimation_context = None
+        estimation: Optional[EstimationResult] = None
         saved_estimation_id = None
         if self._looks_like_analysis_query(content):
             estimation = await self.estimation_service.estimate_query(content, user_settings=user_settings)
@@ -349,10 +350,12 @@ class ChatService:
             full_response += chunk
             yield chunk
 
-        # Propagate domain_score to caller's result_sink
+        # Propagate domain_score and estimation to caller's result_sink
         if result_sink is not None:
             result_sink["domain_score"] = inner_sink.get("domain_score", 0)
             result_sink["tools"] = inner_sink.get("tools", [])
+            if estimation is not None:
+                result_sink["estimation"] = estimation
 
         # Save complete response (tokens not available from streaming)
         await self.conversation_service.add_message(
@@ -440,6 +443,7 @@ class ChatService:
         # Check for action-like phrases in response
         run_analysis_phrases = [
             "run the analysis", "perform the analysis", "run analysis",
+            "run this analysis", "run a survival analysis",
             "click \"run analysis\"", "click 'run analysis'",
             "proceed with", "start the analysis", "launch the analysis",
             "to proceed", "run it", "go ahead",
