@@ -1,4 +1,4 @@
-"""Generate a 16-slide PowerPoint presentation about the GEO Survival Analysis app.
+"""Generate a 17-slide PowerPoint presentation about the GEO Survival Analysis app.
 
 Slide structure (PyData Yerevan edition):
   1.  Title
@@ -12,11 +12,12 @@ Slide structure (PyData Yerevan edition):
   9.  Gene Mapping: Solving the Platform Babel Problem
   10. Statistical Engine: lifelines
   11. AI Chat: Why Not Just ChatGPT?
-  12. Demo: Getting Started (screenshot)
-  13. Demo: Gene Results & Volcano Plot (screenshot)
-  14. Demo: Kaplan-Meier Survival Curves (screenshot)
-  15. Deployment Pipeline
-  16. What We Learned
+  12. AI Chat Architecture: How It Works
+  13. Demo: Getting Started (screenshot)
+  14. Demo: Gene Results & Volcano Plot (screenshot)
+  15. Demo: Kaplan-Meier Survival Curves (screenshot)
+  16. Deployment Pipeline
+  17. What We Learned
 """
 
 from pathlib import Path
@@ -490,7 +491,7 @@ def _find_screenshot(screenshots_dir: Path, *names: str) -> Path:
 # ── Main builder ───────────────────────────────────────────────────────────────
 
 def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
-    """Create the full 16-slide PyData Yerevan presentation."""
+    """Create the full 17-slide PyData Yerevan presentation."""
     prs = Presentation()
     prs.slide_width  = Inches(13.333)
     prs.slide_height = Inches(7.5)
@@ -692,8 +693,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
             "General LLMs produce plausible text from training data — no real data access",
             "Cannot cite a real dataset or report a reproducible survival signal",
             "Our agent MUST call at least one tool per substantive question",
-            "Tools: search_known_datasets · search_geo_datasets · get_gene_info",
-            "          estimate_query · get_user_recent_results",
+            "5 grounding tools — each call cites a real GSE accession  (see next slide)",
             "Every answer is grounded in a real GSE accession and live NCBI data",
         ],
         right_header="DOMAIN SCORE (0–100)",
@@ -710,7 +710,31 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         bottom_badge="Every response grounded in real GEO data — not training-set knowledge",
     )
 
-    # ── Slide 12: Demo — Getting Started ──────────────────────────────────────
+    # ── Slide 12: AI Chat Architecture ────────────────────────────────────────
+    add_architecture_slide(
+        prs,
+        "AI Chat Architecture: How It Works",
+        layers=[
+            ("User",
+             ["React Chat UI", "Natural language question", "Streaming response (SSE)"],
+             BLUE),
+            ("Agent",
+             ["pydantic-ai Agent", "Mistral (default)  ·  Claude Haiku (optional)",
+              "Dynamic system prompt", "History trim  ≤16K chars"],
+             TEAL),
+            ("5 Tools",
+             ["search_known_datasets", "search_geo_datasets",
+              "get_gene_info", "estimate_query", "get_user_recent_results"],
+             AMBER),
+            ("Data",
+             ["GEO dataset cache (parquet)", "NCBI Entrez live",
+              "Mistral embed 1024-dim (RAG)", "SQLite results history"],
+             PURPLE),
+        ],
+        accent=TEAL,
+    )
+
+    # ── Slide 13: Demo — Getting Started ──────────────────────────────────────
     add_image_slide(
         prs,
         "Demo: Getting Started",
@@ -718,7 +742,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         'Type a natural language query — e.g. "What genes predict poor survival in triple-negative breast cancer?"',
     )
 
-    # ── Slide 13: Demo — Gene Results & Volcano Plot ──────────────────────────
+    # ── Slide 14: Demo — Gene Results & Volcano Plot ──────────────────────────
     add_image_slide(
         prs,
         "Demo: Gene Results & Volcano Plot",
@@ -726,7 +750,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         "Ranked genes with hazard ratios, p-values, and risk direction consistency across datasets",
     )
 
-    # ── Slide 14: Demo — Survival Curves ──────────────────────────────────────
+    # ── Slide 15: Demo — Survival Curves ──────────────────────────────────────
     add_image_slide(
         prs,
         "Demo: Kaplan-Meier Survival Curves",
@@ -734,7 +758,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         "Compare survival probability between high and low expression groups — interpretable by clinicians",
     )
 
-    # ── Slide 15: Deployment Pipeline ─────────────────────────────────────────
+    # ── Slide 16: Deployment Pipeline ─────────────────────────────────────────
     add_two_col_slide(
         prs,
         "Deployment Pipeline",
@@ -759,7 +783,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
         bottom_badge="git push → live in ~3 min  ·  zero-downtime docker compose up -d",
     )
 
-    # ── Slide 16: What We Learned ──────────────────────────────────────────────
+    # ── Slide 17: What We Learned ──────────────────────────────────────────────
     add_gap_cards_slide(
         prs,
         "What We Learned",
