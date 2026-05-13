@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.request_models import AnalysisRequest
-from app.models.response_models import AnalysisResponse, HealthResponse, GeneSurvivalResponse, GeneDatasetResult
+from app.models.response_models import AnalysisResponse, HealthResponse, GeneSurvivalResponse, GeneDatasetResult, KMCurveData
 from app.services.geo_survival_workflow_orchestrator import CrossDatasetSurvivalAnalysis
 from app.services.analysis_result_service import analysis_result_service
 from app.services.export_service import export_service
