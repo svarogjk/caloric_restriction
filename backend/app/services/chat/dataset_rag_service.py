@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+import pandas as pd
 from mistralai import Mistral
 
 logger = logging.getLogger(__name__)
@@ -172,6 +173,28 @@ class DatasetRAGService:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _get_organism(self, accession: str) -> Optional[str]:
+        """
+        Extract organism from the metadata.parquet file for a dataset.
+
+        Returns:
+            Organism name (e.g. "Homo sapiens") or None if not found.
+        """
+        metadata_file = DATASETS_DIR / f"{accession}.metadata.parquet"
+        if not metadata_file.exists():
+            return None
+
+        try:
+            df = pd.read_parquet(metadata_file)
+            if "organism_ch1" in df.columns:
+                organisms = df["organism_ch1"].dropna().unique()
+                if len(organisms) > 0:
+                    return str(organisms[0])
+            return None
+        except Exception as exc:
+            logger.debug(f"Could not read organism from {accession}: {exc}")
+            return None
+
     def _build_doc(self, json_file: Path) -> tuple[str, Optional[dict]]:
         """Build a document dict from a strategy or metrics JSON file."""
         try:
@@ -185,12 +208,17 @@ class DatasetRAGService:
         accession = parts[0]
         file_type = parts[1] if len(parts) > 1 else "unknown"
 
+        # Enrich with organism from metadata.parquet
+        organism = self._get_organism(accession)
+
         if file_type == "strategy":
             content = (
                 f"Dataset: {accession}\n"
                 f"Format: {data.get('file_format', 'unknown')}\n"
-                f"Notes: {data.get('notes', '')}"
             )
+            if organism:
+                content += f"Organism: {organism}\n"
+            content += f"Notes: {data.get('notes', '')}"
         elif file_type == "metrics":
             missing = data.get("missing_rate")
             if isinstance(missing, float):
@@ -198,18 +226,24 @@ class DatasetRAGService:
                     f"Dataset: {accession}\n"
                     f"Genes: {data.get('n_genes', 'unknown')}\n"
                     f"Samples: {data.get('n_samples', 'unknown')}\n"
-                    f"Missing rate: {missing:.3f}"
                 )
+                if organism:
+                    content += f"Organism: {organism}\n"
+                content += f"Missing rate: {missing:.3f}"
             else:
                 content = f"Dataset: {accession} metrics: {json.dumps(data)}"
         else:
             content = f"Dataset: {accession}\n{json.dumps(data)}"
 
         doc_id = f"{accession}_{file_type}"
+        metadata = {"accession": accession, "type": file_type, **data}
+        if organism:
+            metadata["organism"] = organism
+
         return doc_id, {
             "accession": accession,
             "content": content,
-            "metadata": {"accession": accession, "type": file_type, **data},
+            "metadata": metadata,
         }
 
     @staticmethod
