@@ -2584,61 +2584,108 @@ def add_rag_slide(prs: Presentation) -> None:
 # ── N19: Domain Score ─────────────────────────────────────────────────────────
 
 def add_domain_score_slide(prs: Presentation) -> None:
+    """Side-by-side contrast: generic AI chat vs this app, with scoring formula."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_bg(slide)
-    _title_block(slide, "Domain Score: Measuring AI Response Quality", AMBER)
+    _title_block(slide, "Domain Score: This App vs Generic AI Chat", AMBER)
 
-    _ic(slide, 0.5, 1.10, 5.80, 1.55, "WHAT IS THE DOMAIN SCORE?", AMBER, [
-        "0–100 badge shown on every AI chat response — measures 'groundedness'",
-        "Computed zero-cost in Python: no API call, pure string analysis",
-        "Distinguishes real domain answers from generic ChatGPT-style text",
-        "Logged per message: grep chat_metrics in geo_logs/app.log",
-    ], "ds1")
-    _ic(slide, 0.5, 2.77, 5.80, 1.10, "WHY WE BUILT THIS", AMBER, [
-        "Core product moat: AI response grounded in real GEO data > generic AI",
-        "Honest signal: DS 0–20 is OK for 'what is a hazard ratio?' (conceptual)",
-        "Ops metric: DS ≥ 70 rate should be ≥ 60% of substantive domain questions",
-    ], "ds2")
-    _ic(slide, 0.5, 4.00, 5.80, 1.85, "KPI TARGETS", AMBER, [
-        "Tool invocation rate: ≥ 70% of assistant turns call ≥ 1 tool",
-        "GSE citation rate: ≥ 50% of tool-using turns cite ≥ 1 GSE ID",
-        "DS ≥ 70 rate: target ≥ 60% of substantive domain questions",
-        "DS badge: green (≥70), amber (40–69), red (<40) shown in UI",
-        "Domain score is honest — not inflated for 'what is survival analysis?'",
-    ], "ds3")
+    panel_y = 1.12
+    panel_h = 3.80
+    lx, lw = 0.35, 6.10
+    rx, rw = 6.70, 6.28
 
-    _divline(slide, color=AMBER)
-    rx, rw = 6.55, 12.633 - 6.55
+    # ── Left panel: Generic AI ──────────────────────────────────────────────
+    _rect(slide, lx, panel_y, lw, panel_h, CARD, "dsLP")
+    _rect(slide, lx, panel_y, lw, 0.06, CORAL, "dsLTop")
+    tb_lh = _tb(slide, lx + 0.14, panel_y + 0.10, lw - 0.24, 0.28)
+    _para(tb_lh.text_frame, "Generic AI Chat  (e.g. ChatGPT.com)", 12, CORAL, bold=True)
 
-    tb_rh = _tb(slide, rx, 1.10, rw, 0.30)
-    _para(tb_rh.text_frame, "SCORING BREAKDOWN (max 100 pts)", 12, AMBER, bold=True)
+    _rect(slide, lx + 0.12, panel_y + 0.46, lw - 0.24, 0.28, CARD_ALT, "dsLQ")
+    tb_lq = _tb(slide, lx + 0.22, panel_y + 0.52, lw - 0.40, 0.18)
+    _para(tb_lq.text_frame, "User: Does TP53 affect lung cancer survival?", 9, MUTED)
 
-    signals = [
-        ("Tool called",        "+20 pts each (max 40)",  TEAL),
-        ("GSE ID cited",       "+15 pts each (max 30)",  BLUE),
-        ("HR / p-value in text", "+15 pts",              PURPLE),
-        ("User organism/gene",  "+15 pts",               AMBER),
+    _rect(slide, lx + 0.12, panel_y + 0.82, lw - 0.24, 1.20, CARD_ALT, "dsLA")
+    tb_la = _tb(slide, lx + 0.22, panel_y + 0.92, lw - 0.40, 1.00)
+    tf_la = tb_la.text_frame
+    tf_la.word_wrap = True
+    _para(tf_la,
+          '"TP53 is a tumor suppressor gene involved in cell cycle regulation '
+          'and apoptosis. Studies suggest it may influence lung cancer prognosis, '
+          'though results vary across different patient populations..."', 9, MUTED)
+
+    for i, text in enumerate(["Tools called: 0", "Dataset citations: none", "Statistical values: none"]):
+        sy = panel_y + 2.14 + i * 0.28
+        _rect(slide, lx + 0.12, sy, lw - 0.24, 0.24, CORAL_DIM, f"dsLS{i}")
+        tb_si = _tb(slide, lx + 0.22, sy + 0.04, lw - 0.44, 0.18)
+        _para(tb_si.text_frame, text, 9, CORAL)
+
+    _rect(slide, lx + 0.12, panel_y + 3.04, lw - 0.24, 0.56, CORAL_DIM, "dsLBadge")
+    tb_lb = _tb(slide, lx + 0.12, panel_y + 3.10, lw - 0.24, 0.42)
+    _para(tb_lb.text_frame, "DOMAIN SCORE:  5 / 100", 18, CORAL, bold=True, align=PP_ALIGN.CENTER)
+    _para(tb_lb.text_frame, "could be produced by any chatbot — zero product value", 9, MUTED,
+          new=True, align=PP_ALIGN.CENTER)
+
+    # ── Right panel: GEO app ────────────────────────────────────────────────
+    _rect(slide, rx, panel_y, rw, panel_h, CARD, "dsRP")
+    _rect(slide, rx, panel_y, rw, 0.06, TEAL, "dsRTop")
+    tb_rh = _tb(slide, rx + 0.14, panel_y + 0.10, rw - 0.24, 0.28)
+    _para(tb_rh.text_frame, "GEO Survival Analysis Chat", 12, TEAL, bold=True)
+
+    _rect(slide, rx + 0.12, panel_y + 0.46, rw - 0.24, 0.28, CARD_ALT, "dsRQ")
+    tb_rq = _tb(slide, rx + 0.22, panel_y + 0.52, rw - 0.40, 0.18)
+    _para(tb_rq.text_frame, "User: Does TP53 affect lung cancer survival?", 9, MUTED)
+
+    _rect(slide, rx + 0.12, panel_y + 0.82, rw - 0.24, 1.20, CARD_ALT, "dsRA")
+    tb_ra = _tb(slide, rx + 0.22, panel_y + 0.92, rw - 0.40, 1.00)
+    tf_ra = tb_ra.text_frame
+    tf_ra.word_wrap = True
+    _para(tf_ra,
+          '"I searched 8 GEO datasets (GSE12345, GSE67890 + 6 more). In LUAD, '
+          'TP53 high expression → HR=2.3 [CI: 1.4–3.2] (p=0.001, n=87 avg). '
+          'Effect is consistent across cohorts (I²=21%)."', 9, LIGHT)
+
+    right_signals = [
+        ("Tools called: 2  → +40 pts",                      TEAL),
+        ("GSE IDs: GSE12345, GSE67890  → +30 pts",          BLUE),
+        ("HR=2.3, p=0.001  (+15)  ·  TP53 match  (+15)",    AMBER),
     ]
-    bar_left  = rx + 3.20
-    bar_max_w = rw - 3.30
-    for i, (label, detail, col) in enumerate(signals):
-        sy = 1.52 + i * 0.82
-        tb_l = _tb(slide, rx, sy + 0.10, 3.10, 0.30)
-        _para(tb_l.text_frame, label, 12, WHITE, bold=True)
-        tb_d = _tb(slide, rx, sy + 0.44, 3.10, 0.28)
-        _para(tb_d.text_frame, detail, 10, MUTED)
-        bar_val = [40, 30, 15, 15][i]
-        bw = (bar_val / 40) * bar_max_w
-        _rect(slide, bar_left, sy + 0.14, bw, 0.42, col, f"dsBar{i}")
-        tb_p = _tb(slide, bar_left + bw + 0.08, sy + 0.18, 0.60, 0.28)
-        _para(tb_p.text_frame, str(bar_val), 12, col, bold=True)
+    for i, (text, color) in enumerate(right_signals):
+        sy = panel_y + 2.14 + i * 0.28
+        _rect(slide, rx + 0.12, sy, rw - 0.24, 0.24, TEAL_DARK, f"dsRS{i}")
+        tb_si = _tb(slide, rx + 0.22, sy + 0.04, rw - 0.44, 0.18)
+        _para(tb_si.text_frame, text, 9, color)
 
-    _rect(slide, rx, 4.90, rw, 1.00, CARD, "dsEx")
-    tb_ex = _tb(slide, rx + 0.15, 4.98, rw - 0.25, 0.82)
-    tf = tb_ex.text_frame
-    tf.word_wrap = True
-    _para(tf, "EXAMPLE: 'TP53 HR=2.3 (p=0.001) in GSE12345 (n=87 LUAD patients)'", 11, AMBER, bold=True)
-    _para(tf, "→ 1 tool call (+20) + 1 GSE ID (+15) + HR + p-value (+15) + gene in context (+15) = DS 65  (amber)", 10, LIGHT, new=True)
+    _rect(slide, rx + 0.12, panel_y + 3.04, rw - 0.24, 0.56, TEAL_DARK, "dsRBadge")
+    tb_rb = _tb(slide, rx + 0.12, panel_y + 3.10, rw - 0.24, 0.42)
+    _para(tb_rb.text_frame, "DOMAIN SCORE:  80 / 100", 18, TEAL, bold=True, align=PP_ALIGN.CENTER)
+    _para(tb_rb.text_frame, "grounded in real GEO patient data — unique product value", 9, MUTED,
+          new=True, align=PP_ALIGN.CENTER)
+
+    # ── Scoring formula strip ───────────────────────────────────────────────
+    strip_y = panel_y + panel_h + 0.14
+    strip_h = 7.10 - strip_y
+
+    tb_sth = _tb(slide, 0.35, strip_y + 0.04, 9.0, 0.26)
+    _para(tb_sth.text_frame,
+          "SCORING FORMULA  (zero-cost: pure Python string analysis, no API call)",
+          10, AMBER, bold=True)
+
+    scoring = [
+        ("Each tool called",        "+20 pts  (max 40)", TEAL),
+        ("Each GSE ID cited",       "+15 pts  (max 30)", BLUE),
+        ("HR / p-value / n= in text", "+15 pts",         PURPLE),
+        ("Organism or gene matched", "+15 pts",           AMBER),
+    ]
+    n = len(scoring)
+    sw = (13.133 - 0.70 - (n - 1) * 0.10) / n
+    for j, (signal, pts, color) in enumerate(scoring):
+        sx = 0.35 + j * (sw + 0.10)
+        _rect(slide, sx, strip_y + 0.36, sw, strip_h - 0.40, CARD, f"dsSig{j}")
+        _rect(slide, sx, strip_y + 0.36, sw, 0.06, color, f"dsSigS{j}")
+        tb_ss = _tb(slide, sx + 0.12, strip_y + 0.48, sw - 0.22, 0.26)
+        _para(tb_ss.text_frame, signal, 10, color, bold=True)
+        tb_sp = _tb(slide, sx + 0.12, strip_y + 0.80, sw - 0.22, 0.30)
+        _para(tb_sp.text_frame, pts, 12, color, bold=True)
 
 
 # ── N20: SSE Pipeline (end-to-end) ────────────────────────────────────────────
