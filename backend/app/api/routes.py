@@ -94,78 +94,8 @@ async def search_datasets(
             gene_filter=request.gene_filter,
         )
         
-        # Convert GeneSurvivalOccurrence objects to response models
-        genes_response = []
-        for gene in result.common_survival_genes:
-            # Convert per-dataset results if available
-            per_dataset_responses = None
-            if gene.per_dataset_results:
-                per_dataset_responses = []
-                for ds_result in gene.per_dataset_results:
-                    km_high = None
-                    km_low = None
-                    
-                    if 'km_curve_high' in ds_result and ds_result['km_curve_high']:
-                        km_data = ds_result['km_curve_high']
-                        km_high = KMCurveData(
-                            times=km_data['times'],
-                            survival_probabilities=km_data['survival_probabilities'],
-                            ci_lower=km_data.get('ci_lower'),
-                            ci_upper=km_data.get('ci_upper'),
-                            n_samples=km_data['n_samples'],
-                            n_events=km_data['n_events']
-                        )
-                    
-                    if 'km_curve_low' in ds_result and ds_result['km_curve_low']:
-                        km_data = ds_result['km_curve_low']
-                        km_low = KMCurveData(
-                            times=km_data['times'],
-                            survival_probabilities=km_data['survival_probabilities'],
-                            ci_lower=km_data.get('ci_lower'),
-                            ci_upper=km_data.get('ci_upper'),
-                            n_samples=km_data['n_samples'],
-                            n_events=km_data['n_events']
-                        )
-                    
-                    per_dataset_responses.append(GeneDatasetResult(
-                        dataset_id=ds_result['dataset_id'],
-                        dataset_title=ds_result['dataset_title'],
-                        hazard_ratio=ds_result['hazard_ratio'],
-                        hazard_ratio_ci_lower=ds_result['hazard_ratio_ci_lower'],
-                        hazard_ratio_ci_upper=ds_result['hazard_ratio_ci_upper'],
-                        cox_p_value=ds_result['cox_p_value'],
-                        log_rank_p_value=ds_result['log_rank_p_value'],
-                        risk_direction=ds_result['risk_direction'],
-                        n_samples=ds_result['n_samples'],
-                        median_survival_high=ds_result.get('median_survival_high'),
-                        median_survival_low=ds_result.get('median_survival_low'),
-                        km_curve_high=km_high,
-                        km_curve_low=km_low
-                    ))
-            
-            genes_response.append(GeneSurvivalResponse(
-                gene_id=gene.gene_id,
-                gene_symbol=gene.gene_symbol,
-                n_datasets=gene.n_datasets,
-                avg_hazard_ratio=gene.avg_hazard_ratio,
-                avg_cox_p_value=gene.avg_cox_p_value,
-                avg_log_rank_p_value=gene.avg_log_rank_p_value,
-                predominant_risk=gene.predominant_risk,
-                risk_direction_consistency=gene.risk_direction_consistency,
-                datasets=gene.datasets,
-                per_dataset_results=per_dataset_responses
-            ))
-        
-        response = AnalysisResponse(
-            query=result.query,
-            n_datasets_analyzed=result.n_datasets_analyzed,
-            n_datasets_with_survival=result.n_datasets_with_survival,
-            common_genes=genes_response,
-            processing_time=result.processing_time,
-            timestamp=result.timestamp.isoformat(),
-            ranking_quality_score=result.ranking_quality_score,
-            ranking_recommendations=result.ranking_recommendations
-        )
+        # Convert orchestrator result to API response (shared builder includes F16 adjusted Cox)
+        response = _build_analysis_response(result)
 
         # Persist result non-blocking (F07) — failure must never break the response
         try:
@@ -231,7 +161,11 @@ def _build_analysis_response(result: CrossDatasetSurvivalAnalysis) -> AnalysisRe
                     median_survival_high=ds_result.get('median_survival_high'),
                     median_survival_low=ds_result.get('median_survival_low'),
                     km_curve_high=km_high,
-                    km_curve_low=km_low
+                    km_curve_low=km_low,
+                    # Multivariate Cox results (F13/F16)
+                    adjusted_hazard_ratio=ds_result.get('adjusted_hazard_ratio'),
+                    multivariate_cox_p=ds_result.get('multivariate_cox_p'),
+                    covariates_used=ds_result.get('covariates_used'),
                 ))
 
         genes_response.append(GeneSurvivalResponse(

@@ -28,6 +28,10 @@ export interface GeneDatasetResult {
     median_survival_low: number | null
     km_curve_high: KMCurveData | null
     km_curve_low: KMCurveData | null
+    // Multivariate (clinically-adjusted) Cox results (F16)
+    adjusted_hazard_ratio?: number | null
+    multivariate_cox_p?: number | null
+    covariates_used?: string[] | null
 }
 
 export interface HeterogeneityStats {

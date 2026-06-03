@@ -54,6 +54,26 @@ class AnalysisResultService:
             **row.result_data,
         }
 
+    async def find_recent_by_query(self, db: AsyncSession, query: str) -> Optional[dict]:
+        """Find the most recent saved result whose query matches (case-insensitive).
+        Used by Oncologist Mode (F20) to instantly load a pre-run curated analysis."""
+        stmt = (
+            select(AnalysisResult)
+            .where(AnalysisResult.query.ilike(query))
+            .order_by(desc(AnalysisResult.created_at))
+            .limit(1)
+        )
+        row = (await db.execute(stmt)).scalar_one_or_none()
+        if row is None:
+            return None
+        return {
+            "result_id": row.id,
+            "query": row.query,
+            "n_genes_found": row.n_genes_found,
+            "n_datasets_with_survival": row.n_datasets_with_survival,
+            "created_at": row.created_at.isoformat(),
+        }
+
     async def list_user_results(
         self,
         db: AsyncSession,

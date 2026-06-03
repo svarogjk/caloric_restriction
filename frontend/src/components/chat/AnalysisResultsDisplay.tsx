@@ -17,6 +17,10 @@ import { AppDispatch, RootState } from '../../store/store'
 import KaplanMeierPlot from '../KaplanMeierPlot'
 import { ForestPlot } from '../ForestPlot'
 import PathwayEnrichmentPanel from '../PathwayEnrichmentPanel'
+import SignaturePanel from '../signature/SignaturePanel'
+import ClinicianSummary from '../ClinicianSummary'
+import InfoTooltip from '../InfoTooltip'
+import ClinicalReport from '../ClinicalReport'
 import { getStoredToken } from '../../services/authApi'
 
 interface AnalysisResultsDisplayProps {
@@ -49,7 +53,7 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
 
     const [selectedGene, setSelectedGene] = useState<GeneSurvival | null>(null)
     const [expandedGeneId, setExpandedGeneId] = useState<string | null>(null)
-    const [activeTab, setActiveTab] = useState<'summary' | 'volcano' | 'genes' | 'forest' | 'methods'>('summary')
+    const [activeTab, setActiveTab] = useState<'summary' | 'volcano' | 'genes' | 'forest' | 'signature' | 'methods'>('summary')
 
     // F08: Forest plot gene selector
     const [selectedForestGeneId, setSelectedForestGeneId] = useState<string | null>(null)
@@ -262,6 +266,9 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
 
     return (
         <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+            {/* F22: hidden on screen, rendered only when printing */}
+            <ClinicalReport results={results} />
+
             {/* Header */}
             <div className="bg-gradient-to-r from-indigo-500 to-purple-600 px-4 py-3 flex items-center justify-between">
                 <div>
@@ -315,6 +322,14 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                             {shareCopied ? '✓ Link copied!' : 'Share'}
                         </button>
                     )}
+                    {/* F22: printable clinical evidence report (research use only) */}
+                    <button
+                        onClick={() => window.print()}
+                        className="text-xs px-2 py-1 rounded border transition-colors bg-white/20 text-white border-white/30 hover:bg-white/30"
+                        title="Print a one-page prognostic evidence report (research use only)"
+                    >
+                        Print Report
+                    </button>
                     {onClose && (
                         <button
                             onClick={onClose}
@@ -387,6 +402,16 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                     Forest Plot
                 </button>
                 <button
+                    onClick={() => setActiveTab('signature')}
+                    className={`flex-1 px-4 py-2 text-sm font-medium ${
+                        activeTab === 'signature'
+                            ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50'
+                            : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                >
+                    Signature
+                </button>
+                <button
                     onClick={() => setActiveTab('methods')}
                     className={`flex-1 px-4 py-2 text-sm font-medium ${
                         activeTab === 'methods'
@@ -407,6 +432,10 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                             Analysis completed in {results.processing_time.toFixed(2)} seconds.
                         </p>
 
+                        {/* F21: AI clinician summary grounded in the real result */}
+                        <ClinicianSummary results={results} />
+
+
                         {results.ranking_recommendations && (
                             <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
                                 <div className="flex items-start gap-2">
@@ -426,7 +455,10 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                         {/* Top 5 genes summary */}
                         {sortedGenes.length > 0 && (
                             <div>
-                                <h4 className="font-medium text-gray-800 mb-2">Top Survival-Associated Genes</h4>
+                                <h4 className="font-medium text-gray-800 mb-2 flex items-center gap-1">
+                                    Top Survival-Associated Genes
+                                    <InfoTooltip text="Genes whose expression level tracks with patient survival across multiple independent cohorts. HR > 1 means higher expression is associated with worse outcome (higher risk); HR < 1 means it is associated with better outcome (protective). Prognostic association only — not a treatment recommendation." />
+                                </h4>
                                 <div className="space-y-2">
                                     {sortedGenes.slice(0, 5).map((gene) => (
                                         <div
@@ -657,6 +689,69 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                                                     </span>
                                                 </div>
                                             </div>
+
+                                            {/* F16: Multivariate (clinically-adjusted) Cox results */}
+                                            {(() => {
+                                                const adjusted = (gene.per_dataset_results ?? []).filter(
+                                                    (d) => d.adjusted_hazard_ratio != null
+                                                )
+                                                if (adjusted.length === 0) return null
+                                                const allCovariates = Array.from(
+                                                    new Set(adjusted.flatMap((d) => d.covariates_used ?? []))
+                                                )
+                                                return (
+                                                    <div className="mt-3 pt-3 border-t border-dashed border-gray-200">
+                                                        <div className="flex items-center gap-1 mb-1">
+                                                            <h5 className="text-xs font-semibold text-gray-700">
+                                                                Multivariate (clinically-adjusted) Cox
+                                                            </h5>
+                                                            <span
+                                                                className="text-[10px] text-gray-400 cursor-help"
+                                                                title="Hazard ratio for gene expression after adjusting for available clinical covariates (e.g. age, stage, grade). Prognostic, not predictive of drug response."
+                                                            >
+                                                                ⓘ
+                                                            </span>
+                                                        </div>
+                                                        <div className="overflow-x-auto">
+                                                            <table className="w-full text-xs">
+                                                                <thead>
+                                                                    <tr className="text-gray-400 text-left">
+                                                                        <th className="font-medium pr-2">Dataset</th>
+                                                                        <th className="font-medium pr-2">Unadjusted HR</th>
+                                                                        <th className="font-medium pr-2">Adjusted HR</th>
+                                                                        <th className="font-medium">Adj. p</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody>
+                                                                    {adjusted.map((d) => (
+                                                                        <tr key={d.dataset_id} className="text-gray-600">
+                                                                            <td className="pr-2 py-0.5">{d.dataset_id}</td>
+                                                                            <td className="pr-2 py-0.5">{d.hazard_ratio.toFixed(2)}</td>
+                                                                            <td className={`pr-2 py-0.5 font-medium ${
+                                                                                (d.adjusted_hazard_ratio ?? 1) > 1 ? 'text-red-600' : 'text-blue-600'
+                                                                            }`}>
+                                                                                {d.adjusted_hazard_ratio!.toFixed(2)}
+                                                                            </td>
+                                                                            <td className="py-0.5">
+                                                                                {d.multivariate_cox_p == null
+                                                                                    ? '—'
+                                                                                    : d.multivariate_cox_p < 0.001
+                                                                                        ? d.multivariate_cox_p.toExponential(1)
+                                                                                        : d.multivariate_cox_p.toFixed(3)}
+                                                                            </td>
+                                                                        </tr>
+                                                                    ))}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                        {allCovariates.length > 0 && (
+                                                            <p className="text-[10px] text-gray-400 mt-1">
+                                                                Adjusted for: {allCovariates.join(', ')}
+                                                            </p>
+                                                        )}
+                                                    </div>
+                                                )
+                                            })()}
                                             <button
                                                 onClick={() => setSelectedGene(gene)}
                                                 className="mt-2 w-full py-1.5 text-sm bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200"
@@ -749,6 +844,11 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                             </p>
                         )}
                     </div>
+                )}
+
+                {/* ===== SIGNATURE TAB (F17/F18/F19/F23) ===== */}
+                {activeTab === 'signature' && (
+                    <SignaturePanel resultId={results.result_id} query={results.query} />
                 )}
 
                 {/* ===== METHODS TAB ===== */}

@@ -18,3 +18,41 @@
         height: 100%;
     }
 }
+
+/* F22 — one-page printable clinical evidence report.
+   On screen the report container is hidden; when printing we hide the app and
+   show only the report. */
+.print-report {
+    display: none;
+}
+
+@media print {
+    body * {
+        visibility: hidden;
+    }
+
+    .print-report,
+    .print-report * {
+        visibility: visible;
+    }
+
+    .print-report {
+        display: block;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        padding: 0.5in;
+        font-size: 11pt;
+        color: #000;
+    }
+
+    .print-report .page-break {
+        page-break-before: always;
+    }
+
+    @page {
+        margin: 0.5in;
+        size: letter;
+    }
+}

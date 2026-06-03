@@ -8,6 +8,7 @@ import AuthModal from './components/auth/AuthModal'
 import SharedResultPage from './components/SharedResultPage'
 import AnalysisHistoryPage from './components/AnalysisHistoryPage'
 import ComparisonPage from './components/ComparisonPage'
+import OncologistGallery from './components/OncologistGallery'
 import HelpPage from './components/HelpPage'
 import CookieConsent from './components/CookieConsent'
 
@@ -25,6 +26,12 @@ const MainLayout: React.FC = () => {
               GEO Survival Analysis
             </Link>
             <div className="flex items-center gap-4">
+              <Link
+                to="/oncologist"
+                className="text-sm font-medium text-gray-500 hover:text-indigo-600 transition-colors"
+              >
+                Oncologist Mode
+              </Link>
               <Link
                 to="/help"
                 className="text-sm font-medium text-gray-500 hover:text-indigo-600 transition-colors"
@@ -66,6 +73,7 @@ const MainLayout: React.FC = () => {
       <main className="h-[calc(100vh-56px)]">
         <Routes>
           <Route path="/" element={<ChatContainer />} />
+          <Route path="/oncologist" element={<OncologistGallery />} />
           <Route path="/help" element={<HelpPage />} />
           <Route path="/history" element={<AnalysisHistoryPage />} />
           <Route path="/compare" element={<ComparisonPage />} />

@@ -57,6 +57,23 @@ const ChatContainer: React.FC = () => {
         dispatch(fetchConversations())
     }, [dispatch])
 
+    // F20: auto-run an analysis when arriving from Oncologist Mode via ?run=<query>
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search)
+        const runQuery = params.get('run')
+        if (runQuery) {
+            // Strip the param so a refresh/back doesn't re-trigger the run
+            window.history.replaceState({}, '', window.location.pathname)
+            dispatch(clearEstimation())
+            dispatch(runAnalysis({ query: runQuery })).then((resultAction) => {
+                if (autoSave && runAnalysis.fulfilled.match(resultAction)) {
+                    dispatch(saveAnalysisResult(resultAction.payload))
+                }
+            })
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [dispatch])
+
     const handleNewConversation = async () => {
         dispatch(clearAnalysisResults())
         await dispatch(createConversation(undefined))

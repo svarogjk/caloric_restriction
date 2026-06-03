@@ -392,3 +392,74 @@ async def get_chat_models():
         List of available model names
     """
     return get_pydantic_ai_service().get_available_models()
+
+
+# ==================== F21: Clinician interpretation summary ====================
+
+class InterpretRequest(BaseModel):
+    """Request a plain-language clinician summary grounded in a real analysis."""
+    query: str
+    model: str = "mistral"
+    # Compact, pre-extracted genes so the summary is grounded and cannot drift:
+    # [{gene_symbol, avg_hazard_ratio, avg_cox_p_value, n_datasets, predominant_risk, datasets:[GSE...]}]
+    genes: list[dict] = Field(default_factory=list)
+    n_datasets_with_survival: int = 0
+
+
+class InterpretResponse(BaseModel):
+    summary: str
+    domain_score: int
+
+
+def _build_interpretation_prompt(req: InterpretRequest) -> str:
+    """Ground the LLM in the actual result so it cites real genes/HRs/GSEs."""
+    lines: list[str] = []
+    for g in req.genes[:8]:
+        symbol = g.get("gene_symbol") or g.get("gene_id") or "?"
+        hr = g.get("avg_hazard_ratio")
+        p = g.get("avg_cox_p_value")
+        nd = g.get("n_datasets")
+        risk = g.get("predominant_risk", "")
+        gses = ", ".join((g.get("datasets") or [])[:4])
+        hr_s = f"{hr:.2f}" if isinstance(hr, (int, float)) else "NA"
+        p_s = f"{p:.2e}" if isinstance(p, (int, float)) else "NA"
+        lines.append(
+            f"- {symbol}: HR={hr_s}, p={p_s}, significant in {nd} cohorts "
+            f"({risk}); datasets: {gses}"
+        )
+    genes_block = "\n".join(lines) if lines else "(no genes provided)"
+
+    return (
+        f"A user ran a cross-cohort GEO survival analysis for: \"{req.query}\". "
+        f"It found prognostic genes across {req.n_datasets_with_survival} independent cohorts "
+        f"with survival data. Top genes:\n{genes_block}\n\n"
+        "Write a concise plain-language interpretation for an oncologist audience. Requirements:\n"
+        "1. Reference the specific genes, their hazard ratios, and GSE accession IDs above.\n"
+        "2. Explain what HR>1 vs HR<1 means for risk in lay terms.\n"
+        "3. Emphasise this is PROGNOSTIC (outcome association), NOT predictive of any drug response, "
+        "and is research-use-only — never a treatment recommendation.\n"
+        "4. Keep it under 180 words. Do not invent genes, datasets, or numbers not listed above."
+    )
+
+
+@router.post("/interpret", response_model=InterpretResponse)
+async def interpret_results(request: InterpretRequest):
+    """F21 — generate an AI clinician summary grounded in a real AnalysisResponse.
+
+    Reuses the pydantic-ai agent (so the chat differentiation/tooling rules apply)
+    and returns the honest Domain Score for the generated text.
+    """
+    model = "anthropic" if request.model == "claude" else request.model
+    service = get_pydantic_ai_service()
+    prompt = _build_interpretation_prompt(request)
+    try:
+        summary, _tokens, domain_score = await service.generate_response(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            conversation_id="interpret",
+        )
+    except (RuntimeError, ValueError, ConnectionError) as e:
+        logger.warning("Interpretation failed: %s", e)
+        raise HTTPException(status_code=502, detail="Interpretation service temporarily unavailable")
+
+    return InterpretResponse(summary=summary, domain_score=domain_score)

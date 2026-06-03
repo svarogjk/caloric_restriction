@@ -38,3 +38,8 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

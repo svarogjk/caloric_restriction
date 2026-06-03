@@ -60,6 +60,10 @@ export interface GeneDatasetResult {
     median_survival_low: number | null
     km_curve_high: KMCurveData | null
     km_curve_low: KMCurveData | null
+    // Multivariate (clinically-adjusted) Cox results (F16)
+    adjusted_hazard_ratio?: number | null
+    multivariate_cox_p?: number | null
+    covariates_used?: string[] | null
 }
 
 export interface GeneSurvivalResponse {
@@ -211,6 +215,152 @@ export async function compareAnalyses(resultIdA: string, resultIdB: string): Pro
     const response = await apiClient.post<CompareResponse>('/compare', {
         result_id_a: resultIdA,
         result_id_b: resultIdB,
+    })
+    return response.data
+}
+
+// ==================== Clinician interpretation (F21) ====================
+
+export interface InterpretResponse {
+    summary: string
+    domain_score: number
+}
+
+export async function interpretResults(params: {
+    query: string
+    model?: string
+    genes: Array<{
+        gene_symbol: string | null
+        avg_hazard_ratio: number
+        avg_cox_p_value: number
+        n_datasets: number
+        predominant_risk: string
+        datasets: string[]
+    }>
+    n_datasets_with_survival: number
+}): Promise<InterpretResponse> {
+    const response = await apiClient.post<InterpretResponse>('/chat/interpret', {
+        query: params.query,
+        model: params.model ?? 'mistral',
+        genes: params.genes,
+        n_datasets_with_survival: params.n_datasets_with_survival,
+    })
+    return response.data
+}
+
+// ==================== Oncologist Mode gallery (F20) ====================
+
+export interface GalleryCancer {
+    key: string
+    label: string
+    query: string
+    blurb: string
+    icon: string
+    result_id: string | null
+    n_genes_found: number | null
+    n_datasets_with_survival: number | null
+    cached_at: string | null
+}
+
+export async function getGallery(): Promise<GalleryCancer[]> {
+    const response = await axios.get<{ cancers: GalleryCancer[] }>('/api/gallery')
+    return response.data.cancers
+}
+
+// ==================== Prognostic Signature (F17/F18/F19/F23) ====================
+
+export interface SignatureGene {
+    gene_symbol: string
+    coefficient: number
+    hazard_ratio: number
+    ref_mean: number
+    ref_std: number
+    ref_quantiles: number[]
+}
+
+export interface ReferenceKMCurve {
+    group: string
+    times: number[]
+    survival_probabilities: number[]
+    n_samples: number
+    n_events: number
+}
+
+export interface CohortValidation {
+    accession: string
+    role: 'training' | 'validation'
+    n_samples: number
+    n_events: number
+    c_index: number
+}
+
+export interface PrognosticModel {
+    model_id: string
+    query: string
+    cancer_type?: string | null
+    version: string
+    created_at: string
+    time_unit: string
+    genes: SignatureGene[]
+    risk_score_tertiles: number[]
+    risk_score_quantiles: number[]
+    reference_km: ReferenceKMCurve[]
+    training_accession: string
+    n_training_samples: number
+    cohort_validations: CohortValidation[]
+    pooled_c_index: number
+    is_demo: boolean
+    disclaimer: string
+}
+
+export interface SurvivalAtHorizon {
+    horizon_label: string
+    time: number
+    survival_probability: number
+}
+
+export interface PredictResponse {
+    model_id: string
+    risk_score: number
+    risk_group: string
+    risk_percentile: number
+    genes_used: number
+    genes_total: number
+    reference_km: ReferenceKMCurve
+    predicted_survival: SurvivalAtHorizon[]
+    pooled_c_index: number
+    disclaimer: string
+}
+
+export async function buildSignature(params: {
+    result_id?: string | null
+    query?: string | null
+    max_genes?: number
+    demo?: boolean
+}): Promise<PrognosticModel> {
+    const response = await apiClient.post<PrognosticModel>('/signature', {
+        result_id: params.result_id ?? null,
+        query: params.query ?? null,
+        max_genes: params.max_genes ?? 15,
+        demo: params.demo ?? false,
+    })
+    return response.data
+}
+
+export async function getDemoPatient(modelId: string): Promise<Record<string, number>> {
+    const response = await apiClient.get<{ model_id: string; expression: Record<string, number> }>(
+        `/signature/${modelId}/demo-patient`,
+    )
+    return response.data.expression
+}
+
+export async function predictSingleSample(
+    modelId: string,
+    expression: Record<string, number>,
+): Promise<PredictResponse> {
+    const response = await apiClient.post<PredictResponse>('/predict', {
+        model_id: modelId,
+        expression,
     })
     return response.data
 }
