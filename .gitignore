@@ -35,3 +35,6 @@ backend/datasets/*
 presentations/*
 practice_exercises/
 backend/data/rag_embeddings.npy
+
+# Raw therapy KB dumps (compact data/therapy_evidence.json is committed instead)
+backend/data/therapy_sources/

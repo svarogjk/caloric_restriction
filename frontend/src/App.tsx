@@ -8,7 +8,7 @@ import AuthModal from './components/auth/AuthModal'
 import SharedResultPage from './components/SharedResultPage'
 import AnalysisHistoryPage from './components/AnalysisHistoryPage'
 import ComparisonPage from './components/ComparisonPage'
-import OncologistGallery from './components/OncologistGallery'
+import OncologistMode from './components/oncologist/OncologistMode'
 import HelpPage from './components/HelpPage'
 import CookieConsent from './components/CookieConsent'
 
@@ -73,7 +73,7 @@ const MainLayout: React.FC = () => {
       <main className="h-[calc(100vh-56px)]">
         <Routes>
           <Route path="/" element={<ChatContainer />} />
-          <Route path="/oncologist" element={<OncologistGallery />} />
+          <Route path="/oncologist" element={<OncologistMode />} />
           <Route path="/help" element={<HelpPage />} />
           <Route path="/history" element={<AnalysisHistoryPage />} />
           <Route path="/compare" element={<ComparisonPage />} />

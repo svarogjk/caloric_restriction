@@ -1,0 +1,258 @@
+"""Tests for Oncologist Mode: combined clinical+expression model, durable
+persistence, and the grounded therapy-rationale guardrails.
+
+All synchronous and offline (demo signature + bundled therapy index); the one
+async path (the no-evidence endpoint branch, which returns before any LLM call)
+is driven with `asyncio.run`.
+"""
+
+import asyncio
+
+import pytest
+
+from app.services.signature_service import SignatureService
+
+
+# ---------- combined clinical + expression model ----------
+
+def _demo_model():
+    return SignatureService(orchestrator=None).build_demo_signature(max_genes=10)
+
+
+def test_combined_model_has_clinical_covariates():
+    model = _demo_model()
+    names = {c.name for c in model.clinical_covariates}
+    assert {"age", "grade"} <= names, f"expected age+grade covariates, got {names}"
+
+    kinds = {c.name: c.kind for c in model.clinical_covariates}
+    assert kinds["age"] == "numeric"
+    assert kinds["grade"] == "categorical"
+
+    grade = next(c for c in model.clinical_covariates if c.name == "grade")
+    assert grade.options and grade.reference_category in grade.options
+
+    # Combined model is populated and the incremental-value metrics exist.
+    assert model.combined_reference_km is not None
+    assert len(model.combined_risk_tertiles) == 2
+    assert model.c_index_combined is not None
+    assert model.c_index_expression_only is not None
+    assert model.delta_c_index is not None
+
+
+def test_combined_vs_expression_only_scoring():
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=10)
+    patient = svc.build_demo_patient(model)
+
+    combined = svc.score_single_sample(model, patient, clinical={"age": 70, "grade": "3"})
+    assert combined.scored_on == "combined"
+    assert any(c.kind == "clinical" for c in combined.contributions)
+    assert any(c.kind == "expression" for c in combined.contributions)
+
+    fallback = svc.score_single_sample(model, patient)
+    assert fallback.scored_on == "expression-only (clinical omitted)"
+    assert all(c.kind == "expression" for c in fallback.contributions)
+
+
+def test_clinical_covariates_move_the_score():
+    """Holding expression fixed, a higher-grade / older patient should not score
+    identically to a low-grade / younger one."""
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=10)
+    patient = svc.build_demo_patient(model)
+    grade = next(c for c in model.clinical_covariates if c.name == "grade")
+    ref_grade = grade.reference_category
+    high_grade = next((lvl for lvl in grade.options if lvl != ref_grade), ref_grade)
+
+    high = svc.score_single_sample(model, patient, clinical={"age": 85, "grade": high_grade})
+    low = svc.score_single_sample(model, patient, clinical={"age": 40, "grade": ref_grade})
+    assert high.risk_score != low.risk_score
+
+
+# ---------- durable persistence + pinning ----------
+
+def test_persistence_round_trip(tmp_path, monkeypatch):
+    monkeypatch.setattr(SignatureService, "_MODELS_DIR", tmp_path)
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=8)
+    model.model_id = "curated_test"
+    svc.save_model_to_disk(model)
+    assert (tmp_path / "curated_test.json").exists()
+
+    # Fresh service loads it from disk and can score against it.
+    svc2 = SignatureService(orchestrator=None)
+    assert svc2.load_persisted_models() >= 1
+    reloaded = svc2.get_model("curated_test")
+    assert reloaded is not None
+    assert reloaded.model_id == "curated_test"
+    # Clinical covariates survive the JSON round-trip.
+    assert {c.name for c in reloaded.clinical_covariates} == {c.name for c in model.clinical_covariates}
+    assert svc2.find_model_by_cancer("demo") is not None
+
+
+def test_pinned_models_survive_eviction(tmp_path, monkeypatch):
+    monkeypatch.setattr(SignatureService, "_MODELS_DIR", tmp_path)
+    svc = SignatureService(orchestrator=None)
+    svc._MODELS_MAX = 2
+    pinned = svc.build_demo_signature(max_genes=6)
+    pinned.model_id = "curated_pinned"
+    svc.save_model_to_disk(pinned)  # pinned
+
+    # Churn several non-pinned models past the cap; pinned one must remain.
+    for i in range(5):
+        m = svc.build_demo_signature(max_genes=6)
+        m.model_id = f"ephemeral_{i}"
+        svc._put_model(m)
+    assert svc.get_model("curated_pinned") is not None
+
+
+# ---------- therapy-rationale guardrails ----------
+
+def test_prescribing_guardrail_regex():
+    from app.api.chat_routes import _PRESCRIBING_PATTERN
+
+    directives = [
+        "Administer trastuzumab to this patient.",
+        "The patient should receive erlotinib.",
+        "We recommend starting dabrafenib.",
+        "Prescribe lapatinib based on ERBB2.",
+    ]
+    hypotheses = [
+        "CIViC documents ERBB2 sensitivity to neratinib; worth discussing as a hypothesis.",
+        "EGFR-targeted agents are associated with response in CIViC; prognostic context only.",
+    ]
+    assert all(_PRESCRIBING_PATTERN.search(s) for s in directives)
+    assert not any(_PRESCRIBING_PATTERN.search(s) for s in hypotheses)
+
+
+def test_therapy_rationale_no_evidence_path():
+    """When no documented evidence exists, the endpoint returns an honest
+    'none found' message and never calls the LLM (so this runs offline)."""
+    from app.api import chat_routes
+    from app.api.chat_routes import TherapyRationaleRequest, therapy_rationale
+
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=6)  # genes DEMOG* -> no KB evidence
+
+    class _EmptyTherapy:
+        def lookup(self, genes, max_total=40):
+            return []
+
+    chat_routes.set_therapy_services(svc, _EmptyTherapy())
+    resp = asyncio.run(therapy_rationale(TherapyRationaleRequest(model_id=model.model_id)))
+    assert resp.evidence == []
+    assert "no documented" in resp.rationale.lower()
+    assert resp.domain_score == 0
+
+
+# ---------- cross-platform normalization + input-validity warnings ----------
+
+def _full_profile(model, rng_seed=7):
+    """A full-ish profile (>= _QN_MIN_GENES) containing the signature genes plus filler."""
+    import numpy as np
+    rng = np.random.default_rng(rng_seed)
+    profile = {g.gene_symbol: float(g.ref_quantiles[60]) for g in model.genes}
+    for i in range(50):
+        profile[f'FILLER{i}'] = float(rng.normal(0, 1))
+    return profile
+
+
+def test_quantile_normalize_monotonic():
+    from app.services.signature_service import quantile_normalize_to_reference
+    ref = [float(i) for i in range(100)]  # 0..99
+    mapped = quantile_normalize_to_reference({'A': 1.0, 'B': 5.0, 'C': 3.0}, ref)
+    # Ordering is preserved and values land within the reference range.
+    assert mapped['A'] < mapped['C'] < mapped['B']
+    assert all(0 <= v <= 99 for v in mapped.values())
+
+
+def test_full_profile_uses_quantile_normalization():
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=10)
+    r = svc.score_single_sample(model, _full_profile(model))
+    assert 'quantile-normalized' in r.normalization
+    assert not any('per-gene rank' in w for w in r.warnings)
+
+
+def test_sparse_profile_falls_back_and_warns():
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=10)
+    r = svc.score_single_sample(model, svc.build_demo_patient(model))  # only signature genes
+    assert 'per-gene rank' in r.normalization
+    assert any('genes provided' in w for w in r.warnings)
+
+
+def test_scale_mismatch_warning():
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=10)
+    # Sparse input with values far outside the reference (~standard-normal) range.
+    wild = {g.gene_symbol: 5000.0 for g in model.genes}
+    r = svc.score_single_sample(model, wild)
+    assert any('outside the reference' in w for w in r.warnings)
+
+
+def test_clinical_category_and_range_warnings():
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=10)
+    r = svc.score_single_sample(
+        model, _full_profile(model), clinical={'age': 250, 'grade': 'G7'}
+    )
+    assert any('outside the training range' in w for w in r.warnings)
+    assert any("'G7'" in w and 'not seen in training' in w for w in r.warnings)
+
+
+# ---------- unified personalization (auto-build + score) ----------
+
+def test_get_or_build_for_result_caches():
+    """Personalizing the same analysis twice reuses one auto-built signature."""
+    svc = SignatureService(orchestrator=None)
+    calls = {"n": 0}
+
+    async def fake_build(result, max_genes=15, cancer_type=None):
+        calls["n"] += 1
+        return svc.build_demo_signature(max_genes=6)
+
+    svc.build_from_result = fake_build
+    a = asyncio.run(svc.get_or_build_for_result("R1", {}))
+    b = asyncio.run(svc.get_or_build_for_result("R1", {}))
+    assert a.model_id == b.model_id
+    assert calls["n"] == 1  # built once, reused second time
+
+
+def test_personalize_endpoint_model_id_path():
+    """The unified /personalize endpoint scores against a locked model id."""
+    from app.api import signature_routes
+    from app.api.signature_routes import PersonalizeRequest, personalize
+
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=8)
+    signature_routes.set_signature_service(svc)
+
+    resp = asyncio.run(
+        personalize(
+            PersonalizeRequest(
+                model_id=model.model_id,
+                expression=svc.build_demo_patient(model),
+                clinical={"age": 70, "grade": "3"},
+            ),
+            db=None,
+        )
+    )
+    assert resp.model_id == model.model_id
+    assert resp.prediction.scored_on == "combined"
+    assert {c["name"] for c in resp.clinical_covariates} == {"age", "grade"}
+
+
+def test_therapy_evidence_lookup_if_bundled():
+    """If the bundled index is present, a well-known oncogene returns real,
+    attributed associations. Skips when the index hasn't been built."""
+    from app.services.therapy_evidence_service import TherapyEvidenceService
+
+    svc = TherapyEvidenceService()
+    if svc.load() == 0:
+        pytest.skip("therapy evidence index not bundled in this environment")
+    recs = svc.lookup(["ERBB2"], max_total=5)
+    assert recs, "expected documented associations for ERBB2"
+    assert all(r["gene"] == "ERBB2" for r in recs)
+    assert all(r["source"] in {"CIViC", "DGIdb"} for r in recs)
+    assert all(r.get("drug") for r in recs)

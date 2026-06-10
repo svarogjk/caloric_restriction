@@ -1,6 +1,10 @@
 import React, { useEffect, useRef } from 'react'
+import { useDispatch, useSelector } from 'react-redux'
+import { Link } from 'react-router-dom'
 import MessageBubble from './MessageBubble'
-import { Message } from '../../store/chatSlice'
+import { RootState, AppDispatch } from '../../store/store'
+import { Message, setPersonalizeEnabled, setPatientExpression } from '../../store/chatSlice'
+import { SAMPLE_PATIENT_EXPRESSION } from '../../utils/samplePatient'
 
 interface MessageListProps {
     messages: Message[]
@@ -15,6 +19,9 @@ interface MessageListProps {
 
 const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, isStreaming = false, streamingContent = '', className = '', onRunAnalysis, onModifyQuery, onExampleClick }) => {
     const messagesEndRef = useRef<HTMLDivElement>(null)
+    const dispatch = useDispatch<AppDispatch>()
+    const personalizeEnabled = useSelector((s: RootState) => s.chat.personalizeEnabled)
+    const patientExpression = useSelector((s: RootState) => s.chat.patientExpression)
 
     // Auto-scroll to bottom when new messages arrive or streaming content grows
     useEffect(() => {
@@ -49,6 +56,22 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, isStream
                         across multiple independent GEO datasets.
                     </p>
 
+                    {/* Two-mode explainer */}
+                    <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2 text-left text-xs">
+                        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                            <p className="font-semibold text-gray-700">1 · Discover biomarkers</p>
+                            <p className="text-gray-500 mt-0.5">
+                                Cross-cohort GEO analysis: survival-associated genes, hazard ratios, KM curves.
+                            </p>
+                        </div>
+                        <div className="bg-indigo-50 border border-indigo-200 rounded-lg p-3">
+                            <p className="font-semibold text-indigo-800">2 · Score a patient (optional)</p>
+                            <p className="text-indigo-700/80 mt-0.5">
+                                Add a patient's tumour data → a personalized prognostic estimate on top. RUO.
+                            </p>
+                        </div>
+                    </div>
+
                     {/* Try example — auto-runs analysis */}
                     <div className="mt-6">
                         <p className="text-xs font-medium text-gray-500 mb-3">Try a live example:</p>
@@ -66,6 +89,60 @@ const MessageList: React.FC<MessageListProps> = ({ messages, isLoading, isStream
                                     {ex.label}
                                 </button>
                             ))}
+                        </div>
+                    </div>
+
+                    {/* Patient personalization — discoverable on the landing */}
+                    <div className="mt-6 text-left bg-indigo-50/60 border border-indigo-200 rounded-xl p-4">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={personalizeEnabled}
+                                onChange={(e) => dispatch(setPersonalizeEnabled(e.target.checked))}
+                                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span>
+                                <span className="block text-sm font-semibold text-gray-800">
+                                    Add patient data — personalize results
+                                </span>
+                                <span className="block text-xs text-gray-500 mt-0.5">
+                                    <strong>Off:</strong> standard cross-cohort GEO biomarker analysis.{' '}
+                                    <strong>On:</strong> the same analysis <em>plus</em> a personalized prognostic
+                                    estimate for your patient (risk group, predicted survival). Research use only —
+                                    not a treatment-selection device.
+                                </span>
+                            </span>
+                        </label>
+
+                        {personalizeEnabled && (
+                            <div className="mt-3 space-y-2">
+                                <textarea
+                                    value={patientExpression}
+                                    onChange={(e) => dispatch(setPatientExpression(e.target.value))}
+                                    rows={4}
+                                    placeholder={'Paste the patient\'s tumour expression — "GENE value" per line:\nTP53 9.1\nMKI67 11.6\n…'}
+                                    className="w-full text-xs font-mono border border-gray-300 rounded p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                />
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                        onClick={() => dispatch(setPatientExpression(SAMPLE_PATIENT_EXPRESSION))}
+                                        className="px-3 py-1.5 text-xs bg-white border border-gray-300 rounded hover:bg-gray-50 font-medium"
+                                    >
+                                        Load sample patient data
+                                    </button>
+                                    <span className="text-[11px] text-gray-500">
+                                        Run an analysis above — when it finishes, your patient is scored automatically
+                                        in the <strong>Patient</strong> tab.
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+
+                        <div className="mt-3 pt-2 border-t border-indigo-100 text-xs">
+                            <Link to="/oncologist" className="text-indigo-600 font-medium hover:underline">
+                                Prefer a ready-made cancer model? Try Oncologist Mode →
+                            </Link>
+                            <span className="text-gray-400"> — curated models with a built-in demo patient.</span>
                         </div>
                     </div>
 

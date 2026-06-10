@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from app.config.logging_config import get_logger
 from app.services.geo_loader_service import LoadedGEOData
+from app.services.covariate_utils import select_usable_covariates
 from app.utils.memory_tracker import track_memory, log_memory_checkpoint
 
 logger = get_logger(__name__)
@@ -720,14 +721,7 @@ Determine if this dataset contains survival data and identify the relevant colum
         """
         try:
             # Filter covariates: must exist in metadata, have >70% non-null
-            usable: List[str] = []
-            for col in covariate_candidates:
-                if col not in metadata_df.columns:
-                    continue
-                coverage = metadata_df[col].notna().mean()
-                if coverage < 0.7:
-                    continue
-                usable.append(col)
+            usable = select_usable_covariates(metadata_df, covariate_candidates)
 
             if not usable:
                 return None, None, None

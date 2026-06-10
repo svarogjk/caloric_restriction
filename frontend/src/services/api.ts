@@ -250,12 +250,32 @@ export async function interpretResults(params: {
 
 // ==================== Oncologist Mode gallery (F20) ====================
 
+export interface ClinicalCovariateSpec {
+    name: string
+    display_label: string
+    kind: 'numeric' | 'categorical'
+    options: string[] | null
+    min_value: number | null
+    max_value: number | null
+    required: boolean
+}
+
 export interface GalleryCancer {
     key: string
     label: string
     query: string
     blurb: string
     icon: string
+    // Patient-scoring model (headline of Oncologist Mode):
+    model_id: string | null
+    n_genes: number | null
+    pooled_c_index: number | null
+    c_index_expression_only: number | null
+    c_index_combined: number | null
+    delta_c_index: number | null
+    clinical_covariates: ClinicalCovariateSpec[]
+    model_is_demo: boolean | null
+    // Underlying cohort analysis (provenance):
     result_id: string | null
     n_genes_found: number | null
     n_datasets_with_survival: number | null
@@ -309,6 +329,15 @@ export interface PrognosticModel {
     n_training_samples: number
     cohort_validations: CohortValidation[]
     pooled_c_index: number
+    clinical_covariates?: ClinicalCovariateSpec[]
+    expression_score_coefficient?: number
+    combined_risk_tertiles?: number[] | null
+    combined_risk_quantiles?: number[] | null
+    combined_reference_km?: ReferenceKMCurve[] | null
+    c_index_expression_only?: number | null
+    c_index_clinical_only?: number | null
+    c_index_combined?: number | null
+    delta_c_index?: number | null
     is_demo: boolean
     disclaimer: string
 }
@@ -317,6 +346,12 @@ export interface SurvivalAtHorizon {
     horizon_label: string
     time: number
     survival_probability: number
+}
+
+export interface RiskContribution {
+    label: string
+    contribution: number
+    kind: 'expression' | 'clinical'
 }
 
 export interface PredictResponse {
@@ -329,6 +364,14 @@ export interface PredictResponse {
     reference_km: ReferenceKMCurve
     predicted_survival: SurvivalAtHorizon[]
     pooled_c_index: number
+    scored_on: string
+    normalization: string
+    warnings: string[]
+    contributions: RiskContribution[]
+    c_index_expression_only: number | null
+    c_index_clinical_only: number | null
+    c_index_combined: number | null
+    delta_c_index: number | null
     disclaimer: string
 }
 
@@ -347,6 +390,11 @@ export async function buildSignature(params: {
     return response.data
 }
 
+export async function getSignatureModel(modelId: string): Promise<PrognosticModel> {
+    const response = await apiClient.get<PrognosticModel>(`/signature/${modelId}`)
+    return response.data
+}
+
 export async function getDemoPatient(modelId: string): Promise<Record<string, number>> {
     const response = await apiClient.get<{ model_id: string; expression: Record<string, number> }>(
         `/signature/${modelId}/demo-patient`,
@@ -357,10 +405,78 @@ export async function getDemoPatient(modelId: string): Promise<Record<string, nu
 export async function predictSingleSample(
     modelId: string,
     expression: Record<string, number>,
+    clinical?: Record<string, string | number> | null,
 ): Promise<PredictResponse> {
     const response = await apiClient.post<PredictResponse>('/predict', {
         model_id: modelId,
         expression,
+        clinical: clinical ?? null,
+    })
+    return response.data
+}
+
+// ============ Unified personalization (auto-build + score) ============
+
+export interface PersonalizeResponse {
+    model_id: string
+    cancer_type: string | null
+    model_is_demo: boolean
+    clinical_covariates: ClinicalCovariateSpec[]
+    prediction: PredictResponse
+}
+
+export async function personalizePatient(params: {
+    resultId?: string | null
+    modelId?: string | null
+    expression: Record<string, number>
+    clinical?: Record<string, string | number> | null
+    maxGenes?: number
+}): Promise<PersonalizeResponse> {
+    const response = await apiClient.post<PersonalizeResponse>('/personalize', {
+        result_id: params.resultId ?? null,
+        model_id: params.modelId ?? null,
+        expression: params.expression,
+        clinical: params.clinical ?? null,
+        max_genes: params.maxGenes ?? 15,
+    })
+    return response.data
+}
+
+// ============ Grounded therapy rationale (Oncologist Mode) ============
+
+export interface TherapyEvidenceRecord {
+    gene: string
+    source: 'CIViC' | 'DGIdb'
+    drug: string
+    evidence_type?: string | null
+    significance?: string | null
+    direction?: string | null
+    evidence_level?: string | null
+    disease?: string | null
+    url?: string | null
+    interaction_type?: string | null
+    approved?: boolean | null
+    source_db?: string | null
+}
+
+export interface TherapyRationaleResponse {
+    rationale: string
+    evidence: TherapyEvidenceRecord[]
+    domain_score: number
+    disclaimer: string
+}
+
+export async function getTherapyRationale(params: {
+    modelId: string
+    genes?: string[]
+    riskGroup?: string | null
+    model?: string
+}): Promise<TherapyRationaleResponse> {
+    const response = await apiClient.post<TherapyRationaleResponse>('/chat/therapy-rationale', {
+        model_id: params.modelId,
+        genes: params.genes ?? [],
+        risk_group: params.riskGroup ?? null,
+        model: params.model ?? 'mistral',
     })
     return response.data
 }

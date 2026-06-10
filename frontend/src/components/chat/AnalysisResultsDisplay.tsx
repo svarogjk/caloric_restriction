@@ -18,6 +18,7 @@ import KaplanMeierPlot from '../KaplanMeierPlot'
 import { ForestPlot } from '../ForestPlot'
 import PathwayEnrichmentPanel from '../PathwayEnrichmentPanel'
 import SignaturePanel from '../signature/SignaturePanel'
+import PatientPanel from '../oncologist/PatientPanel'
 import ClinicianSummary from '../ClinicianSummary'
 import InfoTooltip from '../InfoTooltip'
 import ClinicalReport from '../ClinicalReport'
@@ -45,7 +46,7 @@ const PAGE_SIZE = 20
 
 const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results, onClose }) => {
     const dispatch = useDispatch<AppDispatch>()
-    const { autoSave, isSaving } = useSelector((state: RootState) => state.chat)
+    const { autoSave, isSaving, personalizeEnabled, patientExpression } = useSelector((state: RootState) => state.chat)
 
     const handleSave = () => {
         dispatch(saveAnalysisResult(results))
@@ -53,7 +54,22 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
 
     const [selectedGene, setSelectedGene] = useState<GeneSurvival | null>(null)
     const [expandedGeneId, setExpandedGeneId] = useState<string | null>(null)
-    const [activeTab, setActiveTab] = useState<'summary' | 'volcano' | 'genes' | 'forest' | 'signature' | 'methods'>('summary')
+    const [activeTab, setActiveTab] = useState<'summary' | 'volcano' | 'genes' | 'forest' | 'signature' | 'patient' | 'methods'>('summary')
+
+    // Carry-through: if the user attached patient data on the landing page, jump
+    // to the Patient tab once the analysis is saved so it scores automatically.
+    const jumpedToPatientRef = useRef(false)
+    useEffect(() => {
+        if (
+            !jumpedToPatientRef.current
+            && personalizeEnabled
+            && patientExpression.trim()
+            && results.result_id
+        ) {
+            jumpedToPatientRef.current = true
+            setActiveTab('patient')
+        }
+    }, [personalizeEnabled, patientExpression, results.result_id])
 
     // F08: Forest plot gene selector
     const [selectedForestGeneId, setSelectedForestGeneId] = useState<string | null>(null)
@@ -410,6 +426,16 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                     }`}
                 >
                     Signature
+                </button>
+                <button
+                    onClick={() => setActiveTab('patient')}
+                    className={`flex-1 px-4 py-2 text-sm font-medium ${
+                        activeTab === 'patient'
+                            ? 'text-indigo-600 border-b-2 border-indigo-600 bg-indigo-50'
+                            : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                >
+                    Patient
                 </button>
                 <button
                     onClick={() => setActiveTab('methods')}
@@ -849,6 +875,15 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                 {/* ===== SIGNATURE TAB (F17/F18/F19/F23) ===== */}
                 {activeTab === 'signature' && (
                     <SignaturePanel resultId={results.result_id} query={results.query} />
+                )}
+
+                {activeTab === 'patient' && (
+                    <PatientPanel
+                        resultId={results.result_id}
+                        label={results.query}
+                        initialExpression={personalizeEnabled ? patientExpression : undefined}
+                        autoRun={personalizeEnabled && !!patientExpression.trim()}
+                    />
                 )}
 
                 {/* ===== METHODS TAB ===== */}

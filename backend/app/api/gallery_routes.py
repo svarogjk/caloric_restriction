@@ -16,10 +16,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
 from app.services.analysis_result_service import analysis_result_service
+from app.services.signature_service import SignatureService, covariate_form_spec
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Injected at startup (shared with the signature/predict routes).
+signature_service: SignatureService | None = None
+
+
+def set_signature_service(svc: SignatureService) -> None:
+    global signature_service
+    signature_service = svc
 
 # Curated catalogue. Queries are phrased the way the analysis pipeline expects
 # (cancer type + "overall survival"). Kept small and high-signal.
@@ -71,8 +80,9 @@ CURATED_CANCERS = [
 
 @router.get("/gallery")
 async def get_gallery(db: AsyncSession = Depends(get_db)):
-    """Return the curated cancer-type catalogue, each enriched with a cached
-    result_id when a matching pre-run analysis exists."""
+    """Return the curated cancer-type catalogue. Each entry is enriched with the
+    durable prognostic model used to score a patient (model_id, discrimination,
+    and the clinical-covariate form spec), plus any cached cohort-analysis id."""
     items = []
     for entry in CURATED_CANCERS:
         cached = None
@@ -80,9 +90,22 @@ async def get_gallery(db: AsyncSession = Depends(get_db)):
             cached = await analysis_result_service.find_recent_by_query(db, entry["query"])
         except (OSError, RuntimeError) as e:
             logger.warning("Gallery lookup failed for %s: %s", entry["key"], e)
+
+        model = signature_service.find_model_by_cancer(entry["key"]) if signature_service else None
+
         items.append(
             {
                 **entry,
+                # Patient-scoring model (the headline of Oncologist Mode):
+                "model_id": model.model_id if model else None,
+                "n_genes": len(model.genes) if model else None,
+                "pooled_c_index": model.pooled_c_index if model else None,
+                "c_index_expression_only": model.c_index_expression_only if model else None,
+                "c_index_combined": model.c_index_combined if model else None,
+                "delta_c_index": model.delta_c_index if model else None,
+                "clinical_covariates": covariate_form_spec(model) if model else [],
+                "model_is_demo": model.is_demo if model else None,
+                # Underlying cohort analysis (kept for provenance / linking):
                 "result_id": cached["result_id"] if cached else None,
                 "n_genes_found": cached["n_genes_found"] if cached else None,
                 "n_datasets_with_survival": cached["n_datasets_with_survival"] if cached else None,

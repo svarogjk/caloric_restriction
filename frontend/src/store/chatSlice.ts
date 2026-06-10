@@ -156,6 +156,9 @@ export interface ChatState {
     // Save settings
     autoSave: boolean
     isSaving: boolean
+    // Patient personalization (carried from the landing into the analysis)
+    personalizeEnabled: boolean
+    patientExpression: string
 }
 
 const initialState: ChatState = {
@@ -190,6 +193,9 @@ const initialState: ChatState = {
     // Save settings
     autoSave: false,
     isSaving: false,
+    // Patient personalization
+    personalizeEnabled: false,
+    patientExpression: '',
 }
 
 // ==================== Async Thunks ====================
@@ -485,6 +491,15 @@ const chatSlice = createSlice({
         setAutoSave: (state, action: PayloadAction<boolean>) => {
             state.autoSave = action.payload
         },
+        setPersonalizeEnabled: (state, action: PayloadAction<boolean>) => {
+            state.personalizeEnabled = action.payload
+            // Personalization needs a saved result to score against, so opting
+            // in auto-enables saving the analysis.
+            if (action.payload) state.autoSave = true
+        },
+        setPatientExpression: (state, action: PayloadAction<string>) => {
+            state.patientExpression = action.payload
+        },
         setResultId: (state, action: PayloadAction<string>) => {
             if (state.analysisResults) {
                 state.analysisResults.result_id = action.payload
@@ -690,6 +705,8 @@ export const {
     finalizeStreaming,
     setAutoSave,
     setResultId,
+    setPersonalizeEnabled,
+    setPatientExpression,
 } = chatSlice.actions
 
 export default chatSlice.reducer

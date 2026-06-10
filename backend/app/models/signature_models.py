@@ -59,6 +59,40 @@ class CohortValidation(BaseModel):
     c_index: float
 
 
+class ClinicalCovariate(BaseModel):
+    """One clinical covariate in the combined (clinical + expression) Cox model.
+
+    The combined linear predictor adds each covariate's contribution on top of
+    the expression risk score:
+      - numeric (e.g. age):      contribution = coefficient * (value - ref_mean) / ref_std
+      - categorical (e.g. grade): contribution = category_coefficients[value]
+        (the dropped `reference_category` contributes 0)
+
+    `display_label`, `options`, `min_value`, `max_value` drive the dynamically
+    generated patient-intake form in Oncologist Mode.
+    """
+    name: str                                       # raw training metadata column
+    display_label: str                              # human label for the intake form
+    kind: str                                       # "numeric" | "categorical"
+    coefficient: float = 0.0                        # numeric: Cox coef on standardized value
+    ref_mean: float = 0.0                           # numeric reference mean
+    ref_std: float = 1.0                            # numeric reference std (never 0)
+    category_coefficients: dict[str, float] = Field(default_factory=dict)  # level -> coef
+    reference_category: Optional[str] = None        # dropped (baseline) categorical level
+    options: Optional[List[str]] = None             # categorical selectable levels
+    min_value: Optional[float] = None               # numeric form hint
+    max_value: Optional[float] = None
+    required: bool = False
+
+
+class RiskContribution(BaseModel):
+    """Additive contribution of one term to the (combined) linear predictor —
+    powers the clinician-legible 'why' breakdown in the readout."""
+    label: str                                      # "Expression signature" | "Age" | "Grade = 3"
+    contribution: float
+    kind: str                                       # "expression" | "clinical"
+
+
 class PrognosticModel(BaseModel):
     """
     The locked, version-pinned prognostic model artifact.
@@ -72,14 +106,31 @@ class PrognosticModel(BaseModel):
     time_unit: str = "days"
 
     genes: List[SignatureGene]
-    risk_score_tertiles: List[float]        # [t1, t2] cutoffs on training risk scores
-    risk_score_quantiles: List[float]       # 101 sorted training risk scores (percentiles)
+    # Expression-only reference (also the fallback when a patient gives no clinical data).
+    risk_score_tertiles: List[float]        # [t1, t2] cutoffs on training EXPRESSION risk scores
+    risk_score_quantiles: List[float]       # 101 sorted training expression risk scores
     reference_km: List[ReferenceKMCurve]
+    # Pooled distribution of ALL training expression values (sorted quantiles) — the
+    # reference for cross-platform single-sample quantile normalization (F23).
+    reference_pooled_quantiles: Optional[List[float]] = None
 
     training_accession: str
     n_training_samples: int
     cohort_validations: List[CohortValidation]
-    pooled_c_index: float                   # sample-weighted mean C-index across validation cohorts
+    pooled_c_index: float                   # headline C-index (combined if covariates exist, else expression-only)
+
+    # ---- Combined clinical + expression model (empty/None ⇒ expression-only) ----
+    clinical_covariates: List[ClinicalCovariate] = Field(default_factory=list)
+    expression_score_coefficient: float = 1.0   # β of the expression risk score in the combined Cox
+    # Combined-score reference distribution (used when the patient supplies clinical fields):
+    combined_risk_tertiles: Optional[List[float]] = None
+    combined_risk_quantiles: Optional[List[float]] = None
+    combined_reference_km: Optional[List[ReferenceKMCurve]] = None
+    # Incremental-value rigor metrics (validation cohorts):
+    c_index_expression_only: Optional[float] = None
+    c_index_clinical_only: Optional[float] = None
+    c_index_combined: Optional[float] = None
+    delta_c_index: Optional[float] = None        # combined − expression-only
 
     is_demo: bool = False
     disclaimer: str = RUO_DISCLAIMER
@@ -111,6 +162,11 @@ class PredictRequest(BaseModel):
         ...,
         description="Map of gene_symbol -> expression value for ONE tumour sample",
     )
+    clinical: Optional[dict[str, float | str]] = Field(
+        default=None,
+        description="Optional clinical covariates (e.g. {'age': 64, 'grade': '3'}); "
+        "when omitted the sample is scored on expression only.",
+    )
 
 
 class PredictResponse(BaseModel):
@@ -123,6 +179,15 @@ class PredictResponse(BaseModel):
     reference_km: ReferenceKMCurve          # the assigned group's reference curve
     predicted_survival: List["SurvivalAtHorizon"]
     pooled_c_index: float
+    # Combined-model extras (degrade gracefully for expression-only models):
+    scored_on: str = "expression-only"      # "combined" | "expression-only" | "expression-only (clinical omitted)"
+    normalization: str = ""                 # how expression was put on the reference scale
+    warnings: List[str] = Field(default_factory=list)  # coverage / scale / covariate caveats
+    contributions: List["RiskContribution"] = Field(default_factory=list)
+    c_index_expression_only: Optional[float] = None
+    c_index_clinical_only: Optional[float] = None
+    c_index_combined: Optional[float] = None
+    delta_c_index: Optional[float] = None
     disclaimer: str = RUO_DISCLAIMER
 
 

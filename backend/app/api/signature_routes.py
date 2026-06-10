@@ -10,13 +10,17 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
 from app.models.signature_models import (
     PredictRequest,
     PredictResponse,
     PrognosticModel,
     SignatureRequest,
 )
-from app.services.signature_service import SignatureService
+from app.services.signature_service import SignatureService, covariate_form_spec
 from app.services.analysis_result_service import analysis_result_service
 from app.config.database import get_db
 
@@ -111,7 +115,79 @@ async def predict_single_sample(request: PredictRequest):
     if not request.expression:
         raise HTTPException(status_code=400, detail="Empty expression profile")
     try:
-        return signature_service.score_single_sample(model, request.expression)
+        return signature_service.score_single_sample(
+            model, request.expression, clinical=request.clinical
+        )
     except (ValueError, KeyError) as e:
         logger.warning("Single-sample scoring failed: %s", e)
         raise HTTPException(status_code=422, detail=str(e))
+
+
+# ============ Unified personalization (auto-build signature + score) ============
+
+class PersonalizeRequest(BaseModel):
+    """Attach a patient to ANY analysis. Provide a `model_id` (a pre-built/curated
+    model) or a `result_id` (a saved analysis — its signature is auto-built and
+    cached on first use), plus the patient's tumour expression (± clinical)."""
+    result_id: Optional[str] = None
+    model_id: Optional[str] = None
+    expression: dict[str, float]
+    clinical: Optional[dict[str, float | str]] = None
+    max_genes: int = Field(default=15, ge=2, le=50)
+
+
+class PersonalizeResponse(BaseModel):
+    model_id: str
+    cancer_type: Optional[str] = None
+    model_is_demo: bool
+    clinical_covariates: list[dict]          # form spec, so the UI can offer clinical refinement
+    prediction: PredictResponse
+
+
+@router.post("/personalize", response_model=PersonalizeResponse)
+async def personalize(request: PersonalizeRequest, db: AsyncSession = Depends(get_db)):
+    """Unified patient personalization: resolve the model (use a locked/curated
+    one, or auto-build from a saved analysis), then score the patient. This is the
+    single path behind both Oncologist Mode and the in-results patient panel."""
+    if signature_service is None:
+        raise HTTPException(status_code=500, detail="Signature service not initialized")
+    if not request.expression:
+        raise HTTPException(status_code=400, detail="Empty expression profile")
+
+    if request.model_id:
+        model = signature_service.get_model(request.model_id)
+        if model is None:
+            raise HTTPException(status_code=404, detail="Model not found (may have been evicted)")
+    elif request.result_id:
+        result = await analysis_result_service.get_result(db, request.result_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="Analysis result not found")
+        try:
+            model = await signature_service.get_or_build_for_result(
+                request.result_id, result, max_genes=request.max_genes
+            )
+        except ValueError as e:
+            # Expected: cohorts too thin / not cached to form a validated model.
+            logger.warning("Auto-build for personalization rejected: %s", e)
+            raise HTTPException(status_code=422, detail=str(e))
+        except (OSError, KeyError) as e:
+            logger.error("Auto-build for personalization failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail="Could not build a model for this analysis")
+    else:
+        raise HTTPException(status_code=400, detail="Provide model_id or result_id")
+
+    try:
+        prediction = signature_service.score_single_sample(
+            model, request.expression, clinical=request.clinical
+        )
+    except (ValueError, KeyError) as e:
+        logger.warning("Personalized scoring failed: %s", e)
+        raise HTTPException(status_code=422, detail=str(e))
+
+    return PersonalizeResponse(
+        model_id=model.model_id,
+        cancer_type=model.cancer_type,
+        model_is_demo=model.is_demo,
+        clinical_covariates=covariate_form_spec(model),
+        prediction=prediction,
+    )

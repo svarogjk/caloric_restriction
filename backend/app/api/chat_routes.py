@@ -6,6 +6,7 @@ Provides endpoints for conversation management, messaging, and query estimation.
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -28,6 +29,16 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 # Shared service instances
 _pydantic_ai_service: Optional[PydanticAIService] = None
 _estimation_service: Optional[QueryEstimationService] = None
+# Injected at startup for the grounded therapy-rationale endpoint.
+_signature_service = None
+_therapy_evidence_service = None
+
+
+def set_therapy_services(signature_service, therapy_evidence_service) -> None:
+    """Inject the signature store + therapy evidence index (called at startup)."""
+    global _signature_service, _therapy_evidence_service
+    _signature_service = signature_service
+    _therapy_evidence_service = therapy_evidence_service
 
 
 def get_pydantic_ai_service() -> PydanticAIService:
@@ -463,3 +474,142 @@ async def interpret_results(request: InterpretRequest):
         raise HTTPException(status_code=502, detail="Interpretation service temporarily unavailable")
 
     return InterpretResponse(summary=summary, domain_score=domain_score)
+
+
+# ============ Grounded therapeutic-rationale (Oncologist Mode) ============
+
+class TherapyRationaleRequest(BaseModel):
+    """Request AI 'therapeutic directions to discuss' for a patient's risk-driving
+    genes, grounded in documented CIViC/DGIdb evidence (never a recommendation)."""
+    model_id: str
+    genes: list[str] = Field(default_factory=list, description="Risk-driving genes; if empty, derived from the model")
+    risk_group: Optional[str] = None
+    model: str = "mistral"
+
+
+class TherapyEvidenceRecord(BaseModel):
+    gene: str
+    source: str                              # "CIViC" | "DGIdb"
+    drug: str
+    evidence_type: Optional[str] = None      # CIViC
+    significance: Optional[str] = None
+    direction: Optional[str] = None
+    evidence_level: Optional[str] = None
+    disease: Optional[str] = None
+    url: Optional[str] = None
+    interaction_type: Optional[str] = None   # DGIdb
+    approved: Optional[bool] = None
+    source_db: Optional[str] = None
+
+
+class TherapyRationaleResponse(BaseModel):
+    rationale: str
+    evidence: list[TherapyEvidenceRecord]
+    domain_score: int
+    disclaimer: str = (
+        "Hypothesis-generating only — not a treatment recommendation. These are "
+        "documented biomarker associations from public knowledge bases for "
+        "tumour-board discussion. Prognostic, research use only; this tool does "
+        "not predict response to any therapy."
+    )
+
+
+# Imperative / prescribing phrasing we refuse to emit (keeps us on the
+# prognostic-not-predictive, non-device side of the line).
+_PRESCRIBING_PATTERN = re.compile(
+    r"\b(administer|prescribe|prescribing|initiate (?:therapy|treatment)|"
+    r"start (?:the )?(?:patient|therapy|treatment)|"
+    r"should (?:receive|be (?:treated|given|started)|take|be put on)|"
+    r"we recommend (?:treating|treatment|starting)|the patient (?:should|must))\b",
+    re.IGNORECASE,
+)
+
+
+def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence: list[dict]) -> str:
+    lines: list[str] = []
+    for e in evidence:
+        if e["source"] == "CIViC":
+            bits = [f"{e['gene']} → {e['drug']} (CIViC {e.get('evidence_type','')}"]
+            if e.get("significance"):
+                bits.append(f", {e['significance']}")
+            if e.get("direction"):
+                bits.append(f", {e['direction']}")
+            if e.get("evidence_level"):
+                bits.append(f", level {e['evidence_level']}")
+            disease = f"; {e['disease']}" if e.get("disease") else ""
+            lines.append("".join(bits) + ")" + disease)
+        else:
+            appr = "approved" if e.get("approved") else "investigational"
+            itype = f", {e['interaction_type']}" if e.get("interaction_type") else ""
+            lines.append(f"{e['gene']} → {e['drug']} (DGIdb interaction{itype}; {appr})")
+    evidence_block = "\n".join(f"- {ln}" for ln in lines)
+    rg = f" assigned to the {risk_group}-risk group" if risk_group else ""
+
+    return (
+        "A tumour-expression prognostic model flagged these genes as risk-driving in a "
+        f"patient{rg}. Below is DOCUMENTED biomarker–therapy evidence from CIViC and DGIdb "
+        f"for those genes:\n{evidence_block}\n\n"
+        "Write brief 'therapeutic directions to discuss with the tumour board'. Strict requirements:\n"
+        "1. Discuss ONLY the drugs/biomarkers in the evidence above, and cite the source "
+        "(CIViC/DGIdb) and, for CIViC, the significance (sensitivity/resistance) and level.\n"
+        "2. Frame every point as a research HYPOTHESIS to discuss — do NOT instruct, prescribe, "
+        "or tell anyone to administer/start/give a drug. No imperatives.\n"
+        "3. State explicitly this is PROGNOSTIC context, research-use-only, and does NOT predict "
+        "drug response.\n"
+        "4. If the evidence is sparse or mixed, say so. Do not invent drugs, genes, or claims.\n"
+        "5. Under 180 words."
+    )
+
+
+@router.post("/therapy-rationale", response_model=TherapyRationaleResponse)
+async def therapy_rationale(request: TherapyRationaleRequest):
+    """Generate grounded 'therapeutic directions to discuss', anchored to real
+    CIViC/DGIdb evidence for the patient's risk-driving genes. Hypotheses only —
+    a prescribing-language guardrail strips any output that reads as a directive,
+    and absent evidence yields an honest 'none found' rather than speculation."""
+    if _signature_service is None or _therapy_evidence_service is None:
+        raise HTTPException(status_code=500, detail="Therapy services not initialized")
+
+    model = _signature_service.get_model(request.model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    genes = [g.upper() for g in request.genes if g] or [
+        g.gene_symbol
+        for g in sorted(model.genes, key=lambda x: abs(x.coefficient), reverse=True)[:8]
+    ]
+    evidence = _therapy_evidence_service.lookup(genes, max_total=40)
+
+    no_evidence_msg = (
+        "No documented therapeutic associations were found in CIViC or DGIdb for these "
+        "biomarkers. This is expected for many prognostic genes and does not imply the "
+        "absence of options — discuss the patient's profile with the care team."
+    )
+    if not evidence:
+        return TherapyRationaleResponse(rationale=no_evidence_msg, evidence=[], domain_score=0)
+
+    prompt = _build_therapy_prompt(genes, request.risk_group, evidence)
+    model_name = "anthropic" if request.model == "claude" else request.model
+    service = get_pydantic_ai_service()
+    try:
+        rationale, _tokens, domain_score = await service.generate_response(
+            messages=[{"role": "user", "content": prompt}],
+            model=model_name,
+            conversation_id="therapy-rationale",
+        )
+    except (RuntimeError, ValueError, ConnectionError) as e:
+        logger.warning("Therapy rationale generation failed: %s", e)
+        raise HTTPException(status_code=502, detail="Therapy rationale temporarily unavailable")
+
+    # Guardrail: withhold prose that reads as a prescribing directive.
+    if _PRESCRIBING_PATTERN.search(rationale):
+        logger.warning("Therapy rationale withheld: prescribing-language guardrail triggered")
+        rationale = (
+            "An AI rationale was withheld because it did not meet the hypothesis-only "
+            "guardrail. The documented associations below are provided for tumour-board "
+            "discussion."
+        )
+        domain_score = 0
+
+    records = [TherapyEvidenceRecord(**e) for e in evidence]
+    return TherapyRationaleResponse(rationale=rationale, evidence=records, domain_score=domain_score)

@@ -21,11 +21,13 @@ from app.services.chat.agent_tools import AgentDeps
 from app.api import routes, chat_routes, auth_routes
 from app.api.enrichment_routes import router as enrichment_router
 from app.api.compare_routes import router as compare_router
-from app.api import signature_routes
+from app.api import signature_routes, gallery_routes
 from app.api.gallery_routes import router as gallery_router
 from app.services.signature_service import SignatureService
+from app.services.curated_models import ensure_curated_models
+from app.services.therapy_evidence_service import TherapyEvidenceService
 from app.config.logging_config import setup_logging, get_logger
-from app.config.database import init_db, close_db
+from app.config.database import init_db, close_db, get_db_session
 from app.config.settings import settings
 from app.utils.memory_tracker import log_memory_checkpoint
 
@@ -58,7 +60,23 @@ async def lifespan(app: FastAPI):
     routes.set_orchestrator(orchestrator)
 
     # Initialize prognostic signature service (F17/F18/F19/F23) — shares orchestrator
-    signature_routes.set_signature_service(SignatureService(orchestrator=orchestrator))
+    signature_service = SignatureService(orchestrator=orchestrator)
+    signature_routes.set_signature_service(signature_service)
+    gallery_routes.set_signature_service(signature_service)
+    # Load durable curated models, then ensure each curated cancer has one
+    # (real build when cohorts are cached, else a synthetic demo model).
+    signature_service.load_persisted_models()
+    try:
+        async with get_db_session() as db:
+            built = await ensure_curated_models(signature_service, db)
+        logger.info("Curated prognostic models ready: %s", ", ".join(built))
+    except (OSError, RuntimeError, ValueError) as exc:
+        logger.warning("Curated model preparation skipped: %s", exc)
+
+    # Bundled CIViC/DGIdb evidence for the grounded therapy-rationale endpoint.
+    therapy_evidence_service = TherapyEvidenceService()
+    therapy_evidence_service.load()
+    chat_routes.set_therapy_services(signature_service, therapy_evidence_service)
 
     # Initialize RAG service and index local datasets into in-memory store
     rag_service = DatasetRAGService.from_env()
