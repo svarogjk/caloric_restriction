@@ -481,6 +481,49 @@ export async function getTherapyRationale(params: {
     return response.data
 }
 
+// ==================== Treatment Context (F24) ====================
+
+export interface TreatmentComparison {
+    name: string
+    slug: string
+    risk_group: string | null
+    risk_percentile: number | null
+    reference_km: ReferenceKMCurve[] | null
+    predicted_survival: SurvivalAtHorizon[] | null
+    n_cohorts: number | null
+    n_patients: number | null
+    pooled_c_index: number | null
+    is_building: boolean
+    build_error: string | null
+    disclaimer: string
+}
+
+export interface TreatmentComparisonResult {
+    cancer_type: string
+    treatments: TreatmentComparison[]
+}
+
+export async function getTreatmentContext(params: {
+    cancer_type: string
+    expression: Record<string, number>
+    clinical?: Record<string, string | number> | null
+}): Promise<TreatmentComparisonResult> {
+    const response = await apiClient.post<TreatmentComparisonResult>('/treatment-context', {
+        cancer_type: params.cancer_type,
+        expression: params.expression,
+        clinical: params.clinical ?? null,
+    })
+    return response.data
+}
+
+export async function warmTreatmentModels(cancerType: string): Promise<{ queued: string[]; already_built: string[] }> {
+    const response = await apiClient.post<{ cancer_type: string; queued: string[]; already_built: string[] }>(
+        '/treatment-context/warm',
+        { cancer_type: cancerType },
+    )
+    return response.data
+}
+
 export const searchDatasets = async (
     query: string,
     model: string,

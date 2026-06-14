@@ -23,9 +23,11 @@ from app.api.enrichment_routes import router as enrichment_router
 from app.api.compare_routes import router as compare_router
 from app.api import signature_routes, gallery_routes
 from app.api.gallery_routes import router as gallery_router
+from app.api.treatment_routes import router as treatment_router
 from app.services.signature_service import SignatureService
 from app.services.curated_models import ensure_curated_models
 from app.services.therapy_evidence_service import TherapyEvidenceService
+from app.services.treatment_context_service import set_treatment_service
 from app.config.logging_config import setup_logging, get_logger
 from app.config.database import init_db, close_db, get_db_session
 from app.config.settings import settings
@@ -77,6 +79,9 @@ async def lifespan(app: FastAPI):
     therapy_evidence_service = TherapyEvidenceService()
     therapy_evidence_service.load()
     chat_routes.set_therapy_services(signature_service, therapy_evidence_service)
+
+    # Treatment context service (F24) — reuses the same SignatureService instance.
+    set_treatment_service(signature_service)
 
     # Initialize RAG service and index local datasets into in-memory store
     rag_service = DatasetRAGService.from_env()
@@ -131,6 +136,7 @@ app.include_router(enrichment_router, prefix="/api")
 app.include_router(compare_router, prefix="/api")
 app.include_router(signature_routes.router, prefix="/api")
 app.include_router(gallery_router, prefix="/api")
+app.include_router(treatment_router, prefix="/api")
 
 # Serve compiled React frontend (present in Docker image, absent in dev)
 _DIST = Path("frontend/dist")

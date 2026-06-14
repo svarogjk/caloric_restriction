@@ -62,6 +62,7 @@ Two pillars, three phases. **Build order: predictive depth first → clinician U
 
 **Phase 3 — Investigational (behind disclaimers):**
 - **F23** *(L)* — Single-sample risk score, research-use-only. See §6.
+- **F24** *(L)* — Treatment context. See §8.
 
 ## 6. Patient-prediction architecture (F23)
 
@@ -79,6 +80,27 @@ Two pillars, three phases. **Build order: predictive depth first → clinician U
 5. **Render** = reference KM for the assigned group + predicted 1/3/5-year survival + C-index + uncertainty note.
 
 `POST /api/predict`: input = model_id + patient expression dict; output = risk score, group, percentile, t-year survival, reference-group KM.
+
+## 8. Treatment Context (F24)
+
+**What it is:** After a patient is scored, the app shows survival curves from GEO cohorts where a specific treatment was documented for the patient's cancer type. Example: "In breast cancer cohorts where patients received adjuvant chemotherapy, high-risk patients like yours had 42% 5-year survival."
+
+**The critical positioning boundary:**
+- ✅ Correct framing: *"Historical outcomes from GEO cohorts receiving this treatment"*
+- ❌ Wrong framing: *"If treated with X, this patient will respond"* — this is PREDICTIVE and we must never say it
+
+**Architecture (prognostic-in-treated-cohorts):**
+- One `PrognosticModel` is built per `(cancer_type, treatment)` pair from treatment-labelled GEO queries (e.g., `"breast cancer tamoxifen overall survival"`).
+- These are expression-based prognostic signatures estimated on cohorts that happened to receive a specific treatment — not treatment-response models.
+- The patient's expression is rank/quantile-normalized onto each treatment cohort's reference and assigned to a risk group.
+- The displayed KM curve is the *reference group curve* from that treated cohort, not a bespoke single-patient curve.
+- Model IDs: `treatment_{cancer_type}_{slug}`, stored in `platform_mappings/signature_models/`.
+- Patient expression is never persisted (same RUO policy as F23).
+
+**Guardrail language (use verbatim in UI):**
+> "Shows historical outcomes from GEO cohorts where this treatment was documented. This is not a treatment recommendation or prediction of treatment response. Research use only."
+
+**Endpoint:** `POST /api/treatment-context` — input: `{cancer_type, expression, clinical?}`; output: list of `TreatmentComparison` (one per treatment, with KM curves and risk group for the patient's risk level in that treated cohort).
 
 ## 7. Guardrails (design constraints, not footnotes)
 

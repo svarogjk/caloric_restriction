@@ -6,6 +6,7 @@ import { PredictResponse, ReferenceKMCurve } from '../../services/api'
 import { GROUP_COLORS, buildKMChartData } from '../../utils/signatureViz'
 import TherapyDirections from './TherapyDirections'
 import PatientReport from './PatientReport'
+import { TreatmentContextToggle } from './TreatmentContext'
 
 interface PatientReadoutProps {
     prediction: PredictResponse
@@ -16,6 +17,12 @@ interface PatientReadoutProps {
      *  back to the prediction's single assigned-group curve when absent. */
     referenceCurves?: ReferenceKMCurve[]
     timeUnit?: string
+    /** Cancer type key (e.g. "breast") — enables the treatment context toggle. */
+    cancerType?: string | null
+    /** Raw "GENE value" expression string for the scored patient. */
+    expressionRaw?: string
+    /** Clinical covariates supplied by the user. */
+    clinicalValues?: Record<string, string | number> | null
 }
 
 /**
@@ -24,6 +31,7 @@ interface PatientReadoutProps {
  */
 const PatientReadout: React.FC<PatientReadoutProps> = ({
     prediction: result, modelId, cancerLabel, modelIsDemo, referenceCurves, timeUnit = 'days',
+    cancerType, expressionRaw, clinicalValues,
 }) => {
     const curves = referenceCurves && referenceCurves.length ? referenceCurves : [result.reference_km]
     const kmData = useMemo(() => buildKMChartData(curves), [curves])
@@ -155,6 +163,12 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
                 it does not predict response to any therapy. Single-sample estimates are uncertain and
                 cross-platform normalization is approximate. Discuss with the care team.
             </div>
+
+            <TreatmentContextToggle
+                cancerType={cancerType ?? null}
+                expressionRaw={expressionRaw ?? ''}
+                clinical={clinicalValues}
+            />
 
             <TherapyDirections modelId={modelId} riskGroup={result.risk_group} />
 

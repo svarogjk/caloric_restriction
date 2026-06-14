@@ -198,3 +198,39 @@ class SurvivalAtHorizon(BaseModel):
 
 
 PredictResponse.model_rebuild()
+
+
+# ==================== Treatment Context (F24) ====================
+
+TREATMENT_RUO_DISCLAIMER = (
+    "Shows historical outcomes from GEO cohorts where this treatment was documented. "
+    "This is not a treatment recommendation or prediction of treatment response. "
+    "Research use only — not a clinical decision-making device."
+)
+
+
+class TreatmentComparison(BaseModel):
+    """Patient scored against one treatment-specific prognostic model."""
+    name: str                                # Display name, e.g. "Adjuvant chemotherapy"
+    slug: str                                # Internal key, e.g. "chemo"
+    risk_group: Optional[str] = None         # None while model is building
+    risk_percentile: Optional[float] = None
+    reference_km: Optional[List[ReferenceKMCurve]] = None   # all 3 groups
+    predicted_survival: Optional[List[SurvivalAtHorizon]] = None
+    n_cohorts: Optional[int] = None
+    n_patients: Optional[int] = None
+    pooled_c_index: Optional[float] = None
+    is_building: bool = False
+    build_error: Optional[str] = None
+    disclaimer: str = TREATMENT_RUO_DISCLAIMER
+
+
+class TreatmentComparisonResult(BaseModel):
+    cancer_type: str
+    treatments: List[TreatmentComparison]
+
+
+class TreatmentContextRequest(BaseModel):
+    cancer_type: str = Field(..., description="One of: breast, lung, colorectal, ovarian, gastric, glioma")
+    expression: dict[str, float] = Field(..., description="gene_symbol -> expression value for the patient")
+    clinical: Optional[dict[str, float | str]] = None

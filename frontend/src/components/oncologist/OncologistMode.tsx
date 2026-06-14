@@ -50,6 +50,7 @@ const OncologistMode: React.FC = () => {
                     label={selected.label}
                     initialCovariates={selected.clinical_covariates}
                     alwaysOpen
+                    cancerType={selected.key}
                 />
             </div>
         </div>

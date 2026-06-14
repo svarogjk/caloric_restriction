@@ -19,6 +19,8 @@ interface PatientPanelProps {
     initialExpression?: string
     /** Auto-run the personalize call once the data + result are ready. */
     autoRun?: boolean
+    /** Cancer type key (e.g. "breast") — enables treatment context toggle in the readout. */
+    cancerType?: string | null
 }
 
 /**
@@ -27,7 +29,7 @@ interface PatientPanelProps {
  * is no separate "build signature" step. Prognostic, research use only.
  */
 const PatientPanel: React.FC<PatientPanelProps> = ({
-    resultId, modelId, label, initialCovariates, alwaysOpen, initialExpression, autoRun,
+    resultId, modelId, label, initialCovariates, alwaysOpen, initialExpression, autoRun, cancerType,
 }) => {
     const [enabled, setEnabled] = useState(!!alwaysOpen || !!initialExpression)
     const [exprText, setExprText] = useState(initialExpression ?? '')
@@ -236,6 +238,9 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
                             modelIsDemo={modelIsDemo}
                             referenceCurves={referenceCurves}
                             timeUnit={timeUnit}
+                            cancerType={cancerType}
+                            expressionRaw={exprText}
+                            clinicalValues={clinical}
                         />
                     )}
                 </>
