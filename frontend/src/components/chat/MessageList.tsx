@@ -4,7 +4,12 @@ import { Link } from 'react-router-dom'
 import MessageBubble from './MessageBubble'
 import { RootState, AppDispatch } from '../../store/store'
 import { Message, setPersonalizeEnabled, setPatientExpression } from '../../store/chatSlice'
-import { SAMPLE_PATIENTS } from '../../utils/samplePatients'
+import {
+    SAMPLE_PATIENTS,
+    RESEARCH_EXAMPLES,
+    type SamplePatient,
+    type ResearchExample,
+} from '../../utils/samplePatients'
 
 interface MessageListProps {
     messages: Message[]
@@ -16,45 +21,6 @@ interface MessageListProps {
     onModifyQuery?: (query: string) => void
     onExampleClick?: (example: string) => void
 }
-
-// Full natural-language questions — exactly what a researcher or clinician would type.
-// Clicking fills the input so the user sees what they're about to submit (and can edit it).
-const SUGGESTED_QUESTIONS: {
-    text: string        // shown in UI and pre-filled into the input
-    query: string       // what is actually passed to the analysis pipeline
-    role: 'researcher' | 'clinician'
-}[] = [
-    {
-        role: 'researcher',
-        text: 'What genes predict overall survival in lung adenocarcinoma across independent GEO cohorts?',
-        query: 'lung adenocarcinoma overall survival',
-    },
-    {
-        role: 'clinician',
-        text: 'My breast cancer patient — which expression markers are most prognostic in GEO data?',
-        query: 'breast cancer overall survival',
-    },
-    {
-        role: 'researcher',
-        text: 'Find colorectal cancer biomarkers consistently prognostic across multiple independent studies',
-        query: 'colorectal cancer overall survival prognosis',
-    },
-    {
-        role: 'clinician',
-        text: 'Stage III ovarian cancer patient — what does the GEO literature say about survival markers?',
-        query: 'ovarian cancer overall survival',
-    },
-    {
-        role: 'researcher',
-        text: 'Compare EGFR and KRAS as survival predictors in lung adenocarcinoma across GEO datasets',
-        query: 'EGFR KRAS lung adenocarcinoma survival',
-    },
-    {
-        role: 'clinician',
-        text: 'Colorectal cancer patient — analyze prognostic expression patterns from independent cohorts',
-        query: 'colorectal cancer stage III overall survival',
-    },
-]
 
 // Conversational follow-up questions (go through the AI chat, not the analysis pipeline)
 const AI_QUESTIONS = [
@@ -69,38 +35,74 @@ const MessageList: React.FC<MessageListProps> = ({
     className = '', onRunAnalysis, onModifyQuery, onExampleClick,
 }) => {
     const messagesEndRef = useRef<HTMLDivElement>(null)
+    const editPanelRef = useRef<HTMLDivElement>(null)
     const dispatch = useDispatch<AppDispatch>()
     const personalizeEnabled = useSelector((s: RootState) => s.chat.personalizeEnabled)
     const patientExpression = useSelector((s: RootState) => s.chat.patientExpression)
     const [activeProfileId, setActiveProfileId] = useState<string | null>(null)
     const [toastMsg, setToastMsg] = useState<string | null>(null)
+    const activeProfile = SAMPLE_PATIENTS.find((p) => p.id === activeProfileId) ?? null
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [messages, streamingContent])
 
-    const handleLoadProfile = (profileId: string, expression: string) => {
-        dispatch(setPatientExpression(expression))
-        setActiveProfileId(profileId)
-        setToastMsg('Profile loaded — run an analysis above to score this patient.')
+    const showToast = (msg: string) => {
+        setToastMsg(msg)
         setTimeout(() => setToastMsg(null), 2500)
     }
 
-    // Clicking a suggested question: fills the chat input so the user sees exactly
-    // what they're about to submit, then can press Enter (or edit it first).
-    const handleSuggestionClick = (text: string, _query: string) => {
-        onModifyQuery?.(text)
-        // Scroll/focus the input area so the pre-filled text is obvious.
+    // Focus + move cursor to the end of the chat input (reused by research clicks).
+    const focusChatInput = () => {
         setTimeout(() => {
             const input = document.querySelector<HTMLTextAreaElement>('textarea[placeholder*="survival"]')
             if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length) }
         }, 50)
     }
 
+    // Clinical case: one click loads the patient's data + the matching query, turns on
+    // personalization, and reveals the editable patient panel so the user can swap in
+    // their own values before running.
+    const handleClinicalSelect = (p: SamplePatient) => {
+        dispatch(setPersonalizeEnabled(true)) // reducer also flips autoSave on
+        dispatch(setPatientExpression(p.expression))
+        onModifyQuery?.(p.query)
+        setActiveProfileId(p.id)
+        showToast(`${p.name} loaded — edit the values or click "Run prognostic analysis".`)
+        setTimeout(() => editPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
+    }
+
+    // "Use my own patient": personalize with an empty textarea to paste into.
+    const handleUseOwnPatient = () => {
+        dispatch(setPersonalizeEnabled(true))
+        dispatch(setPatientExpression(''))
+        setActiveProfileId(null)
+        onModifyQuery?.('breast cancer overall survival')
+        showToast('Paste your patient\'s expression, set the cancer query, then run.')
+        setTimeout(() => editPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
+    }
+
+    // Explicit run for the clinical column — personalize + expression are already set,
+    // so the analysis result auto-scores the patient downstream (Patient tab).
+    const handleRunClinical = () => {
+        const input = document.querySelector<HTMLTextAreaElement>('textarea[placeholder*="survival"]')
+        const query = (activeProfile?.query ?? input?.value ?? '').trim()
+        if (!query) return
+        onRunAnalysis?.(query)
+    }
+
+    // Research example: pure discovery — make sure no stale patient lingers, then pre-fill.
+    const handleResearchSelect = (ex: ResearchExample) => {
+        dispatch(setPersonalizeEnabled(false))
+        setActiveProfileId(null)
+        onModifyQuery?.(ex.text)
+        focusChatInput()
+    }
+
     if (messages.length === 0 && !isLoading) {
         return (
-            <div className={`${className} flex items-center justify-center`}>
-                <div className="px-4 max-w-2xl w-full py-6 space-y-6">
+            <div className={`${className} flex items-start justify-center overflow-y-auto`}>
+                <div className="px-4 max-w-4xl w-full py-6 space-y-6">
 
                     {/* Free access statement — NAR requirement */}
                     <div className="px-4 py-2 bg-green-50 border border-green-200 rounded-lg text-xs text-green-700 text-center">
@@ -116,145 +118,154 @@ const MessageList: React.FC<MessageListProps> = ({
                             Ask a question in plain English — the app searches GEO, runs Cox regression across
                             independent cohorts, and returns Kaplan-Meier curves, forest plots, and hazard ratios.
                         </p>
+                        <p className="text-xs text-gray-400 mt-2">
+                            Choose how you want to start:
+                        </p>
                     </div>
 
-                    {/* ── Suggested questions ── */}
-                    <div>
-                        <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">
-                            Try asking — click to pre-fill, then press Enter
-                        </p>
+                    {/* ── Two ways in: Clinical | Research ── */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
 
-                        <div className="space-y-2">
-                            {SUGGESTED_QUESTIONS.map((q, i) => {
-                                const isResearcher = q.role === 'researcher'
-                                return (
+                        {/* ─── Clinical column ─── */}
+                        <section className="rounded-2xl border border-violet-200 bg-violet-50/30 p-4 space-y-3">
+                            <header>
+                                <h4 className="flex items-center gap-2 text-sm font-semibold text-violet-800">
+                                    🩺 I have a patient
+                                </h4>
+                                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                                    Pick a case to load its tumour expression and get a prognostic risk-group
+                                    estimate grounded in independent GEO cohorts. <strong>Research use only</strong> —
+                                    prognostic, not predictive; not a treatment-selection device.
+                                </p>
+                            </header>
+
+                            <div className="space-y-2">
+                                {SAMPLE_PATIENTS.map((p) => {
+                                    const isActive = activeProfileId === p.id
+                                    return (
+                                        <button
+                                            key={p.id}
+                                            onClick={() => handleClinicalSelect(p)}
+                                            className={`w-full flex items-start gap-3 p-3 rounded-xl border text-left transition-all ${
+                                                isActive
+                                                    ? 'border-violet-400 bg-white ring-1 ring-violet-300'
+                                                    : 'border-violet-200 bg-white hover:border-violet-300 hover:bg-violet-50/60'
+                                            }`}
+                                        >
+                                            <span
+                                                className="w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0"
+                                                style={{ backgroundColor: p.color }}
+                                            />
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className="text-sm font-semibold text-gray-800">
+                                                        {p.name}
+                                                    </span>
+                                                    <span className="text-[11px] text-violet-700 font-medium bg-violet-50 border border-violet-100 rounded px-1.5 py-0.5">
+                                                        {p.cancerHint}
+                                                    </span>
+                                                </div>
+                                                <p className="text-xs text-gray-600 mt-1 font-medium">
+                                                    {p.vignette}
+                                                </p>
+                                                <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
+                                                    {p.explanation}
+                                                </p>
+                                            </div>
+                                        </button>
+                                    )
+                                })}
+                            </div>
+
+                            <button
+                                onClick={handleUseOwnPatient}
+                                className="w-full text-left px-3 py-2 rounded-lg border border-dashed border-violet-300 text-xs text-violet-700 hover:bg-violet-50 transition-colors"
+                            >
+                                + Use my own patient — paste your patient's expression values
+                            </button>
+
+                            {/* Shared editable patient panel (one Redux patientExpression) */}
+                            {personalizeEnabled && (
+                                <div ref={editPanelRef} className="rounded-xl border border-violet-300 bg-white p-3 space-y-2">
+                                    <label className="block text-xs font-semibold text-gray-700">
+                                        Patient expression{activeProfile ? ` — ${activeProfile.name}` : ''}
+                                    </label>
+                                    <p className="text-[11px] text-gray-500">
+                                        Edit or replace with your patient's values — "GENE value" per line.
+                                    </p>
+                                    <textarea
+                                        value={patientExpression}
+                                        onChange={(e) => dispatch(setPatientExpression(e.target.value))}
+                                        rows={5}
+                                        placeholder={'TP53 9.1\nMKI67 11.6\nESR1 5.2\n…'}
+                                        className="w-full text-xs font-mono border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-violet-500 resize-y"
+                                    />
+                                    {activeProfile?.direction && (
+                                        <p className="text-xs text-violet-600 font-medium leading-relaxed">
+                                            {activeProfile.direction}
+                                        </p>
+                                    )}
+                                    <button
+                                        onClick={handleRunClinical}
+                                        disabled={!patientExpression.trim()}
+                                        className="w-full px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        Run prognostic analysis →
+                                    </button>
+                                    <p className="text-[11px] text-gray-400">
+                                        When the analysis finishes, your patient is scored automatically in the{' '}
+                                        <strong>Patient</strong> tab.
+                                    </p>
+                                </div>
+                            )}
+                        </section>
+
+                        {/* ─── Research column ─── */}
+                        <section className="rounded-2xl border border-blue-200 bg-blue-50/30 p-4 space-y-3">
+                            <header>
+                                <h4 className="flex items-center gap-2 text-sm font-semibold text-blue-800">
+                                    🔬 I'm exploring biomarkers
+                                </h4>
+                                <p className="text-xs text-gray-500 mt-1 leading-relaxed">
+                                    Discover, validate, or compare prognostic genes across independent GEO
+                                    cohorts. No patient needed.
+                                </p>
+                            </header>
+
+                            <div className="space-y-2">
+                                {RESEARCH_EXAMPLES.map((ex, i) => (
                                     <button
                                         key={i}
-                                        onClick={() => handleSuggestionClick(q.text, q.query)}
-                                        className="w-full group flex items-start gap-3 px-4 py-3 rounded-xl border border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40 transition-all text-left"
+                                        onClick={() => handleResearchSelect(ex)}
+                                        className="w-full group flex items-start gap-3 px-4 py-3 rounded-xl border border-blue-200 bg-white hover:border-blue-300 hover:bg-blue-50/60 transition-all text-left"
                                     >
-                                        {/* Category badge */}
-                                        <span className={`mt-0.5 flex-shrink-0 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide ${
-                                            isResearcher
-                                                ? 'bg-blue-100 text-blue-700'
-                                                : 'bg-violet-100 text-violet-700'
-                                        }`}>
-                                            {isResearcher ? '🔬' : '🩺'}
-                                            {isResearcher ? 'Research' : 'Clinical'}
-                                        </span>
-
-                                        {/* Question text — looks like what you'd type */}
                                         <span className="flex-1 text-sm text-gray-700 leading-relaxed group-hover:text-gray-900">
-                                            {q.text}
+                                            {ex.text}
                                         </span>
-
-                                        {/* Arrow hint */}
                                         <svg
-                                            className="w-4 h-4 mt-0.5 flex-shrink-0 text-gray-300 group-hover:text-indigo-500 transition-colors"
+                                            className="w-4 h-4 mt-0.5 flex-shrink-0 text-gray-300 group-hover:text-blue-500 transition-colors"
                                             fill="none" stroke="currentColor" viewBox="0 0 24 24"
                                         >
                                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                                                 d="M3 12h18m-6-6l6 6-6 6" />
                                         </svg>
                                     </button>
-                                )
-                            })}
-                        </div>
+                                ))}
+                            </div>
 
-                        <p className="text-[11px] text-gray-400 mt-3 text-center">
-                            Or type your own query below — any cancer type, any survival endpoint.
-                        </p>
+                            <p className="text-[11px] text-gray-400">
+                                Clicking pre-fills the input — press Enter to run, or edit it first. Or type your
+                                own query below: any cancer type, any survival endpoint.
+                            </p>
+                        </section>
                     </div>
 
-                    {/* ── Patient personalisation ── */}
-                    <div className="text-left bg-slate-50 border border-slate-200 rounded-xl p-4">
-                        <label className="flex items-start gap-3 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={personalizeEnabled}
-                                onChange={(e) => dispatch(setPersonalizeEnabled(e.target.checked))}
-                                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                            />
-                            <span>
-                                <span className="block text-sm font-semibold text-gray-800">
-                                    Add patient data — personalize results
-                                </span>
-                                <span className="block text-xs text-gray-500 mt-0.5">
-                                    <strong>Off:</strong> standard cross-cohort GEO biomarker analysis.{' '}
-                                    <strong>On:</strong> the same analysis <em>plus</em> a personalized prognostic
-                                    estimate for your patient (risk group, predicted survival).{' '}
-                                    Research use only — not a treatment-selection device.
-                                </span>
-                            </span>
-                        </label>
-
-                        {personalizeEnabled && (
-                            <div className="mt-4 space-y-3">
-                                <textarea
-                                    value={patientExpression}
-                                    onChange={(e) => dispatch(setPatientExpression(e.target.value))}
-                                    rows={4}
-                                    placeholder={'Paste the patient\'s tumour expression — "GENE value" per line:\nTP53 9.1\nMKI67 11.6\n…'}
-                                    className="w-full text-xs font-mono border border-gray-300 rounded-lg p-2 focus:outline-none focus:ring-1 focus:ring-indigo-500 resize-none"
-                                />
-
-                                {/* Named example profiles */}
-                                <div>
-                                    <p className="text-xs font-medium text-gray-500 mb-2">
-                                        Or load an example profile — select a cancer type to explore:
-                                    </p>
-                                    <div className="space-y-2">
-                                        {SAMPLE_PATIENTS.map((profile) => {
-                                            const isActive = activeProfileId === profile.id
-                                            return (
-                                                <button
-                                                    key={profile.id}
-                                                    onClick={() => handleLoadProfile(profile.id, profile.expression)}
-                                                    className={`w-full flex items-start gap-3 p-3 rounded-lg border text-left transition-all ${
-                                                        isActive
-                                                            ? 'border-indigo-400 bg-indigo-50 ring-1 ring-indigo-300'
-                                                            : 'border-gray-200 bg-white hover:border-indigo-300 hover:bg-indigo-50/40'
-                                                    }`}
-                                                >
-                                                    <span
-                                                        className="w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0"
-                                                        style={{ backgroundColor: profile.color }}
-                                                    />
-                                                    <div className="min-w-0">
-                                                        <div className="flex items-center gap-2 flex-wrap">
-                                                            <span className="text-sm font-semibold text-gray-800">
-                                                                {profile.name}
-                                                            </span>
-                                                            <span className="text-[11px] text-indigo-600 font-medium bg-indigo-50 border border-indigo-100 rounded px-1.5 py-0.5">
-                                                                {profile.cancerHint}
-                                                            </span>
-                                                        </div>
-                                                        <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">
-                                                            {profile.explanation}
-                                                        </p>
-                                                        <p className="text-xs text-indigo-600 mt-1 font-medium">
-                                                            {profile.direction}
-                                                        </p>
-                                                    </div>
-                                                </button>
-                                            )
-                                        })}
-                                    </div>
-                                </div>
-
-                                <p className="text-[11px] text-gray-400">
-                                    Run an analysis above — when it finishes, your patient is scored automatically in the{' '}
-                                    <strong>Patient</strong> tab.
-                                </p>
-                            </div>
-                        )}
-
-                        <div className="mt-3 pt-2 border-t border-slate-200 text-xs">
-                            <Link to="/oncologist" className="text-indigo-600 font-medium hover:underline">
-                                Prefer ready-made models? Try Oncologist Mode →
-                            </Link>
-                            <span className="text-gray-400"> — curated signatures with a built-in demo patient.</span>
-                        </div>
+                    {/* Oncologist Mode link */}
+                    <div className="text-center text-xs">
+                        <Link to="/oncologist" className="text-indigo-600 font-medium hover:underline">
+                            Prefer ready-made models? Try Oncologist Mode →
+                        </Link>
+                        <span className="text-gray-400"> — curated signatures with a built-in demo patient.</span>
                     </div>
 
                     {/* ── AI follow-up questions ── */}
