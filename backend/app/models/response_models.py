@@ -64,6 +64,16 @@ class GeneSurvivalResponse(BaseModel):
     heterogeneity_stats: Optional[HeterogeneityStats] = None
 
 
+class AnalysisDiagnostics(BaseModel):
+    """Diagnostic information for empty results"""
+
+    datasets_analyzed: int
+    datasets_with_genes: int
+    cancer_filter_enabled: bool = False
+    min_occurrence_threshold: int = 2
+    reason: Optional[str] = None
+
+
 class AnalysisResponse(BaseModel):
     """Response model for survival analysis results"""
 
@@ -78,6 +88,8 @@ class AnalysisResponse(BaseModel):
     ranking_recommendations: Optional[str] = None
     # Persistent result ID (F07) — set after DB save, enables shareable URLs
     result_id: Optional[str] = None
+    # Diagnostic info when 0 genes found
+    diagnostics: Optional[AnalysisDiagnostics] = None
 
 
 class HealthResponse(BaseModel):

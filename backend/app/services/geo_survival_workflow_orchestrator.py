@@ -572,15 +572,30 @@ class GEOSurvivalWorkflowOrchestrator:
                             probe
                             for probe, gene in loaded_data.probe_to_gene_mapping.items()
                             if gene.upper() in CANCER_GENE_SET
-                        }
+                        } if loaded_data.probe_to_gene_mapping else set()
                         logger.info(
                             f"Dataset {dataset.accession}: cancer filter - "
                             f"mapping has {mapping_size} entries, found {len(cancer_probes)} cancer gene probes"
                         )
 
-                        # Apply mask
+                        # Apply mask via mapping
                         cancer_mask = loaded_data.expression_matrix.index.isin(cancer_probes)
-                        genes_matching_mask = cancer_mask.sum()
+
+                        # Fallback for gene-level datasets (e.g. NanoString panels) where the
+                        # expression matrix index is already gene symbols, or the cached mapping
+                        # is broken/missing. Match the index directly against CANCER_GENE_SET.
+                        if cancer_mask.sum() == 0:
+                            index_upper = loaded_data.expression_matrix.index.to_series().str.upper()
+                            index_mask = index_upper.isin(CANCER_GENE_SET)
+                            if index_mask.sum() > 0:
+                                logger.info(
+                                    f"Dataset {dataset.accession}: mapping yielded 0 cancer probes; "
+                                    f"falling back to gene-level index match — "
+                                    f"{index_mask.sum()} cancer genes found in index"
+                                )
+                                cancer_mask = index_mask.values
+
+                        genes_matching_mask = int(cancer_mask.sum())
                         logger.info(
                             f"Dataset {dataset.accession}: mask matches {genes_matching_mask}/{genes_before_filter} genes"
                         )
@@ -588,7 +603,8 @@ class GEOSurvivalWorkflowOrchestrator:
                         loaded_data.expression_matrix = loaded_data.expression_matrix[cancer_mask]
                         if len(loaded_data.expression_matrix) == 0:
                             logger.warning(
-                                f"Dataset {dataset.accession}: no cancer genes found after filter"
+                                f"Dataset {dataset.accession}: no cancer genes found after cancer filter - "
+                                f"0 probes matched CANCER_GENE_SET (mapping_size={mapping_size})"
                             )
                             return None
                         logger.info(
@@ -745,6 +761,12 @@ class GEOSurvivalWorkflowOrchestrator:
         """Identify genes commonly associated with survival across datasets"""
 
         log_memory_checkpoint("common_genes_aggregation_start")
+
+        # Log per-dataset significant gene counts for diagnostics
+        logger.info("Per-dataset significant gene counts (before aggregation):")
+        for result in survival_results:
+            logger.info(f"  {result.accession}: {len(result.significant_genes)} significant genes")
+
         gene_data = {}
 
         for result in survival_results:
@@ -823,10 +845,15 @@ class GEOSurvivalWorkflowOrchestrator:
         
         # Filter by minimum occurrence
         common_genes = []
-        
+        genes_before_min_occurrence_filter = len(gene_data)
+        genes_filtered_by_min_occurrence = []
+
         for gene_identifier, data in gene_data.items():
             n_datasets = len(data['datasets'])
-            
+
+            if n_datasets < min_occurrence:
+                genes_filtered_by_min_occurrence.append((gene_identifier, n_datasets))
+
             if n_datasets >= min_occurrence:
                 avg_hr = sum(data['hazard_ratios']) / len(data['hazard_ratios'])
                 avg_cox_p = sum(data['cox_p_values']) / len(data['cox_p_values'])
@@ -853,9 +880,23 @@ class GEOSurvivalWorkflowOrchestrator:
         
         # Sort by number of datasets and then by average p-value
         common_genes.sort(key=lambda x: (-x.n_datasets, x.avg_cox_p_value))
-        
+
         log_memory_checkpoint("common_genes_aggregation_end")
-        logger.info(f"Found {len(common_genes)} common survival-associated genes")
+
+        # Log min_occurrence filter diagnostics
+        logger.info(
+            f"Gene aggregation: {genes_before_min_occurrence_filter} genes found in ≥1 dataset, "
+            f"min_occurrence={min_occurrence} filter applied"
+        )
+        if genes_filtered_by_min_occurrence:
+            single_dataset_genes = [g for g, n in genes_filtered_by_min_occurrence if n == 1]
+            if single_dataset_genes:
+                logger.info(
+                    f"Filtered {len(single_dataset_genes)} genes appearing in only 1 dataset "
+                    f"(min_occurrence requires {min_occurrence})"
+                )
+
+        logger.info(f"Found {len(common_genes)} common survival-associated genes (after min_occurrence filter)")
 
         if common_genes:
             sample_genes = common_genes[:10]

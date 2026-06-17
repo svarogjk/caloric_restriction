@@ -587,6 +587,28 @@ Determine the optimal parsing strategy for this file."""
         except Exception as e:
             logger.warning(f"Failed to save to storage: {e}")
 
+    @staticmethod
+    def _is_corrupted_mapping(mapping: Dict[str, str], sample_size: int = 50) -> bool:
+        """Detect a corrupted probe->gene mapping where the gene_symbol values are
+        numeric expression values rather than real gene symbols (column swap during
+        ingestion of gene-level datasets, e.g. NanoString panels).
+
+        Returns True when the majority of sampled values parse as floats.
+        """
+        values = list(mapping.values())[:sample_size]
+        if not values:
+            return False
+
+        numeric_count = 0
+        for v in values:
+            try:
+                float(v)
+                numeric_count += 1
+            except (TypeError, ValueError):
+                pass
+
+        return numeric_count > len(values) / 2
+
     def _load_from_storage(self, storage_path: Path, dataset: GEODataset) -> LoadedGEOData:
         """Load data from datasets folder with metadata restoration"""
         try:
@@ -637,8 +659,18 @@ Determine the optimal parsing strategy for this file."""
             if mapping_path.exists():
                 try:
                     mapping_df = pd.read_parquet(mapping_path)
-                    probe_to_gene_mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
-                    logger.debug(f"Loaded gene mapping from storage: {len(probe_to_gene_mapping)} probes")
+                    candidate_mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
+                    # Guard against corrupted mappings where gene_symbol values are
+                    # actually numeric expression values (column swap during ingestion).
+                    # A None mapping lets gene-level index symbols flow through unmodified.
+                    if self._is_corrupted_mapping(candidate_mapping):
+                        logger.warning(
+                            f"Discarding corrupted gene mapping for {dataset.accession}: "
+                            f"gene_symbol values look numeric (expression values, not symbols)"
+                        )
+                    else:
+                        probe_to_gene_mapping = candidate_mapping
+                        logger.debug(f"Loaded gene mapping from storage: {len(probe_to_gene_mapping)} probes")
                 except Exception as e:
                     logger.debug(f"Could not restore gene mapping: {e}")
             

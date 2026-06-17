@@ -13,7 +13,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.request_models import AnalysisRequest
-from app.models.response_models import AnalysisResponse, HealthResponse, GeneSurvivalResponse, GeneDatasetResult, KMCurveData
+from app.models.response_models import (
+    AnalysisResponse, AnalysisDiagnostics, HealthResponse,
+    GeneSurvivalResponse, GeneDatasetResult, KMCurveData
+)
 from app.services.geo_survival_workflow_orchestrator import CrossDatasetSurvivalAnalysis
 from app.services.analysis_result_service import analysis_result_service
 from app.services.export_service import export_service
@@ -95,7 +98,11 @@ async def search_datasets(
         )
         
         # Convert orchestrator result to API response (shared builder includes F16 adjusted Cox)
-        response = _build_analysis_response(result)
+        response = _build_analysis_response(
+            result,
+            cancer_genes_only=request.cancer_genes_only,
+            min_occurrence=request.min_occurrence
+        )
 
         # Persist result non-blocking (F07) — failure must never break the response
         try:
@@ -115,7 +122,11 @@ async def search_datasets(
         )
 
 
-def _build_analysis_response(result: CrossDatasetSurvivalAnalysis) -> AnalysisResponse:
+def _build_analysis_response(
+    result: CrossDatasetSurvivalAnalysis,
+    cancer_genes_only: bool = False,
+    min_occurrence: int = 2
+) -> AnalysisResponse:
     """Convert a CrossDatasetSurvivalAnalysis into the API response model."""
     genes_response = []
     for gene in result.common_survival_genes:
@@ -181,6 +192,31 @@ def _build_analysis_response(result: CrossDatasetSurvivalAnalysis) -> AnalysisRe
             per_dataset_results=per_dataset_responses
         ))
 
+    # Generate diagnostics if no genes found
+    diagnostics = None
+    if len(genes_response) == 0 and result.all_survival_results:
+        # Count how many datasets contributed genes
+        datasets_with_genes = sum(
+            1 for r in result.all_survival_results
+            if r.significant_genes
+        )
+
+        reason = None
+        if datasets_with_genes == 0:
+            reason = "No datasets had genes meeting the significance thresholds (p<0.05, HR threshold)"
+        elif datasets_with_genes == 1:
+            reason = f"Only {datasets_with_genes} dataset had genes; min_occurrence={min_occurrence} requires {min_occurrence}+ datasets"
+        elif cancer_genes_only:
+            reason = f"Only {datasets_with_genes} datasets with genes matched the COSMIC cancer gene filter"
+
+        diagnostics = AnalysisDiagnostics(
+            datasets_analyzed=result.n_datasets_analyzed,
+            datasets_with_genes=datasets_with_genes,
+            cancer_filter_enabled=cancer_genes_only,
+            min_occurrence_threshold=min_occurrence,
+            reason=reason
+        )
+
     return AnalysisResponse(
         query=result.query,
         n_datasets_analyzed=result.n_datasets_analyzed,
@@ -189,7 +225,8 @@ def _build_analysis_response(result: CrossDatasetSurvivalAnalysis) -> AnalysisRe
         processing_time=result.processing_time,
         timestamp=result.timestamp.isoformat(),
         ranking_quality_score=result.ranking_quality_score,
-        ranking_recommendations=result.ranking_recommendations
+        ranking_recommendations=result.ranking_recommendations,
+        diagnostics=diagnostics
     )
 
 
@@ -243,7 +280,11 @@ async def stream_analysis(
                 gene_filter=parsed_gene_filter,
                 progress_callback=progress_cb,
             )
-            response_obj = _build_analysis_response(result)
+            response_obj = _build_analysis_response(
+                result,
+                cancer_genes_only=cancer_genes_only,
+                min_occurrence=min_occurrence
+            )
             result_data = json.dumps({"stage": "result", "result": response_obj.model_dump()})
             await queue.put(f"data: {result_data}\n\n")
         except Exception as e:
