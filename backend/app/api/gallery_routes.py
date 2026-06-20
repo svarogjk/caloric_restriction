@@ -37,14 +37,14 @@ CURATED_CANCERS = [
         "key": "breast",
         "label": "Breast cancer",
         "query": "breast cancer overall survival",
-        "blurb": "ER/HER2-spanning cohorts; strong prognostic expression signal.",
+        "blurb": "ER/HER2-spanning cohorts; strong predictive expression signal.",
         "icon": "🎀",
     },
     {
         "key": "lung",
         "label": "Lung adenocarcinoma",
         "query": "lung adenocarcinoma overall survival",
-        "blurb": "NSCLC cohorts across stages; classic prognostic biomarker target.",
+        "blurb": "NSCLC cohorts across stages; classic predictive biomarker target.",
         "icon": "🫁",
     },
     {
@@ -58,7 +58,7 @@ CURATED_CANCERS = [
         "key": "ovarian",
         "label": "Ovarian cancer",
         "query": "ovarian cancer overall survival",
-        "blurb": "High-grade serous cohorts; aggressive, prognosis-driven.",
+        "blurb": "High-grade serous cohorts; aggressive, outcome-driven.",
         "icon": "🎗️",
     },
     {
@@ -72,7 +72,7 @@ CURATED_CANCERS = [
         "key": "glioma",
         "label": "Glioma / GBM",
         "query": "glioma overall survival",
-        "blurb": "Brain tumours; well-characterised prognostic expression markers.",
+        "blurb": "Brain tumours; well-characterised predictive expression markers.",
         "icon": "🧠",
     },
 ]

@@ -68,7 +68,7 @@ const MessageList: React.FC<MessageListProps> = ({
         dispatch(setPatientExpression(p.expression))
         onModifyQuery?.(p.query)
         setActiveProfileId(p.id)
-        showToast(`${p.name} loaded — edit the values or click "Run prognostic analysis".`)
+        showToast(`${p.name} loaded — edit the values or click "Run predictive analysis".`)
         setTimeout(() => editPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60)
     }
 
@@ -133,9 +133,10 @@ const MessageList: React.FC<MessageListProps> = ({
                                     🩺 I have a patient
                                 </h4>
                                 <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-                                    Pick a case to load its tumour expression and get a prognostic risk-group
-                                    estimate grounded in independent GEO cohorts. <strong>Research use only</strong> —
-                                    prognostic, not predictive; not a treatment-selection device.
+                                    Pick a case to load its tumour expression, predict a risk group grounded in
+                                    independent GEO cohorts, and get advisory treatments to discuss.
+                                    <strong> Research use only</strong> — advisory, not a prescription or a
+                                    guarantee of response.
                                 </p>
                             </header>
 
@@ -210,7 +211,7 @@ const MessageList: React.FC<MessageListProps> = ({
                                         disabled={!patientExpression.trim()}
                                         className="w-full px-3 py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
                                     >
-                                        Run prognostic analysis →
+                                        Run predictive analysis →
                                     </button>
                                     <p className="text-[11px] text-gray-400">
                                         When the analysis finishes, your patient is scored automatically in the{' '}
@@ -227,8 +228,8 @@ const MessageList: React.FC<MessageListProps> = ({
                                     🔬 I'm exploring biomarkers
                                 </h4>
                                 <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-                                    Discover, validate, or compare prognostic genes across independent GEO
-                                    cohorts. No patient needed.
+                                    Discover, validate, or compare predictive and prognostic biomarker genes
+                                    across independent GEO cohorts. No patient needed.
                                 </p>
                             </header>
 

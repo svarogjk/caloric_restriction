@@ -11,9 +11,11 @@ downstream features that consume the locked model artifact:
 The `PrognosticModel` below is the single "locked artifact" schema. It is
 designed once here so all four features share it — do not fork it per feature.
 
-Positioning guardrail (see clinical-positioning skill §2, §7): everything here
-is PROGNOSTIC (predicts outcome/survival), never PREDICTIVE of drug response,
-and is research-use-only.
+Positioning guardrail (see clinical-positioning skill §2, §7): outputs here
+predict outcome risk and support ADVISORY, evidence-grounded treatment
+suggestions to discuss with the care team. They are hypothesis-generating and
+research-use-only — never a prescription, a guarantee of response, or a clinical
+decision-making device.
 """
 
 from __future__ import annotations
@@ -23,9 +25,11 @@ from pydantic import BaseModel, Field
 
 
 RUO_DISCLAIMER = (
-    "Research use only. This prognostic signature estimates outcome risk from "
-    "tumour gene expression; it does not predict response to any specific therapy "
-    "and is not a clinical decision-making device."
+    "Research use only. This signature predicts outcome risk from tumour gene "
+    "expression and supports advisory, evidence-grounded treatment suggestions to "
+    "discuss with the care team. It is hypothesis-generating — not a prescription, "
+    "not a guarantee of response, and not a clinical decision-making device. "
+    "Validate prospectively."
 )
 
 
@@ -203,9 +207,9 @@ PredictResponse.model_rebuild()
 # ==================== Treatment Context (F24) ====================
 
 TREATMENT_RUO_DISCLAIMER = (
-    "Shows historical outcomes from GEO cohorts where this treatment was documented. "
-    "This is not a treatment recommendation or prediction of treatment response. "
-    "Research use only — not a clinical decision-making device."
+    "Advisory only — shows historical outcomes from GEO cohorts where this treatment "
+    "was documented, to help weigh options for discussion with the care team. Not a "
+    "prescription and not a prediction that this patient will respond. Research use only."
 )
 
 

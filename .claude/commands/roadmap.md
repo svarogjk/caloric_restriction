@@ -31,18 +31,20 @@ Check off features as they are implemented and verified. Use `/implement-feature
 - [x] **F14** Analysis comparison mode [L] — new `comparison_service.py` *(requires F07, F12)*
 - [x] **F15** Publication export package [L] — new `export_service.py` *(requires F07)*
 
-## Phase 4 — Clinical Decision Support (prognostic, RUO)
+## Phase 4 — Predictive biomarkers + advisory treatment guidance (RUO)
 
-See the `clinical-positioning` skill for positioning. All prognostic, research-use-only.
+See the `clinical-positioning` skill for positioning. Predictive biomarkers (treatment-effect-modifying) + advisory treatment suggestions; all advisory, hypothesis-generating, research-use-only.
 
 - [x] **F16** Surface multivariate (adjusted) Cox HRs in UI [M] — `routes.py` + `AnalysisResultsDisplay.tsx`
-- [x] **F17** Validated multi-gene prognostic signature [L] — new `signature_service.py` + `POST /api/signature` + `SignaturePanel.tsx`
+- [x] **F16b** Predictive (treatment-effect-modifying) biomarkers [M] — expression×treatment interaction in `survival_analysis_service.py` + UI badge/panel
+- [x] **F17** Validated multi-gene risk signature [L] — new `signature_service.py` + `POST /api/signature` + `SignaturePanel.tsx`
 - [x] **F18** Clinical nomogram (SVG) [M] — new `NomogramSVG.tsx` *(consumes F17 model)*
 - [x] **F19** Established-signature concordance benchmark [M] — new `ConcordanceBenchmark.tsx` + `establishedSignatures.ts`
 - [x] **F20** Oncologist Mode gallery [M] — new `gallery_routes.py` + `OncologistGallery.tsx`
 - [x] **F21** Plain-language interpretation + AI clinician summary [S/M] — `POST /api/chat/interpret` + `ClinicianSummary.tsx` + `InfoTooltip.tsx`
-- [x] **F22** One-page printable clinical evidence report [M] — new `ClinicalReport.tsx` + `@media print` in `index.css`
-- [x] **F23** Single-sample risk score (RUO) [L] — `signature_service.py` + `POST /api/predict` *(consumes F17 model)*
+- [x] **F22** One-page printable predictive evidence report [M] — new `ClinicalReport.tsx` + `@media print` in `index.css`
+- [x] **F23** Single-sample risk score + advisory treatments (RUO) [L] — `signature_service.py` + `POST /api/predict` + `POST /api/chat/therapy-rationale` *(consumes F17 model)*
+- [x] **F24** Treatment context — outcomes across documented treatment cohorts [L] — `treatment_context_service.py` + `POST /api/treatment-context`
 
 ## Competitive Positioning
 

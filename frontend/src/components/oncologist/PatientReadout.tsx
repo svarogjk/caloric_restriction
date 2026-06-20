@@ -26,8 +26,9 @@ interface PatientReadoutProps {
 }
 
 /**
- * Shared prognostic readout for a single scored patient — used by both the
- * in-results patient panel and Oncologist Mode. Prognostic, research use only.
+ * Shared predictive readout for a single scored patient — used by both the
+ * in-results patient panel and Oncologist Mode. Predicts an outcome risk group
+ * and surfaces advisory treatment suggestions. Advisory, research use only.
  */
 const PatientReadout: React.FC<PatientReadoutProps> = ({
     prediction: result, modelId, cancerLabel, modelIsDemo, referenceCurves, timeUnit = 'days',
@@ -41,7 +42,7 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
 
     return (
         <div className="mt-6 space-y-4">
-            <h2 className="text-lg font-semibold text-gray-800">Prognostic readout</h2>
+            <h2 className="text-lg font-semibold text-gray-800">Predictive readout</h2>
 
             <div className="flex flex-wrap items-center gap-3">
                 <span
@@ -158,19 +159,32 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
             )}
 
             <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                <strong>Prognostic, research use only — not a treatment-selection device.</strong> This estimates an
-                outcome-association risk group from tumour expression{result.scored_on.startsWith('combined') ? ' and clinical covariates' : ''};
-                it does not predict response to any therapy. Single-sample estimates are uncertain and
-                cross-platform normalization is approximate. Discuss with the care team.
+                <strong>Predictive risk estimate — advisory, research use only.</strong> This predicts an
+                outcome risk group from tumour expression{result.scored_on.startsWith('combined') ? ' and clinical covariates' : ''} and,
+                below, surfaces treatments worth discussing — grounded in documented evidence and historical
+                cohort outcomes. It is not a prescription or a guarantee of response. Single-sample estimates
+                are uncertain and cross-platform normalization is approximate. Discuss with the care team.
             </div>
 
-            <TreatmentContextToggle
-                cancerType={cancerType ?? null}
-                expressionRaw={expressionRaw ?? ''}
-                clinical={clinicalValues}
-            />
+            {/* Advisory treatment recommendation — promoted to a primary section */}
+            <div className="pt-2 border-t border-gray-100">
+                <h3 className="text-base font-semibold text-gray-800">
+                    Treatments to consider <span className="font-normal text-gray-400 text-sm">(advisory)</span>
+                </h3>
+                <p className="text-[11px] text-gray-500 mb-2">
+                    Suggestions to discuss with the tumour board, grounded in documented biomarker–therapy
+                    evidence and historical GEO cohort outcomes. Not a prescription or a prediction that this
+                    patient will respond.
+                </p>
 
-            <TherapyDirections modelId={modelId} riskGroup={result.risk_group} />
+                <TreatmentContextToggle
+                    cancerType={cancerType ?? null}
+                    expressionRaw={expressionRaw ?? ''}
+                    clinical={clinicalValues}
+                />
+
+                <TherapyDirections modelId={modelId} riskGroup={result.risk_group} />
+            </div>
 
             <button
                 onClick={() => window.print()}

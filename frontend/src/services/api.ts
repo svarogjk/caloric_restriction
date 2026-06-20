@@ -64,6 +64,19 @@ export interface GeneDatasetResult {
     adjusted_hazard_ratio?: number | null
     multivariate_cox_p?: number | null
     covariates_used?: string[] | null
+    // Predictive (treatment-effect-modifying) results (F16b)
+    interaction_p_value?: number | null
+    treatment_arms?: TreatmentArmResult[] | null
+    is_predictive?: boolean
+}
+
+export interface TreatmentArmResult {
+    name: string
+    hazard_ratio: number
+    ci_lower: number
+    ci_upper: number
+    n_samples: number
+    n_events: number
 }
 
 export interface GeneSurvivalResponse {
@@ -77,6 +90,10 @@ export interface GeneSurvivalResponse {
     risk_direction_consistency: number
     datasets: string[]
     per_dataset_results: GeneDatasetResult[] | null
+    // Predictive (treatment-effect-modifying) cross-cohort summary (F16b)
+    is_predictive?: boolean
+    n_predictive_datasets?: number
+    min_interaction_p_value?: number | null
 }
 
 export interface SurvivalAnalysisResponse {

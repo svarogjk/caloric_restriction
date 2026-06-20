@@ -3,10 +3,12 @@
 Answers: "In GEO cohorts where patients received [treatment], how did patients
 with this expression profile fare?"
 
-This is PROGNOSTIC-IN-TREATED-COHORTS, not predictive of treatment response.
-The service builds one SignatureService model per (cancer_type, treatment) pair
-from GEO datasets whose search query includes the treatment name.  Model IDs are
-stable (`treatment_{cancer}_{slug}`) so they survive restarts.
+This powers ADVISORY treatment context: outcomes in cohorts that received a given
+treatment, surfaced as options to consider/discuss — not a prescription and not a
+prediction that the patient will respond. The service builds one SignatureService
+model per (cancer_type, treatment) pair from GEO datasets whose search query
+includes the treatment name.  Model IDs are stable (`treatment_{cancer}_{slug}`)
+so they survive restarts.
 
 Build lifecycle
 --------------

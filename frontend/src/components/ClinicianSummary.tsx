@@ -10,7 +10,7 @@ interface ClinicianSummaryProps {
 /**
  * F21 — AI clinician summary grounded in the real AnalysisResponse. Sends the
  * top genes (with HRs + GSEs) to the pydantic-ai agent and renders a plain-
- * language, prognostic-not-predictive interpretation with its Domain Score.
+ * language, advisory predictive interpretation with its Domain Score.
  */
 const ClinicianSummary: React.FC<ClinicianSummaryProps> = ({ results, model }) => {
     const [summary, setSummary] = useState<string | null>(null)
@@ -72,7 +72,7 @@ const ClinicianSummary: React.FC<ClinicianSummaryProps> = ({ results, model }) =
                 <div className="mt-2">
                     <p className="text-xs text-gray-500 mb-2">
                         Generate a plain-language interpretation grounded in these genes, hazard ratios,
-                        and cohorts. Prognostic, research use only.
+                        and cohorts. Advisory predictive, research use only.
                     </p>
                     <button
                         onClick={handleGenerate}

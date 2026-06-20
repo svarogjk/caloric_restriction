@@ -64,7 +64,11 @@ _BASE_SYSTEM_PROMPT = """You are a domain-specific bioinformatics assistant for 
 - HR > 1: high expression = worse survival (oncogenic marker)
 - HR < 1: high expression = protective
 - Log-rank p < 0.05 = statistically significant survival difference
-- I² > 50% = substantial heterogeneity across datasets"""
+- I² > 50% = substantial heterogeneity across datasets
+- Predictive (treatment-effect-modifying) biomarker = its survival effect DIFFERS by treatment arm (significant expression×treatment interaction p); contrast with a purely prognostic gene whose effect is treatment-independent
+
+## Positioning
+- Treatment guidance is ADVISORY and hypothesis-generating — "treatments to consider/discuss", grounded in documented evidence; never a prescription or a guarantee of response. Research use only."""
 
 
 def _build_settings_block(user_settings: dict) -> str:

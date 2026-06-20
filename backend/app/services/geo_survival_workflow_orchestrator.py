@@ -43,6 +43,10 @@ class GeneSurvivalOccurrence:
     predominant_risk: str  # "high_risk" or "low_risk"
     # Per-dataset detailed results
     per_dataset_results: List[Dict[str, Any]] = None
+    # Predictive (treatment-effect-modifying) cross-cohort summary (F16b)
+    is_predictive: bool = False
+    n_predictive_datasets: int = 0
+    min_interaction_p_value: Optional[float] = None
 
 
 @dataclass
@@ -556,10 +560,22 @@ class GEOSurvivalWorkflowOrchestrator:
                         logger.warning(f"Dataset {dataset.accession} has too few genes ({n_genes})")
                         return None
                     
-                    # Check gene mapping
+                    # Check gene mapping — gene-level datasets (index already = gene symbols) can proceed
+                    # without a probe mapping; the cancer filter's index-based fallback handles them.
                     if not loaded_data.probe_to_gene_mapping or len(loaded_data.probe_to_gene_mapping) == 0:
-                        logger.warning(f"Dataset {dataset.accession} - gene mapping failed")
-                        return None
+                        sample_idx = loaded_data.expression_matrix.index[:10].tolist()
+                        looks_gene_level = all(
+                            str(v).replace('-', '').replace('_', '').isalpha() or
+                            (str(v)[0].isalpha() and len(str(v)) <= 12)
+                            for v in sample_idx if str(v) not in ('nan', '')
+                        )
+                        if not looks_gene_level:
+                            logger.warning(f"Dataset {dataset.accession} - gene mapping failed")
+                            return None
+                        logger.info(
+                            f"Dataset {dataset.accession} - no probe mapping but index appears to be "
+                            f"gene symbols (gene-level dataset), proceeding to cancer filter"
+                        )
 
                     # Filter to cancer genes if requested
                     if cancer_genes_only:
@@ -787,6 +803,7 @@ class GEOSurvivalWorkflowOrchestrator:
                         'log_rank_p_values': [],
                         'risk_directions': [],
                         'per_dataset_results': [],
+                        'interaction_p_values': [],  # predictive (F16b)
                     }
                 
                 # Skip if this dataset has already been processed for this gene (prevents duplicates)
@@ -801,6 +818,8 @@ class GEOSurvivalWorkflowOrchestrator:
                 gene_data[gene_identifier]['cox_p_values'].append(gene.cox_p_value)
                 gene_data[gene_identifier]['log_rank_p_values'].append(gene.log_rank_p_value)
                 gene_data[gene_identifier]['risk_directions'].append(gene.expression_direction)
+                if gene.is_predictive and gene.interaction_p_value is not None:
+                    gene_data[gene_identifier]['interaction_p_values'].append(gene.interaction_p_value)
 
                 # Store per-dataset result for meta-analysis
                 per_dataset_entry: Dict[str, Any] = {
@@ -819,6 +838,10 @@ class GEOSurvivalWorkflowOrchestrator:
                     'adjusted_hazard_ratio': gene.adjusted_hazard_ratio,
                     'multivariate_cox_p': gene.multivariate_cox_p,
                     'covariates_used': gene.covariates_used,
+                    # Predictive (treatment-effect-modifying) results (F16b)
+                    'interaction_p_value': gene.interaction_p_value,
+                    'treatment_arms': gene.treatment_arms,
+                    'is_predictive': gene.is_predictive,
                 }
                 
                 # Include KM curve data if available
@@ -864,7 +887,12 @@ class GEOSurvivalWorkflowOrchestrator:
                 max_risk_count = max(risk_counts.values())
                 risk_consistency = max_risk_count / n_datasets
                 predominant_risk = risk_counts.most_common(1)[0][0]
-                
+
+                # Predictive (treatment-effect-modifying) summary (F16b)
+                interaction_ps = data['interaction_p_values']
+                n_predictive = len(interaction_ps)
+                min_interaction_p = min(interaction_ps) if interaction_ps else None
+
                 common_genes.append(GeneSurvivalOccurrence(
                     gene_id=gene_identifier,
                     gene_symbol=data['symbol'],
@@ -875,7 +903,10 @@ class GEOSurvivalWorkflowOrchestrator:
                     datasets=data['datasets'],
                     risk_direction_consistency=risk_consistency,
                     predominant_risk=predominant_risk,
-                    per_dataset_results=data['per_dataset_results']
+                    per_dataset_results=data['per_dataset_results'],
+                    is_predictive=n_predictive > 0,
+                    n_predictive_datasets=n_predictive,
+                    min_interaction_p_value=min_interaction_p,
                 ))
         
         # Sort by number of datasets and then by average p-value

@@ -177,6 +177,10 @@ def _build_analysis_response(
                     adjusted_hazard_ratio=ds_result.get('adjusted_hazard_ratio'),
                     multivariate_cox_p=ds_result.get('multivariate_cox_p'),
                     covariates_used=ds_result.get('covariates_used'),
+                    # Predictive (treatment-effect-modifying) results (F16b)
+                    interaction_p_value=ds_result.get('interaction_p_value'),
+                    treatment_arms=ds_result.get('treatment_arms'),
+                    is_predictive=ds_result.get('is_predictive', False),
                 ))
 
         genes_response.append(GeneSurvivalResponse(
@@ -189,7 +193,11 @@ def _build_analysis_response(
             predominant_risk=gene.predominant_risk,
             risk_direction_consistency=gene.risk_direction_consistency,
             datasets=gene.datasets,
-            per_dataset_results=per_dataset_responses
+            per_dataset_results=per_dataset_responses,
+            # Predictive (treatment-effect-modifying) cross-cohort summary (F16b)
+            is_predictive=getattr(gene, 'is_predictive', False),
+            n_predictive_datasets=getattr(gene, 'n_predictive_datasets', 0),
+            min_interaction_p_value=getattr(gene, 'min_interaction_p_value', None),
         ))
 
     # Generate diagnostics if no genes found

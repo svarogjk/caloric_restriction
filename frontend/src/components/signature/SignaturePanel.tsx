@@ -18,7 +18,7 @@ type SigTab = 'overview' | 'nomogram' | 'concordance'
 
 /**
  * F17 centerpiece UI + F18/F19 consumers.
- * Builds a validated multi-gene prognostic signature and exposes the locked
+ * Builds a validated multi-gene risk signature and exposes the locked
  * model through an overview, a nomogram (F18), and a concordance benchmark (F19).
  * Single-patient scoring lives in the unified Patient tab (PatientPanel).
  */
@@ -47,11 +47,11 @@ const SignaturePanel: React.FC<SignaturePanelProps> = ({ resultId, query }) => {
         return (
             <div className="p-6 text-center space-y-4">
                 <div>
-                    <h4 className="font-semibold text-gray-800">Prognostic Signature</h4>
+                    <h4 className="font-semibold text-gray-800">Risk Signature</h4>
                     <p className="text-sm text-gray-500 mt-1 max-w-lg mx-auto">
                         Build a validated multi-gene risk score (continuous Cox model) trained on one cohort and
                         validated on independent GEO cohorts with Harrell's C-index. Stratifies patients into
-                        low / intermediate / high risk groups. <span className="font-medium">Prognostic, research use only.</span>
+                        low / intermediate / high risk groups. <span className="font-medium">Predictive + advisory, research use only.</span>
                     </p>
                 </div>
                 {error && (

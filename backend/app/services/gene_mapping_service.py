@@ -945,9 +945,10 @@ class GeneMappingService:
                         if symbol_idx is None:
                             for idx, header in enumerate(headers):
                                 header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                                # Exclude GENE_ID - we want gene symbols, not numeric Entrez IDs
-                                if 'GENE_ID' not in header_clean and 'GENEID' not in header_clean:
-                                    if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL', 
+                                # Exclude GENE_ID and UNIGENE columns (UniGene IDs like Hs.XXXXX are not HGNC symbols)
+                                if ('GENE_ID' not in header_clean and 'GENEID' not in header_clean
+                                        and 'UNIGENE' not in header_clean):
+                                    if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL',
                                                                          'ORF', 'GENE', 'DESCRIPTION', 'PRODUCT']):
                                         symbol_idx = idx
                                         break
@@ -999,10 +1000,18 @@ class GeneMappingService:
                         logger.debug(f"{platform_id}: Processed {lines_processed} lines, found {len(mapping)} mappings")
             
             if mapping:
+                sample = list(mapping.values())[:100]
+                unigene_count = sum(1 for v in sample if str(v).startswith('Hs.'))
+                if unigene_count > len(sample) / 2:
+                    logger.warning(
+                        f"{platform_id}: mapping contains UniGene IDs (Hs.XXXXX) instead of "
+                        f"HGNC symbols — discarding ({unigene_count}/{len(sample)} sampled values are UniGene IDs)"
+                    )
+                    return None
                 logger.info(f"Parsed GPL file for {platform_id}: {len(mapping)} probes from {lines_processed} lines")
             else:
                 logger.warning(f"No valid mappings found in GPL file for {platform_id} ({lines_processed} lines processed)")
-            
+
             return mapping if mapping else None
         
         except Exception as e:

@@ -342,7 +342,7 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                     <button
                         onClick={() => window.print()}
                         className="text-xs px-2 py-1 rounded border transition-colors bg-white/20 text-white border-white/30 hover:bg-white/30"
-                        title="Print a one-page prognostic evidence report (research use only)"
+                        title="Print a one-page predictive evidence report (advisory, research use only)"
                     >
                         Print Report
                     </button>
@@ -483,7 +483,7 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                             <div>
                                 <h4 className="font-medium text-gray-800 mb-2 flex items-center gap-1">
                                     Top Survival-Associated Genes
-                                    <InfoTooltip text="Genes whose expression level tracks with patient survival across multiple independent cohorts. HR > 1 means higher expression is associated with worse outcome (higher risk); HR < 1 means it is associated with better outcome (protective). Prognostic association only — not a treatment recommendation." />
+                                    <InfoTooltip text="Genes whose expression level tracks with patient survival across multiple independent cohorts. HR > 1 means higher expression is associated with worse outcome (higher risk); HR < 1 means it is associated with better outcome (protective). Genes flagged 'Predictive' have a survival effect that differs by treatment arm. Advisory, research use only — not a binding treatment recommendation." />
                                 </h4>
                                 <div className="space-y-2">
                                     {sortedGenes.slice(0, 5).map((gene) => (
@@ -675,6 +675,14 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                                                 {gene.gene_symbol && (
                                                     <span className="text-xs text-gray-500 ml-1">({gene.gene_id})</span>
                                                 )}
+                                                {gene.is_predictive && (
+                                                    <span
+                                                        className="ml-2 px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-100 text-amber-700 align-middle"
+                                                        title="Treatment-effect-modifying (predictive) biomarker: its survival association differs by treatment arm in at least one cohort. Hypothesis-generating, research use only."
+                                                    >
+                                                        Predictive
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                         <div className="flex items-center gap-4">
@@ -733,7 +741,7 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                                                             </h5>
                                                             <span
                                                                 className="text-[10px] text-gray-400 cursor-help"
-                                                                title="Hazard ratio for gene expression after adjusting for available clinical covariates (e.g. age, stage, grade). Prognostic, not predictive of drug response."
+                                                                title="Hazard ratio for gene expression after adjusting for available clinical covariates (e.g. age, stage, grade). For treatment-effect-modifying (predictive) signal, see the Predictive section below."
                                                             >
                                                                 ⓘ
                                                             </span>
@@ -775,6 +783,62 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                                                                 Adjusted for: {allCovariates.join(', ')}
                                                             </p>
                                                         )}
+                                                    </div>
+                                                )
+                                            })()}
+
+                                            {/* F16b: Predictive (treatment-effect-modifying) biomarker */}
+                                            {(() => {
+                                                const predictive = (gene.per_dataset_results ?? []).filter(
+                                                    (d) => d.is_predictive && d.treatment_arms && d.treatment_arms.length >= 2
+                                                )
+                                                if (predictive.length === 0) return null
+                                                return (
+                                                    <div className="mt-3 pt-3 border-t border-dashed border-amber-200">
+                                                        <div className="flex items-center gap-1 mb-1">
+                                                            <h5 className="text-xs font-semibold text-amber-700">
+                                                                Predictive (treatment-effect-modifying)
+                                                            </h5>
+                                                            <InfoTooltip text="This gene's association with survival DIFFERS by treatment arm (significant expression × treatment interaction). Per-arm hazard ratios are shown below. Predictive biomarker signal is hypothesis-generating — validate prospectively; research use only." />
+                                                        </div>
+                                                        {predictive.map((d) => (
+                                                            <div key={d.dataset_id} className="mb-2">
+                                                                <div className="text-[11px] text-gray-500">
+                                                                    {d.dataset_id} · interaction p={
+                                                                        d.interaction_p_value == null
+                                                                            ? '—'
+                                                                            : d.interaction_p_value < 0.001
+                                                                                ? d.interaction_p_value.toExponential(1)
+                                                                                : d.interaction_p_value.toFixed(3)
+                                                                    }
+                                                                </div>
+                                                                <table className="w-full text-xs mt-0.5">
+                                                                    <thead>
+                                                                        <tr className="text-gray-400 text-left">
+                                                                            <th className="font-medium pr-2">Arm</th>
+                                                                            <th className="font-medium pr-2">HR (expression)</th>
+                                                                            <th className="font-medium">n (events)</th>
+                                                                        </tr>
+                                                                    </thead>
+                                                                    <tbody>
+                                                                        {(d.treatment_arms ?? []).map((arm) => (
+                                                                            <tr key={arm.name} className="text-gray-600">
+                                                                                <td className="pr-2 py-0.5">{arm.name}</td>
+                                                                                <td className={`pr-2 py-0.5 font-medium ${
+                                                                                    arm.hazard_ratio > 1 ? 'text-red-600' : 'text-blue-600'
+                                                                                }`}>
+                                                                                    {arm.hazard_ratio.toFixed(2)} ({arm.ci_lower.toFixed(2)}–{arm.ci_upper.toFixed(2)})
+                                                                                </td>
+                                                                                <td className="py-0.5">{arm.n_samples} ({arm.n_events})</td>
+                                                                            </tr>
+                                                                        ))}
+                                                                    </tbody>
+                                                                </table>
+                                                            </div>
+                                                        ))}
+                                                        <p className="text-[10px] text-amber-600/80 mt-1">
+                                                            Hypothesis-generating; interaction tests are underpowered in small arms. Research use only.
+                                                        </p>
                                                     </div>
                                                 )
                                             })()}

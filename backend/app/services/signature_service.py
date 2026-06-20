@@ -885,7 +885,7 @@ class SignatureService:
     def build_demo_signature(
         self,
         max_genes: int = 12,
-        query: str = "Demo prognostic signature (synthetic)",
+        query: str = "Demo risk signature (synthetic)",
         cancer_type: str = "demo",
     ) -> PrognosticModel:
         """Synthesise a fully-formed model with a genuine prognostic signal so

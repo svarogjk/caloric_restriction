@@ -122,7 +122,7 @@ The first render is almost never pixel-perfect on new slides. Check:
 
 ## Clinical Positioning Deck
 
-**Title:** GEO Survival Analysis: Prognostic Decision Support
+**Title:** GEO Survival Analysis: Predictive Biomarkers & Advisory Treatment Guidance
 
 **Audience:** Oncologists, clinical researchers, precision medicine leads
 
@@ -134,24 +134,25 @@ The first render is almost never pixel-perfect on new slides. Check:
 
 | # | Title | Template | Notes |
 |---|-------|----------|-------|
-| 1 | GEO Survival Analysis: Prognostic Decision Support | `add_title_slide` | Subtitle: "Cross-cohort expression biomarkers for any cancer" |
+| 1 | GEO Survival Analysis: Predictive Biomarkers & Advisory Treatment Guidance | `add_title_slide` | Subtitle: "Cross-cohort expression biomarkers for any cancer" |
 | 2 | The Gap: TCGA-Locked Tools Leave Rare Cancers Behind | `add_stat_cards_slide` | Stats: 200K+ GEO studies, 3 major tools TCGA-only |
 | 3 | Competitive Landscape | `add_table_slide` | Us vs KMplot / GEPIA2 / OncoKB / cBioPortal — highlight GEO breadth + cross-cohort |
-| 4 | Prognostic vs Predictive: The Hard Boundary | `add_two_col_slide` | Left: what we do (expression → survival). Right: what we don't claim (drug response). |
+| 4 | What "Predictive" Means Here — and What It Doesn't | `add_two_col_slide` | Left: what we do (treatment-effect-modifying biomarkers via expression×treatment interaction; advisory treatments to discuss from CIViC/DGIdb + cohort outcomes). Right: what we don't claim (validated companion diagnostic, prescription, de-novo drug-matching) — advisory, research use only. |
 | 5 | Cross-Cohort Meta-Analysis: Why 8 Cohorts >> 1 | `add_workflow_slide` | Steps: search → download → Cox per dataset → rank by consistency → forest + I² |
 | 6 | Demo: Natural Language Query → Results in 5 Min | `add_image_slide` | Screenshot: starting_page.png |
 | 7 | Volcano Plot & Hazard Ratios | `add_image_slide` | Screenshot: volcano_plot.png |
 | 8 | Kaplan-Meier Curves: Population-Level Evidence | `add_image_slide` | Screenshot: kaplan_meier_curves.png |
 | 9 | Forest Plot: Reproducibility Across Institutions | `add_two_col_slide` | Left: forest plot reading guide. Right: I² / Cochran Q interpretation |
 | 10 | Stratified Medicine: High / Intermediate / Low Risk | `add_stat_cards_slide` | F17 roadmap: continuous Cox risk score + C-index validation (Oncotype DX logic) |
-| 11 | Where We Fit in the Clinical Workflow | `add_two_col_slide` | Left: complementary to mutation-matching tools (OncoKB, cBioPortal). Right: expression fills the prognosis gap |
-| 12 | Roadmap: Toward Clinical-Grade Decision Support | `add_pipeline_slide` | F16 multivariate HR → F17 signature → F18 nomogram → F20 Oncologist Mode |
+| 11 | Where We Fit in the Clinical Workflow | `add_two_col_slide` | Left: complementary to companion-diagnostic tools (OncoKB, cBioPortal). Right: expression adds predictive biomarkers + advisory treatment guidance |
+| 12 | Roadmap: Toward Clinical-Grade Decision Support | `add_pipeline_slide` | F16 multivariate HR → F16b predictive biomarkers → F17 signature → F18 nomogram → F20 Oncologist Mode → F24 treatment context |
 
 ### Framing Rules (enforced in script docstring and copy)
 
-- **Never use "predictive"** to mean drug response — only in statistical sense (C-index, discrimination)
+- **"Predictive" = treatment-effect-modifying biomarkers** (expression×treatment interaction) + **advisory** treatment guidance — never a validated companion diagnostic, prescription, or de-novo drug-matching claim
+- Treatment suggestions are framed **"to consider/discuss"**, never directives
 - Every competitive comparison: **"complementary to, not replacing"** OncoKB / cBioPortal
-- Slide 4 and slide 10: carry **"For Research Use Only / Investigational"** disclaimer text
+- Slide 4 and slide 10: carry **"Advisory / For Research Use Only"** disclaimer text
 - Cite real GSE accession IDs in any dataset examples (e.g. GSE12345)
 - Accent colors: TEAL for our advantages, CORAL for the problem/gap slides (2, 4)
 

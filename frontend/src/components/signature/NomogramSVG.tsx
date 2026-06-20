@@ -9,7 +9,7 @@ interface NomogramProps {
  * F18 — Clinical nomogram rendered as a custom SVG directly from the locked
  * Cox coefficients. Each gene gets a points axis; the per-gene contribution is
  * coefficient * (+1 SD of expression), scaled so the most influential gene
- * spans 0–100 points. Prognostic, not predictive of therapy response.
+ * spans 0–100 points. Predicts outcome risk; advisory, research use only.
  */
 const NomogramSVG: React.FC<NomogramProps> = ({ model }) => {
     const rows = React.useMemo(() => {
@@ -38,7 +38,7 @@ const NomogramSVG: React.FC<NomogramProps> = ({ model }) => {
 
     return (
         <div className="overflow-x-auto">
-            <svg width={width} height={height} role="img" aria-label="Prognostic nomogram">
+            <svg width={width} height={height} role="img" aria-label="Predictive risk nomogram">
                 {/* Points header axis */}
                 <text x={left - 8} y={top - 22} textAnchor="end" fontSize={11} fill="#374151" fontWeight={600}>
                     Points
@@ -86,7 +86,7 @@ const NomogramSVG: React.FC<NomogramProps> = ({ model }) => {
             </div>
             <p className="text-[11px] text-gray-400 mt-1 ml-2">
                 Points ∝ |Cox coefficient| per +1 SD of expression. Add the points for a patient's genes to gauge
-                relative prognostic burden. Research use only — not a treatment recommendation.
+                relative predicted risk burden. Advisory, research use only — not a prescription.
             </p>
         </div>
     )

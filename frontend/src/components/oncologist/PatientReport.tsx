@@ -9,9 +9,9 @@ interface PatientReportProps {
 }
 
 /**
- * One-page printable single-patient prognostic report (Oncologist Mode variant
+ * One-page printable single-patient predictive report (Oncologist Mode variant
  * of F22). Hidden on screen via `.print-report`; shown only when printing.
- * Carries a prominent research-use-only / prognostic-not-predictive banner.
+ * Carries a prominent research-use-only / advisory banner.
  */
 const PatientReport: React.FC<PatientReportProps> = ({ cancerLabel, modelId, modelIsDemo, prediction: result }) => {
     const generated = new Date().toLocaleString()
@@ -21,19 +21,20 @@ const PatientReport: React.FC<PatientReportProps> = ({ cancerLabel, modelId, mod
         <div className="print-report">
             <div style={{ borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 12 }}>
                 <h1 style={{ fontSize: '18pt', fontWeight: 700, margin: 0 }}>
-                    Patient Prognostic Report — {cancerLabel}
+                    Patient Predictive Report — {cancerLabel}
                 </h1>
                 <p style={{ margin: '2px 0', fontSize: '10pt' }}>
-                    GEO Survival Analysis — combined clinical + expression prognostic model
+                    GEO Survival Analysis — combined clinical + expression risk model with advisory treatment context
                     {modelIsDemo ? ' (DEMO model — synthetic data)' : ''}
                 </p>
             </div>
 
             <div style={{ border: '1.5px solid #000', padding: 8, marginBottom: 12, fontSize: '9pt', fontWeight: 600 }}>
-                RESEARCH USE ONLY — NOT FOR CLINICAL DECISION-MAKING. This is a PROGNOSTIC estimate
-                of outcome association from tumour gene expression and clinical covariates. It does NOT
-                predict response to any therapy and is not a clinical decision-making device.
-                Single-sample estimates are uncertain; cross-platform normalization is approximate.
+                RESEARCH USE ONLY — NOT FOR CLINICAL DECISION-MAKING. This predicts an outcome risk group
+                from tumour gene expression and clinical covariates, and lists treatments to CONSIDER and
+                discuss, grounded in documented evidence and historical cohort outcomes. It is advisory and
+                hypothesis-generating — not a prescription, not a guarantee of response, and not a clinical
+                decision-making device. Single-sample estimates are uncertain; cross-platform normalization is approximate.
             </div>
 
             <table style={{ borderCollapse: 'collapse', marginBottom: 12 }}>
@@ -101,7 +102,7 @@ const PatientReport: React.FC<PatientReportProps> = ({ cancerLabel, modelId, mod
             )}
 
             <p style={{ fontSize: '8pt', color: '#333', marginTop: 16 }}>
-                Generated {generated} · Model {modelId}. Prognostic, research use only.
+                Generated {generated} · Model {modelId}. Predictive, advisory — research use only.
             </p>
         </div>
     )

@@ -8,7 +8,7 @@ import PatientPanel from './PatientPanel'
  * It is the curated-analysis picker: choose a cancer type (a pre-built combined
  * clinical + expression model) and score a patient via the shared PatientPanel.
  * The actual scoring path is identical to attaching a patient to any free-text
- * analysis. Prognostic, research use only.
+ * analysis. Predictive + advisory, research use only.
  */
 const OncologistMode: React.FC = () => {
     const [cancers, setCancers] = useState<GalleryCancer[]>([])
@@ -33,8 +33,8 @@ const OncologistMode: React.FC = () => {
                 <span>{selected.icon}</span> {selected.label}
             </h1>
             <p className="text-gray-500 mt-1">
-                Enter this patient's tumour data to estimate a prognostic risk group.
-                <span className="font-medium"> Prognostic, research use only.</span>
+                Enter this patient's tumour data to predict a risk group and surface advisory treatments to discuss.
+                <span className="font-medium"> Predictive + advisory, research use only.</span>
             </p>
 
             <div className="mt-3 text-xs text-gray-500">
@@ -65,9 +65,9 @@ const CancerPicker: React.FC<{
     <div className="max-w-5xl mx-auto px-4 py-8">
         <h1 className="text-2xl font-semibold text-gray-800">Oncologist Mode</h1>
         <p className="text-gray-500 mt-1">
-            Pick a cancer type, then enter your patient's tumour data to estimate a prognostic risk group
-            from a cross-cohort-validated model.
-            <span className="font-medium"> Prognostic, research use only — not a treatment-selection device.</span>
+            Pick a cancer type, then enter your patient's tumour data to predict a risk group and surface advisory
+            treatments to discuss, from a cross-cohort-validated model.
+            <span className="font-medium"> Predictive + advisory, research use only — not a prescription.</span>
         </p>
 
         {error && <p className="text-red-600 mt-4">{error}</p>}

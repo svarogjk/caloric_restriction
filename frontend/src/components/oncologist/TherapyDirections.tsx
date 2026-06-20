@@ -8,10 +8,10 @@ interface TherapyDirectionsProps {
 }
 
 /**
- * Grounded "therapeutic directions to discuss" (Oncologist Mode). On demand,
- * the AI writes hypotheses over REAL CIViC/DGIdb evidence for the risk-driving
- * genes — never a treatment recommendation. The cited associations are always
- * shown alongside the prose, and a prominent banner keeps the framing honest.
+ * Grounded "treatments to consider" (Oncologist Mode). On demand, the AI writes
+ * advisory suggestions over REAL CIViC/DGIdb evidence for the risk-driving genes —
+ * advisory, not a prescription. The cited associations are always shown alongside
+ * the prose, and a prominent banner keeps the framing honest.
  */
 const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGroup, genes }) => {
     const [data, setData] = useState<TherapyRationaleResponse | null>(null)
@@ -35,7 +35,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGrou
     return (
         <div className="border border-purple-200 rounded-lg p-4 bg-purple-50/40">
             <div className="flex items-center justify-between gap-3 mb-2">
-                <h3 className="font-semibold text-gray-800">Therapeutic directions to discuss</h3>
+                <h3 className="font-semibold text-gray-800">Treatments to consider</h3>
                 <button
                     onClick={generate}
                     disabled={loading}
@@ -46,9 +46,9 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGrou
             </div>
 
             <div className="text-xs font-semibold text-purple-900 bg-purple-100 border border-purple-200 rounded p-2 mb-3">
-                Hypothesis-generating only — NOT a treatment recommendation. These are documented
-                biomarker associations from public knowledge bases for tumour-board discussion.
-                Prognostic, research use only; this tool does not predict response to any therapy.
+                Advisory only — treatments to CONSIDER and discuss with the tumour board, grounded in
+                documented biomarker–therapy associations from public knowledge bases. Hypothesis-generating
+                and research use only; not a prescription and not a guarantee that this patient will respond.
             </div>
 
             {error && (

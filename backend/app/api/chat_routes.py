@@ -442,13 +442,16 @@ def _build_interpretation_prompt(req: InterpretRequest) -> str:
 
     return (
         f"A user ran a cross-cohort GEO survival analysis for: \"{req.query}\". "
-        f"It found prognostic genes across {req.n_datasets_with_survival} independent cohorts "
-        f"with survival data. Top genes:\n{genes_block}\n\n"
+        f"It surfaced expression biomarkers across {req.n_datasets_with_survival} independent cohorts "
+        f"with survival data; some are predictive (their survival effect differs by treatment arm). "
+        f"Top genes:\n{genes_block}\n\n"
         "Write a concise plain-language interpretation for an oncologist audience. Requirements:\n"
         "1. Reference the specific genes, their hazard ratios, and GSE accession IDs above.\n"
-        "2. Explain what HR>1 vs HR<1 means for risk in lay terms.\n"
-        "3. Emphasise this is PROGNOSTIC (outcome association), NOT predictive of any drug response, "
-        "and is research-use-only — never a treatment recommendation.\n"
+        "2. Explain what HR>1 vs HR<1 means for risk in lay terms, and note that a 'predictive' "
+        "biomarker is one whose effect depends on treatment.\n"
+        "3. Frame any treatment angle as ADVISORY and hypothesis-generating — suggestions to discuss "
+        "with the tumour board, grounded in the data, to be validated prospectively. Research use only; "
+        "not a binding clinical decision or a prescription.\n"
         "4. Keep it under 180 words. Do not invent genes, datasets, or numbers not listed above."
     )
 
@@ -479,8 +482,8 @@ async def interpret_results(request: InterpretRequest):
 # ============ Grounded therapeutic-rationale (Oncologist Mode) ============
 
 class TherapyRationaleRequest(BaseModel):
-    """Request AI 'therapeutic directions to discuss' for a patient's risk-driving
-    genes, grounded in documented CIViC/DGIdb evidence (never a recommendation)."""
+    """Request AI 'treatments to consider/discuss' for a patient's risk-driving
+    genes — advisory suggestions grounded in documented CIViC/DGIdb evidence."""
     model_id: str
     genes: list[str] = Field(default_factory=list, description="Risk-driving genes; if empty, derived from the model")
     risk_group: Optional[str] = None
@@ -507,15 +510,17 @@ class TherapyRationaleResponse(BaseModel):
     evidence: list[TherapyEvidenceRecord]
     domain_score: int
     disclaimer: str = (
-        "Hypothesis-generating only — not a treatment recommendation. These are "
-        "documented biomarker associations from public knowledge bases for "
-        "tumour-board discussion. Prognostic, research use only; this tool does "
-        "not predict response to any therapy."
+        "Advisory only — treatments to consider and discuss with the care team, "
+        "grounded in documented biomarker–therapy evidence from public knowledge "
+        "bases and historical GEO cohort outcomes. Hypothesis-generating and "
+        "research use only; not a prescription, and not a guarantee that this "
+        "patient will respond. Validate prospectively."
     )
 
 
-# Imperative / prescribing phrasing we refuse to emit (keeps us on the
-# prognostic-not-predictive, non-device side of the line).
+# Imperative / prescribing phrasing we refuse to emit. Treatment guidance is
+# advisory ("to consider/discuss"), never directive — this keeps us a research
+# information source, on the non-device side of the line.
 _PRESCRIBING_PATTERN = re.compile(
     r"\b(administer|prescribe|prescribing|initiate (?:therapy|treatment)|"
     r"start (?:the )?(?:patient|therapy|treatment)|"
@@ -546,16 +551,16 @@ def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence:
     rg = f" assigned to the {risk_group}-risk group" if risk_group else ""
 
     return (
-        "A tumour-expression prognostic model flagged these genes as risk-driving in a "
+        "A tumour-expression risk model flagged these genes as risk-driving in a "
         f"patient{rg}. Below is DOCUMENTED biomarker–therapy evidence from CIViC and DGIdb "
         f"for those genes:\n{evidence_block}\n\n"
-        "Write brief 'therapeutic directions to discuss with the tumour board'. Strict requirements:\n"
+        "Write brief 'treatments to consider and discuss with the tumour board'. Strict requirements:\n"
         "1. Discuss ONLY the drugs/biomarkers in the evidence above, and cite the source "
         "(CIViC/DGIdb) and, for CIViC, the significance (sensitivity/resistance) and level.\n"
-        "2. Frame every point as a research HYPOTHESIS to discuss — do NOT instruct, prescribe, "
-        "or tell anyone to administer/start/give a drug. No imperatives.\n"
-        "3. State explicitly this is PROGNOSTIC context, research-use-only, and does NOT predict "
-        "drug response.\n"
+        "2. Frame every point as an ADVISORY research suggestion to discuss — do NOT instruct, "
+        "prescribe, or tell anyone to administer/start/give a drug. No imperatives.\n"
+        "3. State explicitly this is advisory and hypothesis-generating, grounded in documented "
+        "evidence; research-use-only; not a prescription and not a guarantee of response.\n"
         "4. If the evidence is sparse or mixed, say so. Do not invent drugs, genes, or claims.\n"
         "5. Under 180 words."
     )
@@ -563,8 +568,8 @@ def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence:
 
 @router.post("/therapy-rationale", response_model=TherapyRationaleResponse)
 async def therapy_rationale(request: TherapyRationaleRequest):
-    """Generate grounded 'therapeutic directions to discuss', anchored to real
-    CIViC/DGIdb evidence for the patient's risk-driving genes. Hypotheses only —
+    """Generate grounded advisory 'treatments to consider', anchored to real
+    CIViC/DGIdb evidence for the patient's risk-driving genes. Advisory only —
     a prescribing-language guardrail strips any output that reads as a directive,
     and absent evidence yields an honest 'none found' rather than speculation."""
     if _signature_service is None or _therapy_evidence_service is None:
@@ -582,8 +587,8 @@ async def therapy_rationale(request: TherapyRationaleRequest):
 
     no_evidence_msg = (
         "No documented therapeutic associations were found in CIViC or DGIdb for these "
-        "biomarkers. This is expected for many prognostic genes and does not imply the "
-        "absence of options — discuss the patient's profile with the care team."
+        "biomarkers. This is common and does not imply the absence of options — discuss "
+        "the patient's profile with the care team."
     )
     if not evidence:
         return TherapyRationaleResponse(rationale=no_evidence_msg, evidence=[], domain_score=0)

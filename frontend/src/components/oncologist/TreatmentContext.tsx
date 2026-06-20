@@ -104,7 +104,8 @@ const TreatmentContext: React.FC<TreatmentContextProps> = ({ cancerType, express
                     <h3 className="text-base font-semibold text-gray-800">Treatment context</h3>
                     <p className="text-xs text-gray-500 mt-0.5">
                         Historical outcomes from GEO cohorts receiving each treatment — patients in the same
-                        risk group as yours. Not a treatment recommendation.
+                        risk group as yours — to help weigh options. Advisory, not a prescription or a
+                        prediction that you will respond.
                     </p>
                 </div>
                 <span className="flex-shrink-0 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">

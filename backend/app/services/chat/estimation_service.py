@@ -80,6 +80,16 @@ class QueryEstimationService:
         "progression",
         "disease-free",
         "event-free",
+        # Predictive (treatment-effect-modifying) terms — these queries still need
+        # survival data, but signal interest in the treatment-interaction analysis.
+        "treatment response",
+        "therapy response",
+        "drug response",
+        "responder",
+        "non-responder",
+        "predictive biomarker",
+        "treatment arm",
+        "treated vs untreated",
     }
 
     # Common cancer types with known GEO datasets
@@ -446,8 +456,9 @@ class QueryEstimationService:
 
         if not validation["has_survival_keywords"]:
             suggestions.append(
-                "Add survival-related terms like 'overall survival', 'prognosis', "
-                "or 'clinical outcome' to find datasets with survival data"
+                "Add outcome terms like 'overall survival', 'clinical outcome', or — "
+                "for predictive (treatment-effect-modifying) biomarkers — a treatment "
+                "context such as 'tamoxifen', 'adjuvant chemotherapy', or 'treatment response'"
             )
 
         if not validation["has_cancer_type"]:

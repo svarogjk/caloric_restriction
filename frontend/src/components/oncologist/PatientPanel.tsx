@@ -26,7 +26,7 @@ interface PatientPanelProps {
 /**
  * Unified patient personalization. Attaching patient data to ANY analysis (or a
  * curated model) auto-builds/reuses the signature and scores the patient — there
- * is no separate "build signature" step. Prognostic, research use only.
+ * is no separate "build signature" step. Predictive + advisory, research use only.
  */
 const PatientPanel: React.FC<PatientPanelProps> = ({
     resultId, modelId, label, initialCovariates, alwaysOpen, initialExpression, autoRun, cancerType,
@@ -153,8 +153,8 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
                 <>
                     <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
                         <strong>Research use only.</strong> Patient data is scored in your browser session and
-                        never stored. Attaching it auto-builds this analysis's prognostic model and estimates a
-                        risk group — it does not predict response to any therapy.
+                        never stored. Attaching it auto-builds this analysis's risk model, predicts a risk group,
+                        and surfaces advisory treatments to discuss — not a prescription or a guarantee of response.
                     </div>
 
                     <div>
@@ -213,7 +213,7 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
                             disabled={loading || !exprText.trim()}
                             className="px-4 py-2 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
                         >
-                            {loading ? 'Building model & scoring…' : prediction ? 'Re-score patient' : 'Get prognosis'}
+                            {loading ? 'Building model & scoring…' : prediction ? 'Re-score patient' : 'Predict & suggest treatments'}
                         </button>
                         {resolvedModelId && (
                             <button

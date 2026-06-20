@@ -30,10 +30,22 @@ warnings.filterwarnings('ignore')
 try:
     from lifelines import KaplanMeierFitter, CoxPHFitter
     from lifelines.statistics import logrank_test, multivariate_logrank_test
+    from lifelines.exceptions import ConvergenceError
     LIFELINES_AVAILABLE = True
 except ImportError:
     LIFELINES_AVAILABLE = False
+    ConvergenceError = Exception  # type: ignore[assignment,misc]
     logger.warning("lifelines not installed. Install with: pip install lifelines")
+
+# Cox-fit failures we treat as "no result" rather than crashing the analysis.
+_COX_FIT_ERRORS = (ConvergenceError, ValueError, KeyError, ZeroDivisionError, np.linalg.LinAlgError)
+
+# Free-text values in a GEO treatment/arm column that denote the UNTREATED /
+# control arm; everything else with a real treatment label is the treated arm.
+_UNTREATED_TOKENS = {
+    "none", "no", "untreated", "control", "placebo", "observation", "obs",
+    "no treatment", "no therapy", "vehicle", "0", "false", "absent", "naive",
+}
 
 
 # ============================================================================
@@ -74,9 +86,18 @@ class GeneSurvivalResult:
     adjusted_hazard_ratio: Optional[float] = None
     multivariate_cox_p: Optional[float] = None
     covariates_used: Optional[List[str]] = None
+    # Predictive (treatment-effect-modifying) biomarker results (F16b).
+    # interaction_p_value is the p of the expression x treatment term in a Cox
+    # model; a small value means the gene's survival association DIFFERS by
+    # treatment arm — i.e. the gene is predictive, not merely prognostic.
+    interaction_p_value: Optional[float] = None
+    # Per-arm expression hazard ratios: [{name, hazard_ratio, ci_lower, ci_upper,
+    # n_samples, n_events}, ...] — powers the per-arm forest in the UI.
+    treatment_arms: Optional[List[Dict[str, Any]]] = None
+    is_predictive: bool = False
 
 
-@dataclass 
+@dataclass
 class SurvivalAnalysisResult:
     """Complete survival analysis result for a dataset"""
     accession: str
@@ -512,6 +533,31 @@ Determine if this dataset contains survival data and identify the relevant colum
             except Exception as e:
                 logger.debug(f"Could not align metadata for multivariate Cox: {e}")
 
+        # Detect a treatment/arm column for the predictive interaction test (F16b).
+        # Independent of covariate detection — the LLM may not flag treatment as a
+        # confounder, but we still want it as the effect-modifier axis.
+        treatment_binary: Optional[pd.Series] = None
+        treatment_arm_names: Optional[Dict[int, str]] = None
+        if loaded_data.sample_metadata is not None:
+            try:
+                meta_for_tx = loaded_data.sample_metadata.loc[
+                    loaded_data.sample_metadata.index.intersection(common_samples)
+                ].reindex(common_samples)
+                tx_col = self._detect_treatment_column(
+                    meta_for_tx, exclude={survival_time_col, event_col}
+                )
+                if tx_col is not None:
+                    binarized = self._binarize_treatment(meta_for_tx[tx_col])
+                    if binarized is not None:
+                        treatment_binary, treatment_arm_names = binarized
+                        logger.info(
+                            f"Predictive analysis enabled for {loaded_data.accession}: "
+                            f"treatment column '{tx_col}' -> arms "
+                            f"{list(treatment_arm_names.values())}"
+                        )
+            except (KeyError, ValueError) as e:
+                logger.debug(f"Treatment detection failed for {loaded_data.accession}: {e}")
+
         logger.info(f"Analyzing {len(expression_matrix)} genes across {len(common_samples)} samples (filtered={len(loaded_data.expression_matrix)} total genes before sample filtering)")
 
         # Perform survival analysis for each gene
@@ -527,6 +573,8 @@ Determine if this dataset contains survival data and identify the relevant colum
                     probe_to_gene=loaded_data.probe_to_gene_mapping,
                     metadata_df=metadata_aligned,
                     covariate_columns=covariate_columns if metadata_aligned is not None else None,
+                    treatment_binary=treatment_binary,
+                    treatment_arm_names=treatment_arm_names,
                 )
                 
                 n_analyzed += 1
@@ -705,6 +753,162 @@ Determine if this dataset contains survival data and identify the relevant colum
                 found.append(col)
         return found
 
+    def _detect_treatment_column(
+        self,
+        metadata_df: pd.DataFrame,
+        exclude: Optional[set] = None,
+    ) -> Optional[str]:
+        """Identify a treatment/therapy/arm column suitable for a predictive
+        (treatment-effect-modifying) interaction test.
+
+        Returns the column name with the best coverage that binarizes into two
+        adequately-sized arms, or None. Mirrors `_detect_covariate_columns` but
+        is narrowed to treatment-exposure terms (not generic confounders).
+        """
+        exclude = exclude or set()
+        treatment_keywords = [
+            'treatment', 'therapy', 'arm', 'regimen', 'chemo', 'chemotherapy',
+            'adjuvant', 'drug', 'agent', 'tamoxifen', 'endocrine', 'radiation',
+            'radiotherapy', 'targeted', 'immunotherapy',
+        ]
+        best_col: Optional[str] = None
+        best_coverage = 0.0
+        for col in metadata_df.columns:
+            if col in exclude:
+                continue
+            coverage = metadata_df[col].notna().mean()
+            if coverage < 0.7:
+                continue
+            if not any(kw in col.lower() for kw in treatment_keywords):
+                continue
+            # Must binarize into two adequately-sized arms.
+            if self._binarize_treatment(metadata_df[col]) is None:
+                continue
+            if coverage > best_coverage:
+                best_coverage = coverage
+                best_col = col
+        return best_col
+
+    def _binarize_treatment(
+        self,
+        series: pd.Series,
+    ) -> Optional[Tuple[pd.Series, Dict[int, str]]]:
+        """Reduce a free-text GEO treatment column to a 0/1 arm indicator.
+
+        Strategy: map values whose text matches an untreated/control token to 0
+        and everything else (a real treatment label) to 1. If that split is too
+        lopsided, fall back to the two most frequent distinct categories.
+
+        Returns (binary_series_indexed_like_input, {0: nameA, 1: nameB}) or None
+        when two arms of at least `min_samples_per_group` each cannot be formed.
+        """
+        def _norm(val) -> Optional[str]:
+            if pd.isna(val):
+                return None
+            text = str(val).strip().lower()
+            if ':' in text:
+                text = text.split(':', 1)[1].strip()
+            return text or None
+
+        normalized = series.map(_norm)
+        non_null = normalized.dropna()
+        if non_null.nunique() < 2:
+            return None
+
+        min_n = self.min_samples_per_group
+
+        # Primary: treated vs untreated by token.
+        treated_mask = ~non_null.isin(_UNTREATED_TOKENS)
+        n_treated = int(treated_mask.sum())
+        n_untreated = int((~treated_mask).sum())
+        if n_treated >= min_n and n_untreated >= min_n:
+            binary = pd.Series(index=series.index, dtype="float")
+            binary.loc[non_null.index[treated_mask.values]] = 1.0
+            binary.loc[non_null.index[(~treated_mask).values]] = 0.0
+            return binary, {0: "Untreated/control", 1: "Treated"}
+
+        # Fallback: two most frequent distinct categories.
+        top2 = non_null.value_counts().head(2)
+        if len(top2) < 2 or top2.iloc[1] < min_n:
+            return None
+        (label_one, _), (label_zero, _) = top2.items()
+        binary = pd.Series(index=series.index, dtype="float")
+        in_one = non_null == label_one
+        in_zero = non_null == label_zero
+        binary.loc[non_null.index[in_one.values]] = 1.0
+        binary.loc[non_null.index[in_zero.values]] = 0.0
+        return binary, {0: label_zero.title(), 1: label_one.title()}
+
+    def _fit_interaction_cox(
+        self,
+        expression_col: pd.Series,
+        time_col: pd.Series,
+        event_col: pd.Series,
+        treatment_binary: pd.Series,
+        arm_names: Dict[int, str],
+    ) -> Optional[Tuple[float, List[Dict[str, Any]]]]:
+        """Predictive-biomarker test: fit a Cox model with an
+        ``expression x treatment`` interaction term and per-arm expression HRs.
+
+        Returns (interaction_p_value, treatment_arms) where treatment_arms lists
+        each arm's expression hazard ratio + 95% CI, or None when the model
+        cannot be fit (too few rows/events per arm, non-convergence).
+        """
+        df = pd.DataFrame({
+            "expression": expression_col,
+            "treatment": treatment_binary,
+            "time": time_col,
+            "event": event_col,
+        }).dropna()
+        if len(df) < 20:
+            return None
+
+        # Require both arms to carry enough events for a stable per-arm HR.
+        per_arm: List[Dict[str, Any]] = []
+        for arm_value in (0, 1):
+            sub = df[df["treatment"] == arm_value]
+            n = len(sub)
+            n_events = int(sub["event"].sum())
+            if n < self.min_samples_per_group or n_events < 10:
+                return None
+            try:
+                cph = CoxPHFitter()
+                cph.fit(sub[["expression", "time", "event"]], duration_col="time", event_col="event")
+                row = cph.summary.loc["expression"]
+                per_arm.append({
+                    "name": arm_names.get(arm_value, f"arm {arm_value}"),
+                    "hazard_ratio": float(np.exp(row["coef"])),
+                    "ci_lower": float(np.exp(row["coef lower 95%"])),
+                    "ci_upper": float(np.exp(row["coef upper 95%"])),
+                    "n_samples": n,
+                    "n_events": n_events,
+                })
+            except _COX_FIT_ERRORS as e:
+                logger.debug("Per-arm Cox failed: %s", e)
+                return None
+
+        # Interaction term: a significant expr x treatment coefficient means the
+        # gene's effect on survival is treatment-dependent (predictive).
+        try:
+            inter = df.copy()
+            inter["expr_x_treat"] = inter["expression"] * inter["treatment"]
+            cph = CoxPHFitter()
+            cph.fit(
+                inter[["expression", "treatment", "expr_x_treat", "time", "event"]],
+                duration_col="time",
+                event_col="event",
+            )
+            if "expr_x_treat" not in cph.summary.index:
+                return None
+            interaction_p = float(cph.summary.loc["expr_x_treat", "p"])
+        except _COX_FIT_ERRORS as e:
+            logger.debug("Interaction Cox failed: %s", e)
+            return None
+
+        if not np.isfinite(interaction_p):
+            return None
+        return interaction_p, per_arm
+
     def _fit_multivariate_cox(
         self,
         expression_col: pd.Series,
@@ -768,12 +972,18 @@ Determine if this dataset contains survival data and identify the relevant colum
         probe_to_gene: Optional[Dict[str, str]] = None,
         metadata_df: Optional[pd.DataFrame] = None,
         covariate_columns: Optional[List[str]] = None,
+        treatment_binary: Optional[pd.Series] = None,
+        treatment_arm_names: Optional[Dict[int, str]] = None,
     ) -> Optional[GeneSurvivalResult]:
         """
         Analyze survival association for a single gene
-        
+
         Uses median expression to split samples into high/low groups,
         then performs log-rank test and Cox regression.
+
+        When a treatment/arm column is supplied (`treatment_binary`), also fits an
+        expression x treatment interaction Cox model to flag the gene as a
+        predictive (treatment-effect-modifying) biomarker.
         """
         # Get gene symbol if available
         gene_symbol = probe_to_gene.get(gene_id) if probe_to_gene else None
@@ -912,6 +1122,24 @@ Determine if this dataset contains survival data and identify the relevant colum
                     covariate_candidates=covariate_columns,
                 )
 
+        # Predictive (treatment-effect-modifying) biomarker test (F16b)
+        interaction_p: Optional[float] = None
+        treatment_arms: Optional[List[Dict[str, Any]]] = None
+        is_predictive = False
+        if treatment_binary is not None and treatment_arm_names is not None:
+            arm_aligned = treatment_binary.reindex(survival_data.index)
+            if arm_aligned.notna().sum() >= self.min_samples_per_group * 2:
+                fit = self._fit_interaction_cox(
+                    expression_col=expression,
+                    time_col=survival_data['time'],
+                    event_col=survival_data['event'],
+                    treatment_binary=arm_aligned,
+                    arm_names=treatment_arm_names,
+                )
+                if fit is not None:
+                    interaction_p, treatment_arms = fit
+                    is_predictive = interaction_p < self.p_value_threshold
+
         return GeneSurvivalResult(
             gene_id=gene_id,
             gene_symbol=gene_symbol,
@@ -931,8 +1159,11 @@ Determine if this dataset contains survival data and identify the relevant colum
             adjusted_hazard_ratio=safe_float(adjusted_hr),
             multivariate_cox_p=safe_float(adjusted_p),
             covariates_used=covariates_used,
+            interaction_p_value=safe_float(interaction_p),
+            treatment_arms=treatment_arms,
+            is_predictive=is_predictive,
         )
-    
+
     def generate_kaplan_meier_data(
         self,
         loaded_data: LoadedGEOData,

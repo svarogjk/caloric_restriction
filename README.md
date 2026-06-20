@@ -29,6 +29,8 @@ GEO Survival Analysis searches the entire NCBI GEO archive (thousands of studies
 
 - **Natural language queries** — "lung adenocarcinoma survival" finds and analyzes relevant GEO datasets automatically
 - **Cross-dataset meta-analysis** — ranks genes by consistency across independent cohorts, not just one study
+- **Predictive biomarkers** — flags treatment-effect-modifying genes via an expression×treatment interaction test (per-arm HRs + interaction p)
+- **Advisory treatment guidance** — turns a patient's tumour profile into evidence-grounded treatments to discuss (CIViC/DGIdb + treatment-cohort outcomes), research use only
 - **Kaplan-Meier curves** with confidence intervals, per-dataset and combined views
 - **Forest plots** showing per-dataset hazard ratios with pooled effect and heterogeneity statistics (I²)
 - **Volcano plot** — interactive HR vs. significance scatter with clickable genes
@@ -161,11 +163,13 @@ GET    /api/results                   List user's saved results
 POST   /api/results                   Save a result explicitly
 GET    /api/health                    Health check
 
-POST   /api/signature                 Build a validated prognostic signature (F17)
+POST   /api/signature                 Build a validated risk signature (F17)
 GET    /api/signature/{id}            Fetch a built signature model
 POST   /api/predict                   Score a single sample vs a model (F23, RUO)
 GET    /api/gallery                   Oncologist Mode curated catalogue (F20)
 POST   /api/chat/interpret            AI clinician summary of a result (F21)
+POST   /api/chat/therapy-rationale    Advisory treatments to consider for a patient (RUO)
+POST   /api/treatment-context         Outcomes across documented treatment cohorts (F24, RUO)
 ```
 
 Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
@@ -187,19 +191,23 @@ Interactive docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 - [x] Pathway / GO enrichment (F11)
 - [x] Multivariate Cox regression (F13, surfaced via F16)
 
-### Clinical decision support (prognostic, research use only)
+### Predictive biomarkers + advisory treatment guidance (research use only)
 
 - [x] Adjusted (multivariate) hazard ratios in the UI (F16)
-- [x] Validated multi-gene prognostic signature with cross-cohort Harrell's C-index (F17)
+- [x] Predictive (treatment-effect-modifying) biomarkers via expression×treatment interaction (F16b)
+- [x] Validated multi-gene risk signature with cross-cohort Harrell's C-index (F17)
 - [x] Clinical nomogram + established-signature concordance benchmark (F18, F19)
 - [x] Oncologist Mode — curated cancer-type gallery (F20)
 - [x] AI clinician summary + plain-language interpretation tooltips (F21)
-- [x] One-page printable prognostic evidence report (F22)
-- [x] Single-sample prognostic risk score — research use only (F23)
+- [x] One-page printable predictive evidence report (F22)
+- [x] Single-sample risk score + advisory treatment suggestions — research use only (F23)
+- [x] Treatment context — outcomes across documented treatment cohorts (F24)
 
-> **Prognostic, not predictive.** These features estimate outcome/survival association
-> from tumour gene expression. They do **not** predict response to any specific therapy
-> and are **research-use-only** — not a clinical decision-making device.
+> **Predictive, but advisory.** The app surfaces treatment-effect-modifying (predictive)
+> biomarkers and turns a patient's tumour profile into **advisory, evidence-grounded
+> treatment suggestions** to discuss — grounded in GEO outcomes and public biomarker→therapy
+> knowledge bases (CIViC/DGIdb). It is **research-use-only and hypothesis-generating** —
+> not a prescription, not a guarantee of response, and not a clinical decision-making device.
 
 ---
 

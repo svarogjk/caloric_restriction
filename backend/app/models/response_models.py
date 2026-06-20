@@ -24,6 +24,16 @@ class HeterogeneityStats(BaseModel):
     tau_squared: Optional[float] = None
 
 
+class TreatmentArmResult(BaseModel):
+    """Expression hazard ratio within one treatment arm (predictive biomarker view)."""
+    name: str                              # e.g. "Treated", "Untreated/control"
+    hazard_ratio: float
+    ci_lower: float
+    ci_upper: float
+    n_samples: int
+    n_events: int
+
+
 class GeneDatasetResult(BaseModel):
     """Survival analysis result for a gene in a specific dataset"""
     dataset_id: str
@@ -44,6 +54,11 @@ class GeneDatasetResult(BaseModel):
     adjusted_hazard_ratio: Optional[float] = None
     multivariate_cox_p: Optional[float] = None
     covariates_used: Optional[List[str]] = None
+    # Predictive (treatment-effect-modifying) biomarker results (F16b).
+    # interaction_p_value < 0.05 ⇒ the gene's effect differs by treatment arm.
+    interaction_p_value: Optional[float] = None
+    treatment_arms: Optional[List[TreatmentArmResult]] = None
+    is_predictive: bool = False
 
 
 class GeneSurvivalResponse(BaseModel):
@@ -62,6 +77,12 @@ class GeneSurvivalResponse(BaseModel):
     per_dataset_results: Optional[List[GeneDatasetResult]] = None
     # Cross-dataset heterogeneity statistics (F16)
     heterogeneity_stats: Optional[HeterogeneityStats] = None
+    # Predictive (treatment-effect-modifying) summary across cohorts (F16b).
+    # A gene is flagged predictive when its expression x treatment interaction is
+    # significant in at least one cohort with a usable treatment column.
+    is_predictive: bool = False
+    n_predictive_datasets: int = 0
+    min_interaction_p_value: Optional[float] = None
 
 
 class AnalysisDiagnostics(BaseModel):
