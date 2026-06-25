@@ -297,6 +297,27 @@ Determine if this dataset contains survival data and identify the relevant colum
             logger.error(f"Survival data detection failed: {e}")
             return None
 
+    async def detect_survival_columns(
+        self,
+        loaded_data: LoadedGEOData
+    ) -> Optional[SurvivalDataDetectionResponse]:
+        """LLM detection first, regex fallback.
+
+        Shared by ``analyze_survival`` and the signature builder so both resolve
+        the same survival columns (the regex-only path misses non-standard names
+        like ``drfi.time``, ``t.dmfs``/``e.dmfs`` or hyphenated ``follow-up_time``).
+        """
+        detection = await self.detect_survival_data(loaded_data)
+        if detection is None or not detection.has_survival_data \
+           or detection.survival_time_column is None or detection.event_column is None:
+            logger.info(f"LLM detection failed for {loaded_data.accession}, trying regex fallback")
+            detection = self.detect_survival_data_regex(loaded_data)
+
+        if detection is None or not detection.has_survival_data \
+           or detection.survival_time_column is None or detection.event_column is None:
+            return None
+        return detection
+
     def detect_survival_data_regex(
         self,
         loaded_data: LoadedGEOData
@@ -464,18 +485,11 @@ Determine if this dataset contains survival data and identify the relevant colum
         
         # Auto-detect survival columns if not provided
         if survival_time_col is None or event_col is None:
-            detection = await self.detect_survival_data(loaded_data)
+            detection = await self.detect_survival_columns(loaded_data)
 
-            if detection is None or not detection.has_survival_data or \
-               detection.survival_time_column is None or detection.event_column is None:
-                # Try regex-based fallback before giving up
-                logger.info(f"LLM detection failed for {loaded_data.accession}, trying regex fallback")
-                detection = self.detect_survival_data_regex(loaded_data)
-
-                if detection is None or not detection.has_survival_data or \
-                   detection.survival_time_column is None or detection.event_column is None:
-                    logger.warning(f"No survival data detected in {loaded_data.accession} (LLM + regex both failed)")
-                    return None
+            if detection is None:
+                logger.warning(f"No survival data detected in {loaded_data.accession} (LLM + regex both failed)")
+                return None
 
             # Handle comma-separated column names from LLM (take the first one)
             survival_time_col = detection.survival_time_column

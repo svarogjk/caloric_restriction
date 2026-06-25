@@ -1019,8 +1019,7 @@ class SignatureService:
 
         if not cohorts:
             raise ValueError(
-                "No cohorts could be re-loaded for signature building "
-                "(expression matrices not cached locally)"
+                "No cohorts had usable survival data to build a signature for this analysis"
             )
 
         return self._build_from_cohorts(
@@ -1059,8 +1058,8 @@ class SignatureService:
             return None
 
         # Detect survival columns (LLM then regex fallback).
-        detection = survival_service.detect_survival_data_regex(loaded)
-        if detection is None or not detection.has_survival_data:
+        detection = await survival_service.detect_survival_columns(loaded)
+        if detection is None:
             return None
         time_col = (detection.survival_time_column or "").split(",")[0].strip()
         event_col = (detection.event_column or "").split(",")[0].strip()
