@@ -3078,6 +3078,76 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
     # Slide 7
     add_comparison_table_slide(prs)
 
+    # ── SECTION 3b: Clinical Reality (predictive value + responsible use) ──────
+    # Slide 7a: predictive biomarkers + benefit for real patients
+    add_two_col_slide(
+        prs,
+        "Predictive Biomarkers: Benefit for Real Patients",
+        left_header="FROM PROGNOSTIC TO PREDICTIVE",
+        left_header_color=TEAL,
+        left_bullets=[
+            "Prognostic = who is high-risk. Predictive = whose outcome changes with treatment",
+            "Tested with an  expression × treatment  interaction in a Cox model — per-arm HRs + interaction p, aggregated across independent GEO cohorts",
+            "Validated multi-gene signature → high / intermediate / low-risk groups (Harrell's C-index, cross-cohort) — stratified-medicine logic à la Oncotype DX",
+            "Single-sample scoring → one tumour profile → reference risk group + advisory, evidence-grounded treatments to discuss",
+        ],
+        right_header="WHY A PATIENT BENEFITS",
+        right_bullets=[
+            "Risk stratification can spare low-risk patients overtreatment and flag high-risk for escalation — discussed with the care team",
+            "Treatment suggestions grounded in CIViC / DGIdb biomarker→therapy evidence + outcomes from GEO cohorts where the treatment was documented",
+            "A gene significant in 8 independent cohorts carries far more weight than one significant in a single study",
+        ],
+        accent=TEAL,
+        bottom_badge="Advisory & hypothesis-generating — suggestions to discuss with the tumour board, validated prospectively",
+    )
+    # Slide 7b: what "predictive" means — and what it doesn't
+    add_two_col_slide(
+        prs,
+        "What ‘Predictive’ Means Here — and What It Doesn't",
+        left_header="WHAT WE CLAIM — HONESTLY",
+        left_header_color=TEAL,
+        left_bullets=[
+            "Surfaces treatment-effect-modifying expression biomarkers validated across cohorts",
+            "Turns a tumour profile into advisory treatment options to consider",
+            "Every output carries a research-use, validate-prospectively label",
+        ],
+        right_header="WHAT WE NEVER CLAIM",
+        right_bullets=[
+            "Not a validated companion diagnostic — never “this patient will respond to drug X”",
+            "Not a prescription — advisory “to discuss” only; directive/prescribing language is stripped at the API layer",
+            "Not de-novo drug-response modelling — only documented associations",
+            "Not a clinical decision-making device — clear of FDA-CDS / EU-MDR territory",
+        ],
+        accent=CORAL,
+        bottom_badge="Research use only · hypothesis-generating · not a prescription, not a guarantee of response, not a clinical decision device",
+    )
+    # Slide 7c: limitations in real clinical practice
+    add_gap_cards_slide(
+        prs,
+        "Limitations in Real Clinical Practice",
+        cards=[
+            ("HIPAA / PHI",
+             "Patient expression submitted for scoring is held in-memory only — never persisted, never logged; no PII in logs",
+             PURPLE),
+            ("Research use only",
+             "Not FDA-cleared, not a CDS device; complements companion-diagnostic tools, does not replace them",
+             CORAL),
+            ("Underpowered interactions",
+             "Interaction tests are weak in small per-arm cohorts; predictive claims must state this",
+             AMBER),
+            ("Non-standardized annotations",
+             "GEO treatment metadata is inconsistent; cohort comparability is limited",
+             BLUE),
+            ("Cross-platform normalization",
+             "Rank / z-within-cohort normalization is mandatory — a documented method limitation",
+             TEAL),
+            ("Validate prospectively",
+             "All findings are hypothesis-generating; clinical use requires independent prospective validation",
+             PURPLE),
+        ],
+        accent=CORAL,
+    )
+
     # ── SECTION 4: Backend Deep Dive ──────────────────────────────────────────
     add_backend_arch_visual_slide(prs)  # Slide 8: visual routes → services schema
     add_fastapi_slide(prs)              # Slide 9
@@ -3269,7 +3339,7 @@ def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(output_path)
-    print(f"Saved {output_path}  ({output_path.stat().st_size // 1024} KB,  45 slides)")
+    print(f"Saved {output_path}  ({output_path.stat().st_size // 1024} KB,  48 slides)")
 
 
 if __name__ == "__main__":
