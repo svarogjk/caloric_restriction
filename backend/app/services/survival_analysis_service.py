@@ -26,6 +26,17 @@ from app.utils.memory_tracker import track_memory, log_memory_checkpoint
 logger = get_logger(__name__)
 warnings.filterwarnings('ignore')
 
+# GEO administrative columns that are never clinically relevant — excluded from LLM detection prompt
+GEO_ADMIN_COLS = {
+    'geo_accession', 'status', 'submission_date', 'last_update_date', 'type',
+    'channel_count', 'source_name_ch1', 'organism_ch1', 'molecule_ch1',
+    'extract_protocol_ch1', 'label_ch1', 'label_protocol_ch1', 'taxid_ch1',
+    'hyb_protocol', 'scan_protocol', 'data_processing', 'platform_id',
+    'contact_name', 'contact_email', 'contact_laboratory', 'contact_department',
+    'contact_institute', 'contact_address', 'contact_city', 'contact_state',
+    'contact_zip/postal_code', 'contact_country', 'supplementary_file', 'data_row_count',
+}
+
 # Try to import survival analysis libraries
 try:
     from lifelines import KaplanMeierFitter, CoxPHFitter
@@ -276,8 +287,9 @@ class SurvivalAnalysisService:
             logger.info(f"No obvious survival columns found in {loaded_data.accession} column names")
         
         # Get column names and sample values
+        clinical_cols = [c for c in metadata_df.columns if c not in GEO_ADMIN_COLS]
         columns_info = []
-        for col in metadata_df.columns[:50]:  # Limit to first 50 columns
+        for col in clinical_cols[:60]:
             sample_values = metadata_df[col].dropna().head(5).tolist()
             columns_info.append(f"  {col}: {sample_values}")
         
@@ -343,6 +355,8 @@ Determine if this dataset contains survival data and identify the relevant colum
             re.compile(r'(?:age[_\s]?at[_\s]?death|lifespan|longevity)', re.I),
             re.compile(r'(?:os_time|rfs_time|dfs_time|pfs_time)', re.I),
             re.compile(r't\.(?:os|rfs|dfs|pfs)', re.I),
+            # os_(months)_since_* style: any non-alpha bridge between endpoint and unit
+            re.compile(r'(?:overall[_\s]?survival|os|rfs|dfs|pfs)[^a-z\d]*(?:months?|days?|years?)', re.I),
         ]
 
         # Patterns for event columns (column name matching)
@@ -355,6 +369,8 @@ Determine if this dataset contains survival data and identify the relevant colum
             re.compile(r'(?:os_event|rfs_event|dfs_event)', re.I),
             re.compile(r'e\.(?:os|rfs|dfs|pfs)', re.I),
             re.compile(r'(?:recurrence|relapse)[_\s]?(?:status|event)?', re.I),
+            # ose / rfse / dfse — common GEO abbreviations for OS/RFS event
+            re.compile(r'^(?:os|rfs|dfs|pfs|efs|dss)e$', re.I),
         ]
 
         # Patterns for survival data embedded in values (e.g., "os (months): 24")
