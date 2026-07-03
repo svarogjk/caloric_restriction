@@ -1,0 +1,2 @@
+- [Citation trust](feedback_citation_trust.md) — when coordinator gives verified file:line citations, spot-check load-bearing ones only, don't re-verify everything before shipping
+- [Therapy KM curves plan](project_therapy_km_curves.md) — plan for per-drug KM curves in TherapyDirections.tsx; 3 existing KM sources evaluated, none reusable as-is

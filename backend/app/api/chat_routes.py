@@ -18,9 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config.database import get_db
 from app.models.database import User
+from app.models.signature_models import ARM_COMPARISON_CAVEAT, TreatmentKMEvidence
 from app.api.dependencies import get_current_active_user, get_optional_current_user
 from app.services.chat import ChatService, PydanticAIService, QueryEstimationService
 from app.services.chat.agent_tools import AgentDeps
+from app.services.treatment_context_service import get_treatment_service
 
 logger = logging.getLogger(__name__)
 
@@ -503,6 +505,9 @@ class TherapyEvidenceRecord(BaseModel):
     interaction_type: Optional[str] = None   # DGIdb
     approved: Optional[bool] = None
     source_db: Optional[str] = None
+    # Real-GEO-cohort survival evidence for this drug (F24b), attached for
+    # the top few highest-confidence rows only; see _select_top_drugs.
+    cohort_km: Optional[TreatmentKMEvidence] = None
 
 
 class TherapyRationaleResponse(BaseModel):
@@ -566,6 +571,78 @@ def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence:
     )
 
 
+# Evidence strength worth the cost of a cohort-KM lookup (a Tier-2 fallback
+# build takes ~2-5 min): CIViC level A/B, or approved DGIdb interactions.
+# Lower-confidence rows (CIViC C/D/E, investigational-only DGIdb) stay
+# text-only in the UI — not worth building a cohort model for.
+_CIVIC_LEVEL_RANK = {"A": 0, "B": 1}
+_MAX_COHORT_KM_DRUGS = 5
+
+
+def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -> list[str]:
+    """Pick up to `max_n` distinct high-confidence drug names worth a
+    cohort-KM lookup, prioritized by evidence strength."""
+    def rank(e: dict) -> int:
+        if e.get("source") == "CIViC":
+            return _CIVIC_LEVEL_RANK.get((e.get("evidence_level") or "").upper(), 99)
+        return 2 if e.get("approved") else 99
+
+    eligible = sorted((e for e in evidence if rank(e) < 99), key=rank)
+    picked: list[str] = []
+    seen: set[str] = set()
+    for e in eligible:
+        key = e["drug"].strip().lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        picked.append(e["drug"])
+        if len(picked) >= max_n:
+            break
+    return picked
+
+
+async def _resolve_cohort_km(
+    model, drug: str, cohort_cache: dict
+) -> TreatmentKMEvidence:
+    """Resolve tiered real-GEO-cohort KM evidence for one suggested drug:
+    Tier 1 — true treated-vs-untreated arms within the model's training
+    cohort; Tier 2 — a treatment-matched reference cohort (may be
+    building); Tier 3 — no matching data. Never fabricates a curve.
+
+    `cohort_cache` memoizes the (LLM-backed) Tier-1 cohort load per accession
+    so checking several drugs against the same training accession in one
+    request only pays that cost once.
+    """
+    accession = model.training_accession
+    if accession and _signature_service is not None:
+        if accession not in cohort_cache:
+            try:
+                cohort_cache[accession] = await _signature_service.load_cohort_treatment_arms(accession)
+            except (ValueError, KeyError, OSError, RuntimeError) as e:
+                logger.warning("Tier-1 cohort load failed for %s: %s", accession, e)
+                cohort_cache[accession] = None
+        loaded = cohort_cache[accession]
+        if loaded is not None:
+            surv, treatment_binary, arm_names = loaded
+            arms = _signature_service.match_treatment_arm_km(surv, treatment_binary, arm_names, drug)
+            if arms:
+                return TreatmentKMEvidence(
+                    drug=drug, tier="arm_comparison", accession=accession, arms=arms,
+                    n_total=sum(a.n_samples for a in arms), caveat=ARM_COMPARISON_CAVEAT,
+                )
+
+    if model.cancer_type:
+        try:
+            return await get_treatment_service().get_or_build_km_for_drug(model.cancer_type, drug)
+        except RuntimeError as e:
+            logger.warning("Tier-2 cohort lookup unavailable for %s: %s", drug, e)
+
+    return TreatmentKMEvidence(
+        drug=drug, tier="unavailable",
+        build_error="No matching GEO cohort data available for this drug.",
+    )
+
+
 @router.post("/therapy-rationale", response_model=TherapyRationaleResponse)
 async def therapy_rationale(request: TherapyRationaleRequest):
     """Generate grounded advisory 'treatments to consider', anchored to real
@@ -617,4 +694,59 @@ async def therapy_rationale(request: TherapyRationaleRequest):
         domain_score = 0
 
     records = [TherapyEvidenceRecord(**e) for e in evidence]
+
+    # Auto-build cohort KM evidence for the top few high-confidence drugs
+    # (Tier 1 resolves inline; Tier 2 kicks off a background build and comes
+    # back as `is_building` — the frontend polls /therapy-rationale/cohort-km).
+    top_drugs = _select_top_drugs(evidence)
+    if top_drugs:
+        cohort_cache: dict = {}
+        km_by_drug: dict[str, TreatmentKMEvidence] = {}
+        for drug in top_drugs:
+            try:
+                km_by_drug[drug] = await _resolve_cohort_km(model, drug, cohort_cache)
+            except (ValueError, KeyError, OSError, RuntimeError) as e:
+                logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)
+        for record in records:
+            km = km_by_drug.get(record.drug)
+            if km is not None:
+                record.cohort_km = km
+
     return TherapyRationaleResponse(rationale=rationale, evidence=records, domain_score=domain_score)
+
+
+class CohortKMRequest(BaseModel):
+    """Poll/refresh request for per-drug cohort KM evidence (F24b) — used by
+    the frontend while a Tier-2 build is still in progress."""
+    model_id: str
+    drugs: list[str] = Field(default_factory=list)
+
+
+class CohortKMResponse(BaseModel):
+    results: list[TreatmentKMEvidence]
+
+
+@router.post("/therapy-rationale/cohort-km", response_model=CohortKMResponse)
+async def therapy_rationale_cohort_km(request: CohortKMRequest):
+    """Resolve (or re-poll) cohort KM evidence for a batch of drug names
+    against an already-built signature model. Idempotent — safe to call
+    repeatedly while a Tier-2 cohort model is still building."""
+    if _signature_service is None:
+        raise HTTPException(status_code=500, detail="Therapy services not initialized")
+
+    model = _signature_service.get_model(request.model_id)
+    if model is None:
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    drugs = request.drugs[:_MAX_COHORT_KM_DRUGS]
+    cohort_cache: dict = {}
+    results = []
+    for drug in drugs:
+        try:
+            results.append(await _resolve_cohort_km(model, drug, cohort_cache))
+        except (ValueError, KeyError, OSError, RuntimeError) as e:
+            logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)
+            results.append(TreatmentKMEvidence(
+                drug=drug, tier="unavailable", build_error="Lookup failed unexpectedly.",
+            ))
+    return CohortKMResponse(results=results)

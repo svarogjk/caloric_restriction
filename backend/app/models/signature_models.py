@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from app.models.response_models import KMCurveData
+
 
 RUO_DISCLAIMER = (
     "Research use only. This signature predicts outcome risk from tumour gene "
@@ -238,3 +240,52 @@ class TreatmentContextRequest(BaseModel):
     cancer_type: str = Field(..., description="One of: breast, lung, colorectal, ovarian, gastric, glioma")
     expression: dict[str, float] = Field(..., description="gene_symbol -> expression value for the patient")
     clinical: Optional[dict[str, float | str]] = None
+
+
+# ==================== Per-treatment KM evidence (F24b) ====================
+# Attaches a Kaplan-Meier curve to a single suggested drug in the "Treatments
+# to consider" panel (Oncologist Mode), tiered by how strong a claim the
+# underlying GEO data actually supports. See TreatmentKMEvidence.caveat for
+# the exact framing shown alongside each tier's chart.
+
+ARM_COMPARISON_CAVEAT = (
+    "Observational cohort comparison — not a randomized trial; treatment was "
+    "not randomly assigned."
+)
+COHORT_REFERENCE_CAVEAT = (
+    "Prognosis in a cohort that received this treatment — not compared to an "
+    "untreated arm."
+)
+
+
+class TreatmentArmKM(BaseModel):
+    """One treatment arm's observational Kaplan-Meier survival curve — no
+    hazard ratio, purely descriptive (treated vs untreated/control within one
+    GEO cohort). Distinct from `response_models.TreatmentArmResult`, which
+    carries an expression-conditioned hazard ratio for a different feature
+    (F16b's predictive-biomarker forest)."""
+    name: str                   # e.g. "Treated", "Untreated/control"
+    n_samples: int
+    n_events: int
+    km_curve: KMCurveData
+
+
+class TreatmentKMEvidence(BaseModel):
+    """Per-drug KM evidence for one row of the therapy-rationale evidence
+    table. `tier` determines which of `arms` / `reference_km` is populated
+    and controls the caveat text shown with the chart:
+
+      arm_comparison  -> `arms` (treated vs untreated within one GSE; CI included)
+      cohort_reference -> `reference_km` (prognosis in a treatment-matched
+                           cohort, NOT compared to an untreated arm; no CI)
+      unavailable      -> neither; `build_error` may explain why
+    """
+    drug: str
+    tier: str                                     # "arm_comparison" | "cohort_reference" | "unavailable"
+    accession: Optional[str] = None                # GSE backing an arm_comparison tier
+    arms: Optional[List[TreatmentArmKM]] = None
+    reference_km: Optional[List[ReferenceKMCurve]] = None
+    n_total: Optional[int] = None
+    caveat: str = ""
+    is_building: bool = False
+    build_error: Optional[str] = None

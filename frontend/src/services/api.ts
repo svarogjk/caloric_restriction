@@ -461,6 +461,27 @@ export async function personalizePatient(params: {
 
 // ============ Grounded therapy rationale (Oncologist Mode) ============
 
+// Per-drug real-GEO-cohort KM evidence (F24b) — see backend
+// TreatmentKMEvidence/TreatmentArmKM in app/models/signature_models.py.
+export interface TreatmentArmKM {
+    name: string
+    n_samples: number
+    n_events: number
+    km_curve: KMCurveData
+}
+
+export interface TreatmentKMEvidence {
+    drug: string
+    tier: 'arm_comparison' | 'cohort_reference' | 'unavailable'
+    accession: string | null
+    arms: TreatmentArmKM[] | null
+    reference_km: ReferenceKMCurve[] | null
+    n_total: number | null
+    caveat: string
+    is_building: boolean
+    build_error: string | null
+}
+
 export interface TherapyEvidenceRecord {
     gene: string
     source: 'CIViC' | 'DGIdb'
@@ -474,6 +495,7 @@ export interface TherapyEvidenceRecord {
     interaction_type?: string | null
     approved?: boolean | null
     source_db?: string | null
+    cohort_km?: TreatmentKMEvidence | null
 }
 
 export interface TherapyRationaleResponse {
@@ -496,6 +518,17 @@ export async function getTherapyRationale(params: {
         model: params.model ?? 'mistral',
     })
     return response.data
+}
+
+export async function getCohortKM(params: {
+    modelId: string
+    drugs: string[]
+}): Promise<TreatmentKMEvidence[]> {
+    const response = await apiClient.post<{ results: TreatmentKMEvidence[] }>(
+        '/chat/therapy-rationale/cohort-km',
+        { model_id: params.modelId, drugs: params.drugs },
+    )
+    return response.data.results
 }
 
 // ==================== Treatment Context (F24) ====================

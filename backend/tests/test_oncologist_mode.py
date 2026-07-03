@@ -145,6 +145,55 @@ def test_therapy_rationale_no_evidence_path():
     assert resp.domain_score == 0
 
 
+# ---------- per-treatment KM evidence (F24b) ----------
+
+def test_select_top_drugs_prioritizes_and_dedupes():
+    from app.api.chat_routes import _select_top_drugs
+
+    evidence = [
+        {"gene": "ERCC1", "drug": "Cisplatin", "source": "CIViC", "evidence_level": "B"},
+        {"gene": "TP53", "drug": "cisplatin", "source": "CIViC", "evidence_level": "A"},  # dup, higher level
+        {"gene": "NOTCH2", "drug": "Nirogacestat", "source": "DGIdb", "approved": False},  # excluded
+        {"gene": "HDAC4", "drug": "Vorinostat", "source": "DGIdb", "approved": True},
+        {"gene": "APC", "drug": "JW55", "source": "CIViC", "evidence_level": "D"},  # excluded
+    ]
+    picked = _select_top_drugs(evidence, max_n=5)
+    assert picked[0].lower() == "cisplatin"  # level-A duplicate wins the ranking
+    assert "Vorinostat" in picked
+    assert not any(d.lower() == "nirogacestat" for d in picked)
+    assert not any(d.lower() == "jw55" for d in picked)
+    assert len(picked) == len({p.lower() for p in picked})  # deduped
+
+
+def test_select_top_drugs_respects_max_n():
+    from app.api.chat_routes import _select_top_drugs
+
+    evidence = [
+        {"gene": f"G{i}", "drug": f"Drug{i}", "source": "CIViC", "evidence_level": "A"}
+        for i in range(8)
+    ]
+    assert len(_select_top_drugs(evidence, max_n=5)) == 5
+
+
+def test_resolve_cohort_km_falls_back_to_unavailable_offline():
+    """With no orchestrator (so Tier 1 is unreachable) and no treatment-context
+    service initialised (so Tier 2's build can't be queued), cohort KM
+    resolution degrades to an honest Tier-3 'unavailable' result — never a
+    fabricated curve."""
+    from app.api import chat_routes
+    from app.api.chat_routes import _resolve_cohort_km
+
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=6)
+    chat_routes.set_therapy_services(svc, object())
+
+    result = asyncio.run(_resolve_cohort_km(model, "Cisplatin", {}))
+    assert result.tier == "unavailable"
+    assert result.arms is None
+    assert result.reference_km is None
+    assert result.build_error
+
+
 # ---------- cross-platform normalization + input-validity warnings ----------
 
 def _full_profile(model, rng_seed=7):

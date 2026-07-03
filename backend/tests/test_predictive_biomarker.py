@@ -101,6 +101,60 @@ def test_binarize_rejects_single_value_column(svc):
     assert svc._binarize_treatment(series) is None
 
 
+def test_normalize_drug_name_strips_salts_and_punctuation():
+    from app.services.survival_analysis_service import _normalize_drug_name
+
+    assert _normalize_drug_name("Doxorubicin Hydrochloride") == "doxorubicin"
+    assert _normalize_drug_name("Cisplatin") == "cisplatin"
+
+
+def test_arm_label_matches_drug_guard():
+    from app.services.survival_analysis_service import _arm_label_matches_drug
+
+    # Exact / salt-form / case-insensitive matches.
+    assert _arm_label_matches_drug("cisplatin", "Cisplatin")
+    assert _arm_label_matches_drug("treatment: doxorubicin hydrochloride", "Doxorubicin")
+    # A drug named within a combo string suggested by DGIdb.
+    assert _arm_label_matches_drug("pembrolizumab", "Nivolumab,Atezolizumab,Pembrolizumab")
+    # Unrelated / uninformative labels must NOT match — no fabricated attribution.
+    assert not _arm_label_matches_drug("Treated", "Nivolumab,Atezolizumab,Pembrolizumab")
+    assert not _arm_label_matches_drug("chemotherapy", "Tamoxifen")
+    assert not _arm_label_matches_drug("", "Cisplatin")
+
+
+def test_fit_treatment_arm_km_shape_and_floors(svc):
+    idx, treat, _expr, base = _synthetic_cohort(n=200, seed=5)
+    time = base * np.where(treat == 1, 0.6, 1.0)
+    arms = svc._fit_treatment_arm_km(
+        pd.Series(time, index=idx),
+        pd.Series(np.ones(len(idx)), index=idx),
+        pd.Series(treat, index=idx),
+        {0: "Untreated", 1: "Treated"},
+    )
+    assert arms is not None and len(arms) == 2
+    treated = next(a for a in arms if a["name"] == "Treated")
+    untreated = next(a for a in arms if a["name"] == "Untreated")
+    assert treated["n_samples"] == 100 and untreated["n_samples"] == 100
+    assert treated["km_curve"]["times"]
+    assert treated["km_curve"]["survival_probabilities"]
+    assert treated["km_curve"]["ci_lower"] is not None
+    assert treated["km_curve"]["ci_upper"] is not None
+    # No expression/HR fields — this is a raw survival-by-arm comparison.
+    assert "hazard_ratio" not in treated
+
+
+def test_fit_treatment_arm_km_rejects_undersized_arm(svc):
+    idx = [f"s{i}" for i in range(30)]
+    treat = np.array([1] * 27 + [0] * 3, dtype=float)  # untreated arm below min_samples_per_group
+    time = np.linspace(10, 100, 30)
+    event = np.ones(30)
+    arms = svc._fit_treatment_arm_km(
+        pd.Series(time, index=idx), pd.Series(event, index=idx),
+        pd.Series(treat, index=idx), {0: "Untreated", 1: "Treated"},
+    )
+    assert arms is None
+
+
 def test_analyze_gene_survival_sets_is_predictive(svc):
     idx, treat, expr, base = _synthetic_cohort()
     eff = np.where(treat == 1, np.exp(-0.9 * expr), 1.0)

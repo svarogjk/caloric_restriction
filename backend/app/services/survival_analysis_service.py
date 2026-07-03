@@ -58,6 +58,46 @@ _UNTREATED_TOKENS = {
     "no treatment", "no therapy", "vehicle", "0", "false", "absent", "naive",
 }
 
+# Common salt-form suffixes stripped when matching a suggested drug name
+# against a free-text GEO treatment-arm label (e.g. "doxorubicin hydrochloride").
+_SALT_SUFFIXES = {
+    "hydrochloride", "hcl", "sulfate", "sulphate", "sodium", "citrate",
+    "mesylate", "tartrate", "acetate", "phosphate", "maleate", "besylate",
+}
+
+
+def _normalize_drug_name(name: str) -> str:
+    """Casefold a drug name, strip punctuation and common salt-form suffixes."""
+    text = re.sub(r"[^a-z0-9\s\-]", " ", name.strip().lower())
+    tokens = [t for t in text.split() if t not in _SALT_SUFFIXES]
+    return " ".join(tokens).strip()
+
+
+def _drug_name_tokens(name: str) -> set:
+    """Split a (possibly multi-drug combo) string into normalized single-drug
+    tokens, e.g. "Nivolumab,Atezolizumab" -> {"nivolumab", "atezolizumab"}."""
+    parts = re.split(r"[,/+&]| and ", name, flags=re.IGNORECASE)
+    return {norm for p in parts if (norm := _normalize_drug_name(p))}
+
+
+def _arm_label_matches_drug(arm_label: str, drug_name: str) -> bool:
+    """Guard against attributing a detected treatment arm to a drug that is
+    not actually named in the arm's free-text label.
+
+    Required because `_binarize_treatment`'s top-2-category fallback can
+    produce an arm from categories unrelated to any specific drug, and DGIdb/
+    CIViC drug strings are messy (salt forms, multi-drug combos). A Tier-1
+    cohort-comparison KM curve must never be attached to a drug suggestion
+    without this guard passing — that would be a hallucinated attribution.
+    """
+    label_norm = _normalize_drug_name(arm_label)
+    if not label_norm:
+        return False
+    return any(
+        token and (token in label_norm or label_norm in token)
+        for token in _drug_name_tokens(drug_name)
+    )
+
 
 # ============================================================================
 # Data Models
@@ -938,6 +978,71 @@ Determine if this dataset contains survival data and identify the relevant colum
         if not np.isfinite(interaction_p):
             return None
         return interaction_p, per_arm
+
+    def _fit_treatment_arm_km(
+        self,
+        time_col: pd.Series,
+        event_col: pd.Series,
+        treatment_binary: pd.Series,
+        arm_names: Dict[int, str],
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Descriptive per-arm Kaplan-Meier curves (treated vs untreated/control),
+        independent of any gene expression or interaction test.
+
+        Powers the "Treatments to consider" Tier-1 cohort-comparison KM chart:
+        purely observational survival-by-arm, not a predictiveness claim (that
+        is `_fit_interaction_cox`'s job). Uses the same sample/event floors as
+        `_fit_interaction_cox` for consistency. Returns None when either arm
+        is too small or a fit fails — never a partial/fabricated curve.
+        """
+        df = pd.DataFrame({
+            "treatment": treatment_binary, "time": time_col, "event": event_col,
+        }).dropna()
+        if len(df) < 20:
+            return None
+
+        def sanitize_value(val):
+            if val is None or pd.isna(val) or np.isinf(val):
+                return None
+            return float(val)
+
+        def sanitize_list(lst):
+            return [sanitize_value(v) for v in lst] if lst is not None else None
+
+        arms: List[Dict[str, Any]] = []
+        for arm_value in (0, 1):
+            sub = df[df["treatment"] == arm_value]
+            n = len(sub)
+            n_events = int(sub["event"].sum())
+            if n < self.min_samples_per_group or n_events < 10:
+                return None
+            try:
+                kmf = KaplanMeierFitter()
+                kmf.fit(sub["time"], event_observed=sub["event"])
+                km_curve = {
+                    "times": sanitize_list(kmf.survival_function_.index.tolist()),
+                    "survival_probabilities": sanitize_list(
+                        kmf.survival_function_["KM_estimate"].tolist()
+                    ),
+                    "ci_lower": sanitize_list(
+                        kmf.confidence_interval_["KM_estimate_lower_0.95"].tolist()
+                    ) if hasattr(kmf, "confidence_interval_") else None,
+                    "ci_upper": sanitize_list(
+                        kmf.confidence_interval_["KM_estimate_upper_0.95"].tolist()
+                    ) if hasattr(kmf, "confidence_interval_") else None,
+                    "n_samples": n,
+                    "n_events": n_events,
+                }
+            except _COX_FIT_ERRORS as e:
+                logger.debug("Per-arm KM fit failed: %s", e)
+                return None
+            arms.append({
+                "name": arm_names.get(arm_value, f"arm {arm_value}"),
+                "n_samples": n,
+                "n_events": n_events,
+                "km_curve": km_curve,
+            })
+        return arms
 
     def _fit_multivariate_cox(
         self,

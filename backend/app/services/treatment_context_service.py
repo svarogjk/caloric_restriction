@@ -26,13 +26,20 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Optional
 
+from app.config.database import get_db_session
 from app.models.signature_models import (
+    COHORT_REFERENCE_CAVEAT,
     TREATMENT_RUO_DISCLAIMER,
     TreatmentComparison,
     TreatmentComparisonResult,
+    TreatmentKMEvidence,
 )
+from app.services.survival_analysis_service import _drug_name_tokens, _normalize_drug_name
 
 if TYPE_CHECKING:
     from app.services.signature_service import SignatureService
@@ -139,12 +146,45 @@ def _model_id(cancer_type: str, slug: str) -> str:
     return f"treatment_{cancer_type}_{slug}"
 
 
+def _slugify_drug_name(drug_name: str) -> str:
+    """Filesystem/model-id-safe slug for an arbitrary (uncurated) drug name."""
+    slug = re.sub(r"[^a-z0-9]+", "_", drug_name.strip().lower()).strip("_")
+    return slug or "drug"
+
+
+# Negative-build results ("no matching GEO datasets") expire after this long,
+# so a drug that later gains coverage isn't cached-negative forever, while
+# repeated Regenerate clicks within a session don't re-trigger a fresh
+# 2-5 min orchestrator run for a drug with no data.
+_NEGATIVE_CACHE_TTL_SECONDS = 3600
+_NEGATIVE_CACHE_MAX = 200
+
+
 class TreatmentContextService:
     """Builds and caches treatment-specific prognostic models; scores patients."""
 
     def __init__(self, signature_service: "SignatureService") -> None:
         self._sig = signature_service
         self._building: set[str] = set()  # model_ids currently being built
+        # model_id -> (reason, cached_at_monotonic) for recent failed/empty builds.
+        self._negative_cache: "OrderedDict[str, tuple[str, float]]" = OrderedDict()
+
+    def _negative_cache_get(self, mid: str) -> Optional[str]:
+        entry = self._negative_cache.get(mid)
+        if entry is None:
+            return None
+        reason, cached_at = entry
+        if time.monotonic() - cached_at > _NEGATIVE_CACHE_TTL_SECONDS:
+            del self._negative_cache[mid]
+            return None
+        self._negative_cache.move_to_end(mid)
+        return reason
+
+    def _negative_cache_put(self, mid: str, reason: str) -> None:
+        self._negative_cache[mid] = (reason, time.monotonic())
+        self._negative_cache.move_to_end(mid)
+        if len(self._negative_cache) > _NEGATIVE_CACHE_MAX:
+            self._negative_cache.popitem(last=False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -175,6 +215,69 @@ class TreatmentContextService:
 
         return TreatmentComparisonResult(cancer_type=cancer_type, treatments=comparisons)
 
+    async def get_or_build_km_for_drug(
+        self, cancer_type: str, drug_name: str
+    ) -> TreatmentKMEvidence:
+        """Tier-2 cohort-reference KM evidence for a drug suggested in the
+        "Treatments to consider" panel (F24b). Reuses a curated
+        `TREATMENT_QUERIES` entry when the drug name matches one; otherwise
+        synthesizes a query and builds/caches a dedicated treatment model the
+        same way curated entries are built. A short-TTL negative-result cache
+        avoids re-running a full orchestrator pipeline on every Regenerate
+        click for a drug with no matching GEO datasets.
+        """
+        cancer_key = cancer_type.lower()
+        entry = self._match_curated_entry(cancer_key, drug_name) or {
+            "name": drug_name,
+            "slug": _slugify_drug_name(drug_name),
+            "query": f"{cancer_type} {drug_name} overall survival",
+        }
+        mid = _model_id(cancer_key, entry["slug"])
+
+        neg_reason = self._negative_cache_get(mid)
+        if neg_reason is not None:
+            return TreatmentKMEvidence(drug=drug_name, tier="unavailable", build_error=neg_reason)
+
+        model = self._sig.get_model(mid)
+        if model is not None:
+            return TreatmentKMEvidence(
+                drug=drug_name,
+                tier="cohort_reference",
+                reference_km=model.reference_km,
+                n_total=model.n_training_samples,
+                caveat=COHORT_REFERENCE_CAVEAT,
+            )
+
+        if mid not in self._building:
+            asyncio.create_task(
+                self._build_and_cache_negative(cancer_key, entry, mid),
+                name=f"treatment_build_{mid}",
+            )
+        return TreatmentKMEvidence(drug=drug_name, tier="unavailable", is_building=True)
+
+    def _match_curated_entry(self, cancer_key: str, drug_name: str) -> Optional[dict[str, str]]:
+        """Fuzzy-match a suggested drug name against the curated
+        TREATMENT_QUERIES entries for this cancer type (entries are named by
+        drug class, e.g. "Hormone therapy (tamoxifen / AI)")."""
+        tokens = _drug_name_tokens(drug_name)
+        if not tokens:
+            return None
+        for entry in TREATMENT_QUERIES.get(cancer_key, []):
+            name_norm = _normalize_drug_name(entry["name"])
+            if any(t in name_norm for t in tokens):
+                return entry
+        return None
+
+    async def _build_and_cache_negative(
+        self, cancer_type: str, entry: dict[str, str], mid: str
+    ) -> None:
+        """Wraps `_build_treatment_model`; records a negative-cache entry when
+        the build produced no usable model, so repeat requests for this drug
+        don't re-trigger a fresh orchestrator run within the TTL window."""
+        await self._build_treatment_model(cancer_type, entry)
+        if self._sig.get_model(mid) is None:
+            self._negative_cache_put(mid, "No matching GEO cohort data available for this drug.")
+
     async def warm(self, cancer_type: str, db: "AsyncSession") -> list[str]:
         """Trigger background builds for all treatment models of a cancer type.
         Returns the list of slugs queued."""
@@ -187,7 +290,7 @@ class TreatmentContextService:
             if mid in self._building:
                 continue
             asyncio.create_task(
-                self._build_treatment_model(cancer_type.lower(), entry, db),
+                self._build_treatment_model(cancer_type.lower(), entry),
                 name=f"treatment_build_{mid}",
             )
             queued.append(entry["slug"])
@@ -234,7 +337,7 @@ class TreatmentContextService:
         # Model not on disk yet — kick off a background build if not already running.
         if mid not in self._building:
             asyncio.create_task(
-                self._build_treatment_model(cancer_type, entry, db),
+                self._build_treatment_model(cancer_type, entry),
                 name=f"treatment_build_{mid}",
             )
 
@@ -243,9 +346,17 @@ class TreatmentContextService:
         )
 
     async def _build_treatment_model(
-        self, cancer_type: str, entry: dict[str, str], db: "AsyncSession"
+        self, cancer_type: str, entry: dict[str, str]
     ) -> None:
-        """Background: build a treatment-specific signature model and persist it."""
+        """Background: build a treatment-specific signature model and persist it.
+
+        Always invoked via `asyncio.create_task` — this coroutine outlives the
+        HTTP request that queued it, so it opens its own DB session rather
+        than reusing a request-scoped one, which SQLAlchemy's async engine
+        forbids using concurrently across tasks ("This session is
+        provisioning a new connection; concurrent operations are not
+        permitted").
+        """
         from app.services.analysis_result_service import analysis_result_service
 
         mid = _model_id(cancer_type, entry["slug"])
@@ -256,15 +367,18 @@ class TreatmentContextService:
 
         try:
             # Try to find a cached GEO analysis matching this query first.
-            cached = await analysis_result_service.find_recent_by_query(db, entry["query"])
-            if cached and cached.get("result_id"):
-                full = await analysis_result_service.get_result(db, cached["result_id"])
-                if full:
-                    model = await self._sig.build_from_result(full, cancer_type=cancer_type)
-                    model.model_id = mid
-                    self._sig.save_model_to_disk(model)
-                    logger.info("Treatment model built from cache: %s", mid)
-                    return
+            async with get_db_session() as db:
+                cached = await analysis_result_service.find_recent_by_query(db, entry["query"])
+                full = (
+                    await analysis_result_service.get_result(db, cached["result_id"])
+                    if cached and cached.get("result_id") else None
+                )
+            if full:
+                model = await self._sig.build_from_result(full, cancer_type=cancer_type)
+                model.model_id = mid
+                self._sig.save_model_to_disk(model)
+                logger.info("Treatment model built from cache: %s", mid)
+                return
 
             # No cached analysis — run the full pipeline via the orchestrator.
             if self._sig.orchestrator is None:

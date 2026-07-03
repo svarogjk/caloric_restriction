@@ -1,9 +1,7 @@
 import React, { useMemo } from 'react'
-import {
-    LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-} from 'recharts'
 import { PredictResponse, ReferenceKMCurve } from '../../services/api'
-import { GROUP_COLORS, buildKMChartData } from '../../utils/signatureViz'
+import { GROUP_COLORS } from '../../utils/signatureViz'
+import KaplanMeierChart, { KMChartCurve } from '../KaplanMeierChart'
 import TherapyDirections from './TherapyDirections'
 import PatientReport from './PatientReport'
 import { TreatmentContextToggle } from './TreatmentContext'
@@ -35,8 +33,16 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
     cancerType, expressionRaw, clinicalValues,
 }) => {
     const curves = referenceCurves && referenceCurves.length ? referenceCurves : [result.reference_km]
-    const kmData = useMemo(() => buildKMChartData(curves), [curves])
-    const groupsPresent = curves.map((c) => c.group)
+    const kmCurves: KMChartCurve[] = useMemo(() => curves.map((c) => ({
+        key: c.group,
+        label: c.group,
+        times: c.times,
+        survival_probabilities: c.survival_probabilities,
+        color: GROUP_COLORS[c.group] ?? '#6b7280',
+        strokeWidth: c.group === result.risk_group ? 3.5 : 1.5,
+        strokeOpacity: c.group === result.risk_group ? 1 : 0.45,
+    })), [curves, result.risk_group])
+    const hasKmData = curves.some((c) => c.times.length > 0)
     const perYear = timeUnit.toLowerCase().startsWith('month') ? 12 : 365
     const maxAbs = Math.max(1e-9, ...result.contributions.map((c) => Math.abs(c.contribution)))
 
@@ -87,41 +93,12 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
                 </div>
             )}
 
-            {kmData.length > 0 && (
+            {hasKmData && (
                 <div>
                     <h3 className="text-sm font-medium text-gray-700 mb-1">
                         Reference survival by risk group <span className="text-gray-400 font-normal">(patient's group highlighted)</span>
                     </h3>
-                    <div style={{ width: '100%', height: 260 }}>
-                        <ResponsiveContainer>
-                            <LineChart data={kmData} margin={{ top: 5, right: 20, bottom: 20, left: 0 }}>
-                                <CartesianGrid strokeDasharray="3 3" />
-                                <XAxis
-                                    dataKey="time"
-                                    tickFormatter={(t) => (t / perYear).toFixed(0)}
-                                    label={{ value: 'Years', position: 'insideBottom', offset: -10 }}
-                                />
-                                <YAxis domain={[0, 1]} tickFormatter={(v) => `${(v * 100).toFixed(0)}%`} />
-                                <Tooltip
-                                    formatter={(v: number) => `${(v * 100).toFixed(0)}%`}
-                                    labelFormatter={(t: number) => `${(t / perYear).toFixed(1)} yr`}
-                                />
-                                <Legend />
-                                {groupsPresent.map((grp) => (
-                                    <Line
-                                        key={grp}
-                                        type="stepAfter"
-                                        dataKey={grp}
-                                        stroke={GROUP_COLORS[grp] ?? '#6b7280'}
-                                        strokeWidth={grp === result.risk_group ? 3.5 : 1.5}
-                                        strokeOpacity={grp === result.risk_group ? 1 : 0.45}
-                                        dot={false}
-                                        connectNulls
-                                    />
-                                ))}
-                            </LineChart>
-                        </ResponsiveContainer>
-                    </div>
+                    <KaplanMeierChart curves={kmCurves} timeUnit={perYear === 12 ? 'months' : 'days'} height={260} />
                 </div>
             )}
 
