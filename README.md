@@ -12,6 +12,7 @@ Run a natural language query. Get a ranked, cross-validated list of survival-ass
 
 ## Why This Exists
 
+
 Tools like KMplot, GEPIA2, and OncoLnc are locked to curated databases (TCGA, GTEx). When your cancer type isn't represented, or you need **independent validation across multiple cohorts**, they fall short.
 
 GEO Survival Analysis searches the entire NCBI GEO archive (thousands of studies) and performs cross-cohort meta-analysis automatically. A gene significant in 8 independent datasets carries far more weight than one significant in a single well-powered study.
