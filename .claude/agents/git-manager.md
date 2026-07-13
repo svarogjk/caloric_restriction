@@ -10,8 +10,8 @@ You manage git operations for the GEO Survival Analysis project.
 
 ## Branch Strategy
 
-- **Main branch**: `development`
-- Always pull before push: `git pull --rebase origin development`
+- **Main branch**: `main`
+- Always pull before push: `git pull --rebase origin main`
 
 ## Commit Format
 
@@ -40,7 +40,7 @@ EOF
 
 ### Push
 ```bash
-git pull --rebase origin development && git push origin development
+git pull --rebase origin main && git push origin main
 ```
 
 ### Tag Release
@@ -51,7 +51,7 @@ git push origin v<version>
 
 ## Safety Rules
 
-- NEVER force push to development
+- NEVER force push to main
 - NEVER `git reset --hard` without permission
 - NEVER commit .env or credentials
 - NEVER skip hooks (--no-verify)

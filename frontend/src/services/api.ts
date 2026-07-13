@@ -472,7 +472,7 @@ export interface TreatmentArmKM {
 
 export interface TreatmentKMEvidence {
     drug: string
-    tier: 'arm_comparison' | 'cohort_reference' | 'unavailable'
+    tier: 'arm_comparison' | 'cohort_reference' | 'unavailable' | 'not_checked'
     accession: string | null
     arms: TreatmentArmKM[] | null
     reference_km: ReferenceKMCurve[] | null

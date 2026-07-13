@@ -8,7 +8,7 @@
 | Instance (Phase 1) | CX32 — 4 vCPU AMD, 8 GB RAM, 80 GB NVMe (~$10/mo) |
 | Instance (Phase 2, post-publication) | CX42 — 8 vCPU AMD, 16 GB RAM, 160 GB NVMe (~$22/mo) |
 | OS | Ubuntu 24.04 |
-| Domain | geosurv.io (register at Cloudflare, point A record to server IP) |
+| Domain | geosurvanalysis.com (register via a .com registrar, point A record to server IP; DNS can be hosted free via Hetzner DNS Console) |
 | TLS | Automatic via Caddy + Let's Encrypt |
 | Stack | Docker Compose: `app` (FastAPI) + `caddy` (reverse proxy) |
 
@@ -69,7 +69,7 @@ EMAIL=svarogjk1989@gmail.com
 
 ## Deploy a New Version
 
-Push to `development` branch — GitHub Actions builds the image, pushes to GHCR, and SSHes into the server to pull + restart.
+Push to `main` branch — GitHub Actions builds the image, pushes to GHCR, and SSHes into the server to pull + restart.
 
 Manual deploy:
 ```bash

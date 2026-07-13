@@ -216,18 +216,19 @@ class TreatmentContextService:
         return TreatmentComparisonResult(cancer_type=cancer_type, treatments=comparisons)
 
     async def get_or_build_km_for_drug(
-        self, cancer_type: str, drug_name: str
+        self, cancer_type: str, drug_name: str, synonyms: Optional[list[str]] = None
     ) -> TreatmentKMEvidence:
         """Tier-2 cohort-reference KM evidence for a drug suggested in the
         "Treatments to consider" panel (F24b). Reuses a curated
-        `TREATMENT_QUERIES` entry when the drug name matches one; otherwise
-        synthesizes a query and builds/caches a dedicated treatment model the
-        same way curated entries are built. A short-TTL negative-result cache
-        avoids re-running a full orchestrator pipeline on every Regenerate
-        click for a drug with no matching GEO datasets.
+        `TREATMENT_QUERIES` entry when the drug name (or a known `synonym` —
+        brand name / research code) matches one; otherwise synthesizes a
+        query and builds/caches a dedicated treatment model the same way
+        curated entries are built. A short-TTL negative-result cache avoids
+        re-running a full orchestrator pipeline on every Regenerate click for
+        a drug with no matching GEO datasets.
         """
         cancer_key = cancer_type.lower()
-        entry = self._match_curated_entry(cancer_key, drug_name) or {
+        entry = self._match_curated_entry(cancer_key, drug_name, synonyms) or {
             "name": drug_name,
             "slug": _slugify_drug_name(drug_name),
             "query": f"{cancer_type} {drug_name} overall survival",
@@ -255,11 +256,16 @@ class TreatmentContextService:
             )
         return TreatmentKMEvidence(drug=drug_name, tier="unavailable", is_building=True)
 
-    def _match_curated_entry(self, cancer_key: str, drug_name: str) -> Optional[dict[str, str]]:
-        """Fuzzy-match a suggested drug name against the curated
-        TREATMENT_QUERIES entries for this cancer type (entries are named by
-        drug class, e.g. "Hormone therapy (tamoxifen / AI)")."""
-        tokens = _drug_name_tokens(drug_name)
+    def _match_curated_entry(
+        self, cancer_key: str, drug_name: str, synonyms: Optional[list[str]] = None
+    ) -> Optional[dict[str, str]]:
+        """Fuzzy-match a suggested drug name (or a known synonym — brand name
+        / research code) against the curated TREATMENT_QUERIES entries for
+        this cancer type (entries are named by drug class, e.g. "Hormone
+        therapy (tamoxifen / AI)")."""
+        tokens: set[str] = set()
+        for name in [drug_name, *(synonyms or [])]:
+            tokens |= _drug_name_tokens(name)
         if not tokens:
             return None
         for entry in TREATMENT_QUERIES.get(cancer_key, []):

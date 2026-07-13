@@ -68,7 +68,7 @@ jobs:
             JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
             EMAIL=${{ secrets.APP_EMAIL }}
             NCBI_API_KEY=${{ secrets.NCBI_API_KEY }}
-            CORS_ORIGIN=https://geosurv.io
+            CORS_ORIGIN=https://geosurvanalysis.com
             ENVEOF
             docker compose pull
             docker compose up -d

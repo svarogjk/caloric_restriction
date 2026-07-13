@@ -31,7 +31,7 @@ Update status symbols as work completes: ✅ PASS · ❌ FAIL · ⚠️ PARTIAL/
 | Requirement | Status | Notes |
 |---|---|---|
 | Functional via web browser | ✅ PASS | React + FastAPI |
-| HTTPS on standard port 443 | ❌ TODO | Provision Hetzner CX32, register geosurv.io, push to deploy. All deployment files exist (docker-compose.yml, Caddyfile, .github/workflows/deploy.yml) |
+| HTTPS on standard port 443 | ❌ TODO | Provision Hetzner CX32, register geosurvanalysis.com, push to deploy. All deployment files exist (docker-compose.yml, Caddyfile, .github/workflows/deploy.yml) |
 | Cookie consent form | ✅ PASS | `frontend/src/components/CookieConsent.tsx` |
 | Sample data with one-click load button | ⚠️ PARTIAL | Example queries listed on landing page but no single button that pre-fills + auto-runs |
 | Help page with links to sample output | ⚠️ PARTIAL | `HelpPage.tsx` exists; needs links to real persisted result URLs once deployed |
@@ -57,7 +57,7 @@ Update status symbols as work completes: ✅ PASS · ❌ FAIL · ⚠️ PARTIAL/
 | Requirement | Status | Notes |
 |---|---|---|
 | Software name as first word(s) of title | ✅ PASS | "GEO Survival Analysis: ..." |
-| Valid public URL in abstract | ❌ TODO | Will be `https://geosurv.io` — blocked on deployment |
+| Valid public URL in abstract | ❌ TODO | Will be `https://geosurvanalysis.com` — blocked on deployment |
 | Description of input, computations, output | ⚠️ PARTIAL | README covers it; needs formal manuscript section |
 | Comparison with existing methods section | ⚠️ PARTIAL | README has table (KMplot / GEPIA2 / OncoLnc); needs dedicated manuscript section |
 | One or more biological use case studies | ❌ MISSING | Run a real analysis (e.g., lung adenocarcinoma) and document biological findings |
@@ -77,11 +77,11 @@ Update status symbols as work completes: ✅ PASS · ❌ FAIL · ⚠️ PARTIAL/
 
 Work through these in order — each unblocks the next.
 
-- [ ] **1. Provision Hetzner CX32 + register geosurv.io**  
-  Go to Hetzner Cloud console → create CX32 (Ubuntu 24.04). Register geosurv.io at Cloudflare → add A record to server IP. This unblocks the public URL, sample output links, and eventually the proposal.
+- [ ] **1. Provision Hetzner CX32 + register geosurvanalysis.com**  
+  Go to Hetzner Cloud console → create CX32 (Ubuntu 24.04). Register geosurvanalysis.com via a .com registrar → add A record to server IP (DNS can be hosted free via Hetzner DNS Console). This unblocks the public URL, sample output links, and eventually the proposal.
 
 - [ ] **2. Configure GitHub secrets + first deploy**  
-  Add `HETZNER_HOST` (server IP) and `HETZNER_SSH_KEY` to GitHub repo secrets. Push to `development` branch → CI builds image, pushes to GHCR, SSHes in and starts Docker Compose. Verify `https://geosurv.io` is live.
+  Add `HETZNER_HOST` (server IP) and `HETZNER_SSH_KEY` to GitHub repo secrets. Push to `main` branch → CI builds image, pushes to GHCR, SSHes in and starts Docker Compose. Verify `https://geosurvanalysis.com` is live.
 
 - [ ] **3. Add MIT LICENSE file to repo root**  
   Create `/LICENSE` with standard MIT text (author: Korkodnov I., year: 2026). 2-minute task.

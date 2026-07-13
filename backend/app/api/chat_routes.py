@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import uuid
+from collections import OrderedDict
 from datetime import datetime
 from typing import Optional
 
@@ -22,6 +23,7 @@ from app.models.signature_models import ARM_COMPARISON_CAVEAT, TreatmentKMEviden
 from app.api.dependencies import get_current_active_user, get_optional_current_user
 from app.services.chat import ChatService, PydanticAIService, QueryEstimationService
 from app.services.chat.agent_tools import AgentDeps
+from app.services.drug_synonym_service import get_drug_synonym_service
 from app.services.treatment_context_service import get_treatment_service
 
 logger = logging.getLogger(__name__)
@@ -571,33 +573,51 @@ def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence:
     )
 
 
-# Evidence strength worth the cost of a cohort-KM lookup (a Tier-2 fallback
-# build takes ~2-5 min): CIViC level A/B, or approved DGIdb interactions.
-# Lower-confidence rows (CIViC C/D/E, investigational-only DGIdb) stay
-# text-only in the UI — not worth building a cohort model for.
+# Evidence-strength ordering used only as a within-gene tiebreaker for which
+# drug to check first (a Tier-2 fallback build takes ~2-5 min): CIViC level
+# A/B, then approved DGIdb interactions, then everything else. This is NOT an
+# eligibility filter — approval/evidence-level status has no bearing on
+# whether a matching GEO cohort actually exists, so every drug is checkable.
 _CIVIC_LEVEL_RANK = {"A": 0, "B": 1}
-_MAX_COHORT_KM_DRUGS = 5
+_MAX_COHORT_KM_DRUGS = 8
 
 
 def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -> list[str]:
-    """Pick up to `max_n` distinct high-confidence drug names worth a
-    cohort-KM lookup, prioritized by evidence strength."""
+    """Pick up to `max_n` distinct drug names worth a cohort-KM lookup,
+    round-robined across the risk-driving genes so one gene's several
+    approved drugs (e.g. HDAC4's several HDAC inhibitors) can't consume the
+    whole budget and leave other genes (e.g. NOTCH2, APC) never checked at
+    all. Evidence strength only orders candidates within a gene."""
     def rank(e: dict) -> int:
         if e.get("source") == "CIViC":
-            return _CIVIC_LEVEL_RANK.get((e.get("evidence_level") or "").upper(), 99)
-        return 2 if e.get("approved") else 99
+            return _CIVIC_LEVEL_RANK.get((e.get("evidence_level") or "").upper(), 2)
+        return 0 if e.get("approved") else 1
 
-    eligible = sorted((e for e in evidence if rank(e) < 99), key=rank)
+    by_gene: "OrderedDict[str, list[dict]]" = OrderedDict()
+    for e in evidence:
+        by_gene.setdefault(e["gene"], []).append(e)
+    for bucket in by_gene.values():
+        bucket.sort(key=rank)
+
     picked: list[str] = []
     seen: set[str] = set()
-    for e in eligible:
-        key = e["drug"].strip().lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        picked.append(e["drug"])
-        if len(picked) >= max_n:
-            break
+    queues = {gene: iter(bucket) for gene, bucket in by_gene.items()}
+    while len(picked) < max_n and queues:
+        exhausted = []
+        for gene, queue in queues.items():
+            if len(picked) >= max_n:
+                break
+            for e in queue:
+                key = e["drug"].strip().lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                picked.append(e["drug"])
+                break
+            else:
+                exhausted.append(gene)
+        for gene in exhausted:
+            queues.pop(gene, None)
     return picked
 
 
@@ -612,7 +632,17 @@ async def _resolve_cohort_km(
     `cohort_cache` memoizes the (LLM-backed) Tier-1 cohort load per accession
     so checking several drugs against the same training accession in one
     request only pays that cost once.
+
+    Also widens the drug-name match with PubChem synonyms (brand names,
+    research codes) so a differently-named arm in the same cohort — real
+    data we'd otherwise miss on a naming technicality — is still attributed.
     """
+    try:
+        synonyms = await get_drug_synonym_service().get_synonyms(drug)
+    except (ValueError, KeyError, OSError, RuntimeError) as e:
+        logger.warning("Drug synonym lookup failed for %s: %s", drug, e)
+        synonyms = []
+
     accession = model.training_accession
     if accession and _signature_service is not None:
         if accession not in cohort_cache:
@@ -624,7 +654,9 @@ async def _resolve_cohort_km(
         loaded = cohort_cache[accession]
         if loaded is not None:
             surv, treatment_binary, arm_names = loaded
-            arms = _signature_service.match_treatment_arm_km(surv, treatment_binary, arm_names, drug)
+            arms = _signature_service.match_treatment_arm_km(
+                surv, treatment_binary, arm_names, drug, synonyms=synonyms
+            )
             if arms:
                 return TreatmentKMEvidence(
                     drug=drug, tier="arm_comparison", accession=accession, arms=arms,
@@ -633,7 +665,9 @@ async def _resolve_cohort_km(
 
     if model.cancer_type:
         try:
-            return await get_treatment_service().get_or_build_km_for_drug(model.cancer_type, drug)
+            return await get_treatment_service().get_or_build_km_for_drug(
+                model.cancer_type, drug, synonyms=synonyms
+            )
         except RuntimeError as e:
             logger.warning("Tier-2 cohort lookup unavailable for %s: %s", drug, e)
 
@@ -695,22 +729,25 @@ async def therapy_rationale(request: TherapyRationaleRequest):
 
     records = [TherapyEvidenceRecord(**e) for e in evidence]
 
-    # Auto-build cohort KM evidence for the top few high-confidence drugs
-    # (Tier 1 resolves inline; Tier 2 kicks off a background build and comes
-    # back as `is_building` — the frontend polls /therapy-rationale/cohort-km).
+    # Auto-build cohort KM evidence for a budget of drugs, round-robined
+    # across genes (Tier 1 resolves inline; Tier 2 kicks off a background
+    # build and comes back as `is_building` — the frontend polls
+    # /therapy-rationale/cohort-km). Every record gets an explicit tier —
+    # "not_checked" for drugs outside this round's budget — instead of a
+    # silent `None` the UI has no way to explain.
     top_drugs = _select_top_drugs(evidence)
-    if top_drugs:
-        cohort_cache: dict = {}
-        km_by_drug: dict[str, TreatmentKMEvidence] = {}
-        for drug in top_drugs:
-            try:
-                km_by_drug[drug] = await _resolve_cohort_km(model, drug, cohort_cache)
-            except (ValueError, KeyError, OSError, RuntimeError) as e:
-                logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)
-        for record in records:
-            km = km_by_drug.get(record.drug)
-            if km is not None:
-                record.cohort_km = km
+    cohort_cache: dict = {}
+    km_by_drug: dict[str, TreatmentKMEvidence] = {}
+    for drug in top_drugs:
+        try:
+            km_by_drug[drug] = await _resolve_cohort_km(model, drug, cohort_cache)
+        except (ValueError, KeyError, OSError, RuntimeError) as e:
+            logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)
+    for record in records:
+        record.cohort_km = km_by_drug.get(record.drug) or TreatmentKMEvidence(
+            drug=record.drug, tier="not_checked",
+            build_error="Not checked for GEO cohort data this round.",
+        )
 
     return TherapyRationaleResponse(rationale=rationale, evidence=records, domain_score=domain_score)
 

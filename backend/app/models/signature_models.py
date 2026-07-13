@@ -278,10 +278,14 @@ class TreatmentKMEvidence(BaseModel):
       arm_comparison  -> `arms` (treated vs untreated within one GSE; CI included)
       cohort_reference -> `reference_km` (prognosis in a treatment-matched
                            cohort, NOT compared to an untreated arm; no CI)
-      unavailable      -> neither; `build_error` may explain why
+      unavailable      -> neither; a lookup ran and found no matching GEO
+                           cohort data; `build_error` may explain why
+      not_checked      -> neither; this drug was outside the current
+                           request's cohort-KM lookup budget (see
+                           `_select_top_drugs`) — no lookup was attempted
     """
     drug: str
-    tier: str                                     # "arm_comparison" | "cohort_reference" | "unavailable"
+    tier: str                                     # "arm_comparison" | "cohort_reference" | "unavailable" | "not_checked"
     accession: Optional[str] = None                # GSE backing an arm_comparison tier
     arms: Optional[List[TreatmentArmKM]] = None
     reference_km: Optional[List[ReferenceKMCurve]] = None

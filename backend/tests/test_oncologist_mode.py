@@ -147,22 +147,93 @@ def test_therapy_rationale_no_evidence_path():
 
 # ---------- per-treatment KM evidence (F24b) ----------
 
-def test_select_top_drugs_prioritizes_and_dedupes():
+def test_match_treatment_arm_km_matches_via_synonym():
+    """A GEO arm labeled with a research code ("PXD101") that doesn't
+    literally contain the DGIdb/CIViC drug name ("Belinostat") must still be
+    attributed when that code is a known synonym — otherwise real,
+    already-downloaded cohort data is silently missed on a naming
+    technicality."""
+    import pandas as pd
+
+    class _FakeSurvivalService:
+        def _fit_treatment_arm_km(self, time_col, event_col, treatment_binary, arm_names):
+            return [
+                {
+                    "name": arm_names[0], "n_samples": 12, "n_events": 4,
+                    "km_curve": {"times": [0, 1], "survival_probabilities": [1.0, 0.8],
+                                 "ci_lower": None, "ci_upper": None, "n_samples": 12, "n_events": 4},
+                },
+                {
+                    "name": arm_names[1], "n_samples": 12, "n_events": 3,
+                    "km_curve": {"times": [0, 1], "survival_probabilities": [1.0, 0.9],
+                                 "ci_lower": None, "ci_upper": None, "n_samples": 12, "n_events": 3},
+                },
+            ]
+
+    class _FakeOrchestrator:
+        survival_service = _FakeSurvivalService()
+
+    svc = SignatureService(orchestrator=_FakeOrchestrator())
+    survival_df = pd.DataFrame({"time": [1, 2], "event": [1, 0]})
+    treatment_binary = pd.Series([0, 1])
+    arm_names = {0: "Untreated/control", 1: "PXD101"}
+
+    # No synonym -> the literal drug name doesn't appear in "PXD101" -> no match.
+    assert svc.match_treatment_arm_km(survival_df, treatment_binary, arm_names, "Belinostat") is None
+
+    # With the research-code synonym -> real data is recovered.
+    arms = svc.match_treatment_arm_km(
+        survival_df, treatment_binary, arm_names, "Belinostat", synonyms=["PXD101", "Beleodaq"]
+    )
+    assert arms is not None
+    assert {a.name for a in arms} == {"Untreated/control", "PXD101"}
+
+
+def test_select_top_drugs_dedupes_and_breaks_ties_by_evidence_strength():
     from app.api.chat_routes import _select_top_drugs
 
     evidence = [
         {"gene": "ERCC1", "drug": "Cisplatin", "source": "CIViC", "evidence_level": "B"},
         {"gene": "TP53", "drug": "cisplatin", "source": "CIViC", "evidence_level": "A"},  # dup, higher level
-        {"gene": "NOTCH2", "drug": "Nirogacestat", "source": "DGIdb", "approved": False},  # excluded
-        {"gene": "HDAC4", "drug": "Vorinostat", "source": "DGIdb", "approved": True},
-        {"gene": "APC", "drug": "JW55", "source": "CIViC", "evidence_level": "D"},  # excluded
     ]
     picked = _select_top_drugs(evidence, max_n=5)
-    assert picked[0].lower() == "cisplatin"  # level-A duplicate wins the ranking
-    assert "Vorinostat" in picked
-    assert not any(d.lower() == "nirogacestat" for d in picked)
-    assert not any(d.lower() == "jw55" for d in picked)
     assert len(picked) == len({p.lower() for p in picked})  # deduped
+    assert picked[0].lower() == "cisplatin"
+
+
+def test_select_top_drugs_no_longer_excludes_investigational_or_low_evidence():
+    """Approval status / CIViC level is a within-gene tiebreaker only now —
+    it must not gate eligibility, since it has no bearing on whether a
+    matching GEO cohort actually exists (the bug this fixes)."""
+    from app.api.chat_routes import _select_top_drugs
+
+    evidence = [
+        {"gene": "NOTCH2", "drug": "Nirogacestat", "source": "DGIdb", "approved": False},
+        {"gene": "APC", "drug": "JW55", "source": "CIViC", "evidence_level": "D"},
+    ]
+    picked = _select_top_drugs(evidence, max_n=5)
+    assert any(d.lower() == "nirogacestat" for d in picked)
+    assert any(d.lower() == "jw55" for d in picked)
+
+
+def test_select_top_drugs_round_robins_across_genes():
+    """One gene's several approved drugs must not consume the whole budget
+    and starve other genes of any lookup at all."""
+    from app.api.chat_routes import _select_top_drugs
+
+    evidence = [
+        {"gene": "HDAC4", "drug": f"HDACi{i}", "source": "DGIdb", "approved": True}
+        for i in range(4)
+    ] + [
+        {"gene": "NOTCH2", "drug": "Nirogacestat", "source": "DGIdb", "approved": False},
+        {"gene": "APC", "drug": "JW55", "source": "CIViC", "evidence_level": "D"},
+    ]
+    picked = _select_top_drugs(evidence, max_n=3)
+    picked_genes = set()
+    by_drug = {e["drug"].lower(): e["gene"] for e in evidence}
+    for d in picked:
+        picked_genes.add(by_drug[d.lower()])
+    assert picked_genes == {"HDAC4", "NOTCH2", "APC"}  # every gene got at least one shot
 
 
 def test_select_top_drugs_respects_max_n():
@@ -175,13 +246,20 @@ def test_select_top_drugs_respects_max_n():
     assert len(_select_top_drugs(evidence, max_n=5)) == 5
 
 
-def test_resolve_cohort_km_falls_back_to_unavailable_offline():
+def test_resolve_cohort_km_falls_back_to_unavailable_offline(monkeypatch):
     """With no orchestrator (so Tier 1 is unreachable) and no treatment-context
     service initialised (so Tier 2's build can't be queued), cohort KM
     resolution degrades to an honest Tier-3 'unavailable' result — never a
-    fabricated curve."""
+    fabricated curve. The PubChem synonym lookup is stubbed so this test
+    stays offline."""
     from app.api import chat_routes
     from app.api.chat_routes import _resolve_cohort_km
+
+    class _NoSynonyms:
+        async def get_synonyms(self, drug_name):
+            return []
+
+    monkeypatch.setattr(chat_routes, "get_drug_synonym_service", lambda: _NoSynonyms())
 
     svc = SignatureService(orchestrator=None)
     model = svc.build_demo_signature(max_genes=6)
@@ -192,6 +270,47 @@ def test_resolve_cohort_km_falls_back_to_unavailable_offline():
     assert result.arms is None
     assert result.reference_km is None
     assert result.build_error
+
+
+def test_therapy_rationale_marks_unbudgeted_drugs_not_checked(monkeypatch):
+    """Every evidence row must get an explicit cohort_km tier — including
+    'not_checked' for drugs outside this round's lookup budget — instead of
+    a silent None the UI has no way to explain."""
+    from app.api import chat_routes
+    from app.api.chat_routes import TherapyRationaleRequest, therapy_rationale
+    from app.models.signature_models import TreatmentKMEvidence
+
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=6)
+
+    evidence = [
+        {"gene": "GENE1", "drug": "DrugA", "source": "DGIdb", "approved": True},
+        {"gene": "GENE2", "drug": "DrugB", "source": "DGIdb", "approved": True},
+    ]
+
+    class _FixedTherapy:
+        def lookup(self, genes, max_total=40):
+            return evidence
+
+    async def fake_generate_response(self, messages, model, conversation_id):
+        return "Advisory hypothesis-only text.", 0, 40
+
+    class _FakePydanticAI:
+        async def generate_response(self, messages, model, conversation_id):
+            return "Advisory hypothesis-only text.", 0, 40
+
+    async def fake_resolve(model_arg, drug, cache):
+        return TreatmentKMEvidence(drug=drug, tier="unavailable", build_error="no data")
+
+    chat_routes.set_therapy_services(svc, _FixedTherapy())
+    monkeypatch.setattr(chat_routes, "get_pydantic_ai_service", lambda: _FakePydanticAI())
+    monkeypatch.setattr(chat_routes, "_select_top_drugs", lambda evidence: ["DrugA"])
+    monkeypatch.setattr(chat_routes, "_resolve_cohort_km", fake_resolve)
+
+    resp = asyncio.run(therapy_rationale(TherapyRationaleRequest(model_id=model.model_id)))
+    by_drug = {r.drug: r for r in resp.evidence}
+    assert by_drug["DrugA"].cohort_km.tier == "unavailable"
+    assert by_drug["DrugB"].cohort_km.tier == "not_checked"
 
 
 # ---------- cross-platform normalization + input-validity warnings ----------

@@ -11,8 +11,8 @@ Manage git operations with conventional commits.
 
 ### 1. Sync (Pull Latest)
 ```bash
-git checkout development
-git pull --rebase origin development
+git checkout main
+git pull --rebase origin main
 ```
 
 ### 2. Status Check
@@ -49,8 +49,8 @@ EOF
 
 ### 4. Push Changes
 ```bash
-git pull --rebase origin development
-git push origin development
+git pull --rebase origin main
+git push origin main
 ```
 
 ### 5. Create Tag
@@ -69,13 +69,13 @@ prefix: message
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>
 EOF
 )"
-git pull --rebase origin development
-git push origin development
+git pull --rebase origin main
+git push origin main
 ```
 
 ## Usage Examples
 
-`/git sync` -> Pull latest from development
+`/git sync` -> Pull latest from main
 `/git commit the api changes as a fix` -> Stage and commit with `fix:` prefix
 `/git push` -> Pull rebase then push
 `/git tag v1.2.0` -> Create and push version tag

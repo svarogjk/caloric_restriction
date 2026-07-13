@@ -42,6 +42,13 @@ const CohortKmPanel: React.FC<{ km: TreatmentKMEvidence }> = ({ km }) => {
             </div>
         )
     }
+    if (km.tier === 'not_checked') {
+        return (
+            <div className="mt-1 text-[11px] text-gray-400">
+                Not checked for GEO cohort data this round.
+            </div>
+        )
+    }
     if (km.tier === 'unavailable') {
         return (
             <div className="mt-1 text-[11px] text-gray-400">

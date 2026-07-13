@@ -1171,20 +1171,26 @@ class SignatureService:
         treatment_binary: pd.Series,
         arm_names: Dict[int, str],
         drug_name: str,
+        synonyms: Optional[List[str]] = None,
     ) -> Optional[List[TreatmentArmKM]]:
         """Tier-1 "Treatments to consider" KM evidence, given a cohort already
         loaded via `load_cohort_treatment_arms`: only when the treated arm's
-        free-text label actually names `drug_name` does this fit descriptive
-        per-arm KM curves (treated vs untreated/control) and return them.
+        free-text label actually names `drug_name` (or one of its known
+        `synonyms` — brand names / research codes, e.g. "PXD101" for
+        belinostat) does this fit descriptive per-arm KM curves (treated vs
+        untreated/control) and return them.
 
         Gene-independent: a raw survival-by-arm comparison, not an
         expression-conditioned hazard ratio (that's `_fit_interaction_cox`,
         used elsewhere for the predictive-biomarker forest). Never fabricates
-        an attribution — returns None when the arm label doesn't match.
+        an attribution — returns None when neither the drug name nor any
+        synonym matches the arm label.
         """
         if self.orchestrator is None:
             return None
-        if not _arm_label_matches_drug(arm_names.get(1, ""), drug_name):
+        label = arm_names.get(1, "")
+        candidates = [drug_name, *(synonyms or [])]
+        if not any(_arm_label_matches_drug(label, c) for c in candidates):
             return None
         arms = self.orchestrator.survival_service._fit_treatment_arm_km(
             survival_df["time"], survival_df["event"], treatment_binary, arm_names
