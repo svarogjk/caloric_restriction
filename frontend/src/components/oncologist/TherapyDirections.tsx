@@ -1,12 +1,24 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { getTherapyRationale, getCohortKM, TherapyRationaleResponse, TreatmentKMEvidence } from '../../services/api'
+import {
+    getTherapyRationale, getCohortKM, getTreatmentContext,
+    TherapyRationaleResponse, TreatmentKMEvidence, TreatmentComparisonResult, ReferenceKMCurve,
+} from '../../services/api'
 import KaplanMeierChart, { KMChartCurve } from '../KaplanMeierChart'
-import { GROUP_COLORS } from '../../utils/signatureViz'
+import { GROUP_COLORS, TREATMENT_COLORS, fiveYearSurvival, treatmentComparisonCurves } from '../../utils/signatureViz'
 
 interface TherapyDirectionsProps {
     modelId: string
     riskGroup?: string | null
     genes?: string[]
+    /** Cancer type key (e.g. "breast") — enables the always-on cohort treatment-outcome chart. */
+    cancerType?: string | null
+    /** The scored patient's tumour expression — required (>=10 genes) for the cohort chart. */
+    expression?: Record<string, number>
+    clinical?: Record<string, string | number> | null
+    /** The patient's own predicted curve (from the base model) — overlaid on the
+     *  cohort treatment chart as a reference line so treatment outcomes are directly
+     *  comparable against the patient's current predicted trajectory. */
+    baselineCurve?: ReferenceKMCurve | null
 }
 
 const POLL_INTERVAL_MS = 15_000
@@ -79,25 +91,163 @@ const CohortKmPanel: React.FC<{ km: TreatmentKMEvidence }> = ({ km }) => {
 }
 
 /**
+ * Curated per-cancer-type treatment cohort comparison (F24) — real GEO cohort
+ * KM curves for standard-of-care treatments, independent of whether any
+ * specific gene-drug literature association was found. Renders every time
+ * Generate is clicked and a supported cancer type is resolved, so a chart is
+ * never gated on CIViC/DGIdb coverage (which is often sparse for a given
+ * gene set).
+ */
+const TreatmentComparisonPanel: React.FC<{
+    cancerType?: string | null
+    hasEnoughExpression: boolean
+    loading: boolean
+    error: string | null
+    data: TreatmentComparisonResult | null
+    baselineCurve?: ReferenceKMCurve | null
+}> = ({ cancerType, hasEnoughExpression, loading, error, data, baselineCurve }) => {
+    if (!cancerType) {
+        return (
+            <p className="text-[11px] text-gray-400">
+                Cohort outcome curves aren't available for this cancer type yet.
+            </p>
+        )
+    }
+    if (!hasEnoughExpression) {
+        return (
+            <p className="text-[11px] text-gray-400">
+                Add the full tumour expression profile (≥10 genes) to enable cohort treatment-outcome curves.
+            </p>
+        )
+    }
+    if (error) {
+        return <div className="text-xs text-red-600 bg-red-50 border border-red-200 rounded p-2">{error}</div>
+    }
+    if (!data && loading) {
+        return (
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+                <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                Loading treatment cohort data…
+            </div>
+        )
+    }
+    if (!data) return null
+
+    const patientRiskGroup = data.treatments.find((t) => t.risk_group)?.risk_group ?? null
+    const building = data.treatments.filter((t) => t.is_building)
+    const failed = data.treatments.filter((t) => t.build_error)
+    const curves = treatmentComparisonCurves(data.treatments, patientRiskGroup, baselineCurve)
+
+    return (
+        <div className="space-y-2">
+            {building.length > 0 && (
+                <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded p-2 flex items-center gap-2">
+                    <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    Building cohort models for {building.map((t) => t.name).join(', ')}… (~2 min each, auto-refreshing)
+                </div>
+            )}
+
+            {curves.length > 0 && <KaplanMeierChart curves={curves} height={220} />}
+
+            <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                    <thead>
+                        <tr className="bg-gray-50 text-gray-500 text-left">
+                            <th className="px-2 py-1.5 font-medium border-b border-gray-200">Treatment</th>
+                            <th className="px-2 py-1.5 font-medium border-b border-gray-200">Your risk group</th>
+                            <th className="px-2 py-1.5 font-medium border-b border-gray-200">5-yr survival</th>
+                            <th className="px-2 py-1.5 font-medium border-b border-gray-200">C-index</th>
+                            <th className="px-2 py-1.5 font-medium border-b border-gray-200">Cohorts</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {data.treatments.map((t, i) => (
+                            <tr key={t.slug} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}>
+                                <td className="px-2 py-2 font-medium text-gray-700 border-b border-gray-100">
+                                    <div className="flex items-center gap-2">
+                                        {!t.is_building && !t.build_error && (
+                                            <span
+                                                className="w-2 h-2 rounded-full flex-shrink-0"
+                                                style={{ backgroundColor: TREATMENT_COLORS[i % TREATMENT_COLORS.length] }}
+                                            />
+                                        )}
+                                        {t.name}
+                                    </div>
+                                </td>
+                                <td className="px-2 py-2 border-b border-gray-100">
+                                    {t.is_building ? (
+                                        <span className="text-indigo-500 italic">Building…</span>
+                                    ) : t.build_error ? (
+                                        <span className="text-red-400">Error</span>
+                                    ) : (
+                                        <span
+                                            className="px-2 py-0.5 rounded-full text-white text-[11px] font-semibold"
+                                            style={{ backgroundColor: GROUP_COLORS[t.risk_group ?? 'low'] ?? '#6b7280' }}
+                                        >
+                                            {t.risk_group?.toUpperCase() ?? '—'}
+                                        </span>
+                                    )}
+                                </td>
+                                <td className="px-2 py-2 border-b border-gray-100 tabular-nums">
+                                    {t.is_building ? '—' : fiveYearSurvival(t)}
+                                </td>
+                                <td className="px-2 py-2 border-b border-gray-100 tabular-nums text-gray-500">
+                                    {t.pooled_c_index != null ? t.pooled_c_index.toFixed(2) : '—'}
+                                </td>
+                                <td className="px-2 py-2 border-b border-gray-100 text-gray-500">
+                                    {t.n_cohorts != null ? `${t.n_cohorts} (n=${t.n_patients ?? '?'})` : '—'}
+                                </td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            </div>
+
+            {failed.length > 0 && (
+                <p className="text-[11px] text-gray-400">
+                    Could not build models for: {failed.map((t) => t.name).join(', ')}.
+                    These treatments may not have enough matching GEO datasets.
+                </p>
+            )}
+
+            <p className="text-[11px] text-gray-400 border-t border-gray-100 pt-2">
+                {data.treatments[0]?.disclaimer}
+            </p>
+        </div>
+    )
+}
+
+/**
  * Grounded "treatments to consider" (Oncologist Mode). On demand, the AI writes
  * advisory suggestions over REAL CIViC/DGIdb evidence for the risk-driving genes —
  * advisory, not a prescription. The cited associations are always shown alongside
  * the prose, and a prominent banner keeps the framing honest.
  *
- * For the top few highest-confidence suggestions, real GEO cohort survival
- * curves (F24b) are auto-built alongside generation and rendered inline once
- * ready — see cohortKmCurves for the tiered arm-comparison vs cohort-reference
- * framing.
+ * Two independent, real-GEO-cohort chart sources are drawn on every Generate click:
+ * - Per-drug KM (F24b) for the top few highest-confidence CIViC/DGIdb suggestions,
+ *   see cohortKmCurves for the tiered arm-comparison vs cohort-reference framing.
+ * - A curated per-cancer-type treatment comparison (F24, TreatmentComparisonPanel)
+ *   that does NOT depend on any biomarker-drug literature match existing — so a
+ *   chart still renders even when CIViC/DGIdb has no coverage for these genes.
  */
-const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGroup, genes }) => {
+const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
+    modelId, riskGroup, genes, cancerType, expression, clinical, baselineCurve,
+}) => {
     const [data, setData] = useState<TherapyRationaleResponse | null>(null)
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [cohortKm, setCohortKm] = useState<Record<string, TreatmentKMEvidence>>({})
     const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+    const [treatmentContext, setTreatmentContext] = useState<TreatmentComparisonResult | null>(null)
+    const [tcLoading, setTcLoading] = useState(false)
+    const [tcError, setTcError] = useState<string | null>(null)
+    const tcPollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const hasEnoughExpression = Object.keys(expression ?? {}).length >= 10
+
     useEffect(() => () => {
         if (pollRef.current) clearTimeout(pollRef.current)
+        if (tcPollRef.current) clearTimeout(tcPollRef.current)
     }, [])
 
     const pollCohortKm = async (drugs: string[]) => {
@@ -118,6 +268,24 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGrou
         }
     }
 
+    const fetchTreatmentContext = async () => {
+        if (!cancerType || !hasEnoughExpression) return
+        try {
+            const result = await getTreatmentContext({
+                cancer_type: cancerType, expression: expression ?? {}, clinical,
+            })
+            setTreatmentContext(result)
+            setTcError(null)
+            if (result.treatments.some((t) => t.is_building)) {
+                tcPollRef.current = setTimeout(() => { void fetchTreatmentContext() }, POLL_INTERVAL_MS)
+            }
+        } catch (err) {
+            setTcError(err instanceof Error ? err.message : 'Failed to load treatment cohort data')
+        } finally {
+            setTcLoading(false)
+        }
+    }
+
     const generate = async () => {
         setLoading(true)
         setError(null)
@@ -125,6 +293,17 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGrou
             clearTimeout(pollRef.current)
             pollRef.current = null
         }
+        if (tcPollRef.current) {
+            clearTimeout(tcPollRef.current)
+            tcPollRef.current = null
+        }
+        setTreatmentContext(null)
+        setTcError(null)
+        if (cancerType && hasEnoughExpression) {
+            setTcLoading(true)
+            void fetchTreatmentContext()
+        }
+
         try {
             const r = await getTherapyRationale({ modelId, riskGroup, genes })
             setData(r)
@@ -152,6 +331,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGrou
     // Only render the cohort-KM chart under the FIRST evidence row for a given
     // drug — multiple rows (different genes) can share one drug suggestion.
     const firstRowForDrug = new Set<string>()
+    const hasGenerated = data !== null || loading || error !== null
 
     return (
         <div className="border border-purple-200 rounded-lg p-4 bg-purple-50/40">
@@ -172,15 +352,36 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({ modelId, riskGrou
                 and research use only; not a prescription and not a guarantee that this patient will respond.
             </div>
 
-            {error && (
-                <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">{error}</div>
+            {!hasGenerated && (
+                <p className="text-sm text-gray-500">
+                    Surface real GEO cohort survival curves for standard-of-care treatments, plus any
+                    documented CIViC/DGIdb drug–biomarker associations for this patient's risk-driving
+                    genes, with an AI-written summary framed as research hypotheses.
+                </p>
             )}
 
-            {!data && !loading && !error && (
-                <p className="text-sm text-gray-500">
-                    Surface documented CIViC/DGIdb drug–biomarker associations for this patient's
-                    risk-driving genes, with an AI-written summary framed as research hypotheses.
-                </p>
+            {hasGenerated && (
+                <div className="mb-4 border border-gray-200 rounded-lg p-3 bg-white">
+                    <h4 className="text-sm font-semibold text-gray-700 mb-1">Cohort survival by treatment</h4>
+                    <p className="text-[11px] text-gray-500 mb-2">
+                        Historical outcomes from GEO cohorts receiving each treatment — patients in the same
+                        risk group as yours — plotted alongside your currently predicted survival (bold gray,
+                        dashed) so each option is directly comparable to your current trajectory. Advisory, not
+                        a prescription or a prediction that you will respond.
+                    </p>
+                    <TreatmentComparisonPanel
+                        cancerType={cancerType}
+                        hasEnoughExpression={hasEnoughExpression}
+                        loading={tcLoading}
+                        error={tcError}
+                        data={treatmentContext}
+                        baselineCurve={baselineCurve}
+                    />
+                </div>
+            )}
+
+            {error && (
+                <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">{error}</div>
             )}
 
             {data && (

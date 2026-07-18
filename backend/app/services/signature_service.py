@@ -977,7 +977,10 @@ class SignatureService:
         if self.orchestrator is None:
             raise ValueError("Orchestrator unavailable for real-data signature")
 
+        from app.services.treatment_context_service import detect_cancer_type
+
         query = result.get("query", "signature")
+        cancer_type = cancer_type or detect_cancer_type(query)
         common_genes = result.get("common_genes", [])
         if not common_genes:
             raise ValueError("Saved result has no genes to form a signature")

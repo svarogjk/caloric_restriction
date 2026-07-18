@@ -43,6 +43,7 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
     const [modelIsDemo, setModelIsDemo] = useState(false)
     const [referenceCurves, setReferenceCurves] = useState<ReferenceKMCurve[] | undefined>()
     const [timeUnit, setTimeUnit] = useState('days')
+    const [resolvedCancerType, setResolvedCancerType] = useState<string | null>(null)
 
     // For a curated/pre-built model, load its covariates + demo capability up front.
     useEffect(() => {
@@ -98,6 +99,7 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
             setPrediction(resp.prediction)
             setResolvedModelId(resp.model_id)
             setModelIsDemo(resp.model_is_demo)
+            setResolvedCancerType(resp.cancer_type)
             setCovariates(resp.clinical_covariates)        // reveal clinical fields for refinement
             // Fetch full model once for the multi-group reference KM.
             try {
@@ -238,7 +240,7 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
                             modelIsDemo={modelIsDemo}
                             referenceCurves={referenceCurves}
                             timeUnit={timeUnit}
-                            cancerType={cancerType}
+                            cancerType={cancerType ?? resolvedCancerType}
                             expressionRaw={exprText}
                             clinicalValues={clinical}
                         />

@@ -18,6 +18,17 @@ Screenshots must exist in `presentations/screenshots/` (or a dated subfolder lik
 - `volcano_plot.png`
 - `kaplan_meier_curves.png` (or `km_curves.png`)
 
+To preview just a few slides (e.g. after editing one slide's content) without
+regenerating the full deck, pass `--slides`:
+
+```bash
+cd backend && uv run python ../scripts/create_presentation.py --slides 5,12,20-22
+```
+
+Accepts comma-separated numbers and ranges. Output goes to a separate
+`presentations/app_presentation.preview.pptx`, containing only the requested slides in
+that order — the main deck file is never touched.
+
 ---
 
 ## When to Edit vs Re-generate

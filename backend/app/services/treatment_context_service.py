@@ -142,6 +142,28 @@ TREATMENT_QUERIES: dict[str, list[dict[str, str]]] = {
 }
 
 
+CANCER_TYPE_TERMS: dict[str, list[str]] = {
+    "breast": ["breast cancer", "breast carcinoma", "breast tumor", "breast tumour"],
+    "lung": ["lung cancer", "lung carcinoma", "lung adenocarcinoma", "nsclc", "sclc"],
+    "colorectal": ["colorectal cancer", "colon cancer", "rectal cancer", "crc"],
+    "ovarian": ["ovarian cancer", "ovarian carcinoma"],
+    "gastric": ["gastric cancer", "stomach cancer", "gastric carcinoma"],
+    "glioma": ["glioma", "glioblastoma", "gbm"],
+}
+
+
+def detect_cancer_type(query: str) -> Optional[str]:
+    """Infer a `TREATMENT_QUERIES`-supported cancer type from a free-text
+    analysis query (e.g. "lung adenocarcinoma overall survival" -> "lung").
+    Grounded in the same query string already used to fetch the GEO datasets
+    for this analysis — never invents a type beyond what F24 can serve."""
+    q = query.lower()
+    for cancer_key, terms in CANCER_TYPE_TERMS.items():
+        if any(t in q for t in terms):
+            return cancer_key
+    return None
+
+
 def _model_id(cancer_type: str, slug: str) -> str:
     return f"treatment_{cancer_type}_{slug}"
 

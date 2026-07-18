@@ -1,10 +1,9 @@
 import React, { useMemo } from 'react'
 import { PredictResponse, ReferenceKMCurve } from '../../services/api'
-import { GROUP_COLORS } from '../../utils/signatureViz'
+import { GROUP_COLORS, parsePastedExpression } from '../../utils/signatureViz'
 import KaplanMeierChart, { KMChartCurve } from '../KaplanMeierChart'
 import TherapyDirections from './TherapyDirections'
 import PatientReport from './PatientReport'
-import { TreatmentContextToggle } from './TreatmentContext'
 
 interface PatientReadoutProps {
     prediction: PredictResponse
@@ -45,6 +44,7 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
     const hasKmData = curves.some((c) => c.times.length > 0)
     const perYear = timeUnit.toLowerCase().startsWith('month') ? 12 : 365
     const maxAbs = Math.max(1e-9, ...result.contributions.map((c) => Math.abs(c.contribution)))
+    const expression = useMemo(() => parsePastedExpression(expressionRaw ?? ''), [expressionRaw])
 
     return (
         <div className="mt-6 space-y-4">
@@ -154,13 +154,14 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
                     patient will respond.
                 </p>
 
-                <TreatmentContextToggle
-                    cancerType={cancerType ?? null}
-                    expressionRaw={expressionRaw ?? ''}
+                <TherapyDirections
+                    modelId={modelId}
+                    riskGroup={result.risk_group}
+                    cancerType={cancerType}
+                    expression={expression}
                     clinical={clinicalValues}
+                    baselineCurve={result.reference_km}
                 />
-
-                <TherapyDirections modelId={modelId} riskGroup={result.risk_group} />
             </div>
 
             <button

@@ -55,19 +55,23 @@ Section 8 — Cross-Cutting Concerns (slides 34–39)
   38. asyncio.gather: The 10× Speedup in Practice
   39. Error Handling: Resilient by Design
 
-Section 9 — Engineering Decisions (slides 40–41)
+Section 9 — Engineering Decisions (slides 40–43)
   40. SQLite vs PostgreSQL: Cost vs Capability
-  41. Deployment Pipeline
+  41. CI/CD Pipeline: From git push to Live
+  42. Server Setup: One-Time Steps
+  43. Why Hetzner? Why Spaceship?
 
-Section 10 — Demo (slides 42–44)
-  42. Demo: Natural Language Query
-  43. Demo: Volcano Plot & Gene Results
-  44. Demo: Kaplan-Meier Survival Curves
+Section 10 — Demo (slides 44–46)
+  44. Demo: Natural Language Query
+  45. Demo: Volcano Plot & Gene Results
+  46. Demo: Kaplan-Meier Survival Curves
 
-Section 11 — Lessons Learned (slide 45)
-  45. What We Learned
+Section 11 — Lessons Learned (slide 47)
+  47. What We Learned
 """
 
+import argparse
+from collections.abc import Callable
 from pathlib import Path
 
 from pptx import Presentation
@@ -75,21 +79,21 @@ from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.util import Inches, Pt
 
-# ── Color palette ──────────────────────────────────────────────────────────────
-BG        = RGBColor(0x0F, 0x19, 0x23)
-CARD      = RGBColor(0x1A, 0x27, 0x36)
-CARD_ALT  = RGBColor(0x15, 0x20, 0x30)
-WHITE     = RGBColor(0xF0, 0xF0, 0xF0)
-MUTED     = RGBColor(0xA0, 0xAE, 0xC0)
-LIGHT     = RGBColor(0xC8, 0xD6, 0xE5)
-TEAL      = RGBColor(0x2D, 0xD4, 0xA8)
-BLUE      = RGBColor(0x60, 0xA5, 0xFA)
-PURPLE    = RGBColor(0xA7, 0x8B, 0xFA)
-AMBER     = RGBColor(0xFB, 0xBF, 0x24)
-CORAL     = RGBColor(0xF9, 0x70, 0x66)
-TEAL_DIM  = RGBColor(0x1A, 0x5E, 0x4E)
-CORAL_DIM = RGBColor(0x6B, 0x2E, 0x2A)
-TEAL_DARK = RGBColor(0x1A, 0x40, 0x35)
+# ── Color palette (light theme — conference/projector friendly) ────────────────
+BG        = RGBColor(0xF8, 0xFA, 0xFC)   # slate-50   page background
+CARD      = RGBColor(0xF1, 0xF5, 0xF9)   # slate-100  card fill
+CARD_ALT  = RGBColor(0xE2, 0xE8, 0xF0)   # slate-200  alt row / gridlines
+INK       = RGBColor(0x0F, 0x17, 0x2A)   # slate-900  primary text / headings
+MUTED     = RGBColor(0x64, 0x74, 0x8B)   # slate-500  muted labels
+LIGHT     = RGBColor(0x33, 0x41, 0x55)   # slate-700  body / description text
+TEAL      = RGBColor(0x0F, 0x76, 0x6E)   # teal-700   primary accent
+BLUE      = RGBColor(0x1D, 0x4E, 0xD8)   # blue-700   secondary accent
+PURPLE    = RGBColor(0x6D, 0x28, 0xD9)   # violet-700 tertiary accent
+AMBER     = RGBColor(0xB4, 0x53, 0x09)   # amber-700  highlight
+CORAL     = RGBColor(0xB9, 0x1C, 0x1C)   # red-700    danger / problem
+TEAL_DIM  = RGBColor(0xCC, 0xFB, 0xF1)   # teal-100   pastel zone bg
+CORAL_DIM = RGBColor(0xFE, 0xE2, 0xE2)   # red-100    pastel zone bg
+TEAL_DARK = RGBColor(0x99, 0xF6, 0xE4)   # teal-200   pastel badge bg
 
 # ── Primitive helpers ──────────────────────────────────────────────────────────
 
@@ -152,7 +156,7 @@ def _para(
 
 def _title_block(slide, title: str, accent: RGBColor = TEAL) -> None:
     tb = _tb(slide, 0.5, 0.30, 12.333, 0.75, "Title")
-    _para(tb.text_frame, title, 28, WHITE, bold=True)
+    _para(tb.text_frame, title, 28, INK, bold=True)
     _rect(slide, 0.5, 0.95, 12.333, 0.04, fill_color=accent, name="TitleLine")
 
 
@@ -165,7 +169,7 @@ def add_title_slide(prs: Presentation, title: str, sub1: str, sub2: str) -> None
     _oval(slide, -1.0,  5.0, 3.5, 3.5, BLUE,   "DecorCircle2")
     _rect(slide, 5.25, 2.40, 2.833, 0.06, TEAL, "AccentLine")
     tb = _tb(slide, 1.5, 2.60, 10.333, 1.1, "MainTitle")
-    _para(tb.text_frame, title, 44, WHITE, bold=True, align=PP_ALIGN.CENTER)
+    _para(tb.text_frame, title, 44, INK, bold=True, align=PP_ALIGN.CENTER)
     tb2 = _tb(slide, 2.0, 3.89, 9.333, 1.2, "Subtitle")
     _para(tb2.text_frame, sub1,  20, TEAL,  align=PP_ALIGN.CENTER)
     _para(tb2.text_frame, sub2,  16, MUTED, align=PP_ALIGN.CENTER, new=True)
@@ -196,7 +200,7 @@ def add_combined_intro_slide(prs: Presentation) -> None:
         tb_s = _tb(slide, x + 0.10, stat_y + 0.05, stat_w - 0.15, 0.42)
         _para(tb_s.text_frame, stat, 24, color, bold=True, align=PP_ALIGN.CENTER)
         tb_l = _tb(slide, x + 0.10, stat_y + 0.50, stat_w - 0.15, 0.30)
-        _para(tb_l.text_frame, label, 11, WHITE, bold=True, align=PP_ALIGN.CENTER)
+        _para(tb_l.text_frame, label, 11, INK, bold=True, align=PP_ALIGN.CENTER)
 
     tb_gh = _tb(slide, 0.5, 2.45, 5.80, 0.35, "GapsHeader")
     _para(tb_gh.text_frame, "WHY IT'S HARD", 12, AMBER, bold=True)
@@ -312,7 +316,7 @@ def add_survival_primer_slide(prs: Presentation) -> None:
         if is_event:
             _rect(slide, mx - 0.07, bar_top - 0.07, 0.14, bar_h + 0.14, color, f"PEvent{i}")
         else:
-            _rect(slide, mx - 0.03, bar_top - 0.12, 0.06, bar_h + 0.24, WHITE, f"PCensor{i}")
+            _rect(slide, mx - 0.03, bar_top - 0.12, 0.06, bar_h + 0.24, INK, f"PCensor{i}")
 
     # X-axis ticks and labels
     for t in [0, 12, 24, 36, 48, 60]:
@@ -506,7 +510,7 @@ def add_hr_slide(prs: Presentation) -> None:
     # Main axis line
     _rect(slide, nl_left, nl_y - 0.02, nl_w, 0.04, LIGHT, "NLAxis")
     # Null vertical line at HR=1
-    _rect(slide, hr2x(1.0) - 0.03, nl_y - 0.50, 0.06, 1.00, WHITE, "NullLine")
+    _rect(slide, hr2x(1.0) - 0.03, nl_y - 0.50, 0.06, 1.00, INK, "NullLine")
 
     # Tick marks and labels
     for hr, lbl in [(0.5, "0.5"), (1.0, "1.0"), (2.0, "2.0"), (4.0, "4.0")]:
@@ -528,7 +532,7 @@ def add_hr_slide(prs: Presentation) -> None:
 
     # "No effect" label at HR=1
     tb_ne = _tb(slide, hr2x(1.0) - 0.50, nl_y - 0.56, 1.00, 0.30)
-    _para(tb_ne.text_frame, "HR = 1", 11, WHITE, bold=True, align=PP_ALIGN.CENTER)
+    _para(tb_ne.text_frame, "HR = 1", 11, INK, bold=True, align=PP_ALIGN.CENTER)
 
     # Example annotations below the axis
     # Gene A: HR = 0.35 (protective)
@@ -768,7 +772,7 @@ def add_comparison_table_slide(prs: Presentation) -> None:
             tf.paragraphs[0].font.color.rgb = BG
         else:
             cell.fill.fore_color.rgb = CARD
-            tf.paragraphs[0].font.color.rgb = WHITE
+            tf.paragraphs[0].font.color.rgb = INK
 
     for ri, row in enumerate(rows):
         fill = CARD if ri % 2 == 0 else CARD_ALT
@@ -784,7 +788,7 @@ def add_comparison_table_slide(prs: Presentation) -> None:
                 tf.paragraphs[0].font.bold = True
             elif ci == 0:
                 cell.fill.fore_color.rgb = fill
-                tf.paragraphs[0].font.color.rgb = WHITE
+                tf.paragraphs[0].font.color.rgb = INK
                 tf.paragraphs[0].font.bold = True
             else:
                 cell.fill.fore_color.rgb = fill
@@ -910,7 +914,7 @@ def add_backend_arch_visual_slide(prs: Presentation) -> None:
     storage_items = [
         ("SQLite / PostgreSQL", "auth · chat history · analysis results\nenv-var switchable", BLUE),
         ("Parquet cache", "expression matrices · gene mappings\nprobe → gene symbol  (per-GPL)", TEAL),
-        ("numpy RAG index", "Mistral 1024-dim embeddings\n500 doc chunks · ~1ms lookup", PURPLE),
+        ("numpy RAG index", "Mistral 1024-dim embeddings\n~150 doc chunks · ~1ms lookup", PURPLE),
     ]
     for j, (label, desc, color) in enumerate(storage_items):
         sx = route_x + j * (sb_w + 0.10)
@@ -1022,7 +1026,7 @@ def add_workflow_slide(
             tb_n = _tb(slide, x + 0.15, yt + 0.10, sw - 0.30, 0.40)
             _para(tb_n.text_frame, num, 16, CORAL, bold=True, align=PP_ALIGN.CENTER)
             tb_l = _tb(slide, x + 0.15, yt + 0.60, sw - 0.30, 0.45)
-            _para(tb_l.text_frame, label, 16, WHITE, bold=True, align=PP_ALIGN.CENTER)
+            _para(tb_l.text_frame, label, 16, INK, bold=True, align=PP_ALIGN.CENTER)
             tb_d = _tb(slide, x + 0.15, yt + 1.15, sw - 0.30, 1.30)
             _para(tb_d.text_frame, desc, 13, LIGHT, align=PP_ALIGN.CENTER)
             if col_i < len(row_steps) - 1:
@@ -1275,7 +1279,7 @@ def add_db_comparison_slide(prs: Presentation) -> None:
         tf.paragraphs[0].font.bold = True
         cell.fill.solid()
         header_colors = [CARD, TEAL, BLUE]
-        text_colors   = [WHITE, BG, BG]
+        text_colors   = [INK, BG, BG]
         cell.fill.fore_color.rgb = header_colors[ci]
         tf.paragraphs[0].font.color.rgb = text_colors[ci]
 
@@ -1289,7 +1293,7 @@ def add_db_comparison_slide(prs: Presentation) -> None:
             cell.fill.solid()
             cell.fill.fore_color.rgb = fill
             if ci == 0:
-                tf.paragraphs[0].font.color.rgb = WHITE
+                tf.paragraphs[0].font.color.rgb = INK
                 tf.paragraphs[0].font.bold = True
             elif ci == 1:
                 tf.paragraphs[0].font.color.rgb = TEAL
@@ -1333,7 +1337,7 @@ def add_image_slide(
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_bg(slide)
     tb = _tb(slide, 0.5, 0.30, 12.333, 0.75, "Title")
-    _para(tb.text_frame, title, 24, WHITE, bold=True)
+    _para(tb.text_frame, title, 24, INK, bold=True)
     _rect(slide, 0.5, 1.05, 12.333, 0.04, TEAL, "TitleLine")
     slide.shapes.add_picture(str(image_path), Inches(1.0), Inches(1.20), width=Inches(11.333))
     tb_cap = _tb(slide, 0.5, 6.50, 12.333, 0.75, "Caption")
@@ -2127,21 +2131,18 @@ def add_sqlalchemy_slide(prs: Presentation) -> None:
     _para(tb_n.text_frame, "uv run alembic revision --autogenerate -m 'desc'  +  uv run alembic upgrade head", 10, TEAL, mono=True)
 
 
-# ── N11: Mistral + uv ─────────────────────────────────────────────────────────
+# ── N11: Mistral Embeddings ───────────────────────────────────────────────────
 
-def add_mistral_uv_slide(prs: Presentation) -> None:
+def add_mistral_slide(prs: Presentation) -> None:
+    """Provider-choice rationale + touchpoints. Full RAG mechanics live on the RAG slide (N18)."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     _set_bg(slide)
-    _title_block(slide, "Mistral Embeddings + uv: RAG Without Infrastructure", TEAL)
+    _title_block(slide, "Mistral Embeddings: One SDK for Chat + RAG", TEAL)
 
-    divx = 6.70
-    lx, lw = 0.35, divx - 0.35 - 0.20
-    rx, rw = divx + 0.20, 13.133 - divx - 0.20
-    _rect(slide, divx, 1.05, 0.04, 6.10, TEAL, "muDiv")
+    lx, lw = 0.5, 5.80
 
-    # ── Left: Mistral Embeddings ──────────────────────────────────────────────
     tb_lh = _tb(slide, lx, 1.12, lw, 0.28)
-    _para(tb_lh.text_frame, "MISTRAL EMBEDDINGS  ·  WHY THEY MATTER HERE", 11, TEAL, bold=True)
+    _para(tb_lh.text_frame, "WHY MISTRAL FOR EMBEDDINGS?", 11, TEAL, bold=True)
 
     # Concept visual: text → vector → cosine
     concept_y = 1.46
@@ -2153,37 +2154,61 @@ def add_mistral_uv_slide(prs: Presentation) -> None:
     cw = (lw - 2 * 0.08) / 3
     for j, (label, color) in enumerate(concept_items):
         cx = lx + j * (cw + 0.08)
-        _rect(slide, cx, concept_y, cw, 0.76, CARD, f"muC{j}")
-        _rect(slide, cx, concept_y, cw, 0.06, color, f"muCS{j}")
+        _rect(slide, cx, concept_y, cw, 0.76, CARD, f"meC{j}")
+        _rect(slide, cx, concept_y, cw, 0.06, color, f"meCS{j}")
         tb_cl = _tb(slide, cx + 0.08, concept_y + 0.12, cw - 0.14, 0.52)
         _para(tb_cl.text_frame, label, 9, color, align=PP_ALIGN.CENTER, mono=(j == 1))
         if j < 2:
-            _rect(slide, cx + cw + 0.01, concept_y + 0.30, 0.06, 0.12, TEAL, f"muCA{j}")
+            _rect(slide, cx + cw + 0.01, concept_y + 0.30, 0.06, 0.12, TEAL, f"meCA{j}")
 
-    _rect(slide, lx, 2.34, lw, 0.28, TEAL_DARK, "muKey")
+    _rect(slide, lx, 2.34, lw, 0.28, TEAL_DARK, "meKey")
     tb_key = _tb(slide, lx + 0.12, 2.38, lw - 0.20, 0.20)
     _para(tb_key.text_frame, "Anthropic has NO embedding API — Mistral fills this gap for us", 10, TEAL)
 
-    _ic(slide, lx, 2.72, lw, 1.50, "RAG IMPLEMENTATION  (pure numpy — no pgvector, no FAISS)", TEAL, [
-        "500 GEO dataset summaries embedded at startup → stored in data/rag_index.json",
-        "Query time: embed question → numpy.dot(query_vec, index_matrix) → argsort → top-5",
-        "1024-dim × 500 chunks = 500K floats → 2 MB in memory → lookup in ~1ms",
-        "Rebuild: uv run python scripts/build_rag_index.py  (re-embeds all chunks)",
-    ], "muRAG")
-
-    _ic(slide, lx, 4.34, lw, 1.80, "WHY THIS DESIGN?", TEAL, [
-        "Zero infra: no pgvector extension, no FAISS install, no vector DB service",
-        "500 chunks is trivially small — numpy in-memory is faster than any DB round-trip",
+    _ic(slide, lx, 2.74, lw, 1.50, "WHY THIS CHOICE", TEAL, [
         "Mistral SDK: same client used for LLM chat and embeddings — one dependency",
-        "Index is transparent JSON — diff-able in git, readable without special tooling",
-        "Trade-off: won't scale past ~50K chunks without switching to FAISS/pgvector",
-    ], "muWhy")
+        "mistral-embed: 1024-dim vectors, fast batch encoding, low cost",
+        "Default chat model: mistral-large-latest, via pydantic-ai Agent(model=...)",
+    ], "meWhy")
 
-    # ── Right: uv ────────────────────────────────────────────────────────────
-    tb_rh = _tb(slide, rx, 1.12, rw, 0.28)
-    _para(tb_rh.text_frame, "uv  ·  THE DOCKER LAYER CACHE INSIGHT", 11, AMBER, bold=True)
+    _ic(slide, lx, 4.36, lw, 1.80, "MISTRAL VS THE ALTERNATIVES", TEAL, [
+        "Anthropic has no embeddings API — a hard constraint, not a preference",
+        "OpenAI embeddings would mean a second SDK + a second API key for zero benefit",
+        "One vendor, one SDK, one dependency to monitor across both chat and embeddings",
+        "Swapping chat models (ANTHROPIC_KEY) never touches the embeddings path",
+    ], "meAlt")
 
-    docker_tb = _tb(slide, rx, 1.46, rw, 2.30)
+    _divline(slide, color=TEAL)
+    rx, rw = 6.55, 12.633 - 6.55
+
+    tb_rh = _tb(slide, rx, 1.10, rw, 0.30)
+    _para(tb_rh.text_frame, "WHERE MISTRAL SHOWS UP IN THIS APP", 12, TEAL, bold=True)
+
+    _fc(slide, [
+        ("Chat agent default model",     "pydantic-ai Agent(model='mistral-large-latest')", TEAL),
+        ("RAG indexing at startup",       "DatasetRAGService embeds ~150 GEO doc chunks", BLUE),
+        ("RAG retrieval per query",       "embed question → numpy cosine similarity → top-5 context", PURPLE),
+        ("Optional Claude swap for chat", "ANTHROPIC_KEY set → Claude Haiku answers; Mistral still owns embeddings", AMBER),
+    ], rx, 1.48, rw, 0.90, gap=0.14, pfx="me")
+
+    _rect(slide, rx, 5.66, rw, 0.44, TEAL_DARK, "meNote")
+    tb_n = _tb(slide, rx + 0.12, 5.72, rw - 0.20, 0.30)
+    _para(tb_n.text_frame, "Full RAG indexing + retrieval mechanics → slide 36", 10, TEAL)
+
+
+# ── N11b: uv (Docker Layer Cache) ─────────────────────────────────────────────
+
+def add_uv_slide(prs: Presentation) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_bg(slide)
+    _title_block(slide, "uv: The Docker Layer Cache Insight", AMBER)
+
+    lx, lw = 0.5, 5.80
+
+    tb_lh = _tb(slide, lx, 1.12, lw, 0.28)
+    _para(tb_lh.text_frame, "MULTI-STAGE DOCKERFILE", 11, AMBER, bold=True)
+
+    docker_tb = _tb(slide, lx, 1.46, lw, 2.30)
     tf_d = docker_tb.text_frame
     tf_d.word_wrap = False
     docker_lines = [
@@ -2204,18 +2229,34 @@ def add_mistral_uv_slide(prs: Presentation) -> None:
     for k, (line, color) in enumerate(docker_lines):
         _para(tf_d, line, 9, color, new=(k > 0), mono=True)
 
-    _ic(slide, rx, 3.88, rw, 1.40, "WHY uv OVER pip?", AMBER, [
+    _ic(slide, lx, 3.90, lw, 2.20, "THREE BUILD STAGES", AMBER, [
+        "Node 22: npm ci + vite build → /dist  (frontend bundle)",
+        "uv builder: uv sync → .venv  (Python deps, no dev extras)",
+        "python:3.13-slim: copy .venv + /dist → lean 180 MB runtime image",
+    ], "uvStg")
+
+    _divline(slide, color=AMBER)
+    rx, rw = 6.55, 12.633 - 6.55
+
+    tb_rh = _tb(slide, rx, 1.10, rw, 0.30)
+    _para(tb_rh.text_frame, "WHY uv, IN PRACTICE", 12, AMBER, bold=True)
+
+    _ic(slide, rx, 1.48, rw, 2.10, "WHY uv OVER pip?", AMBER, [
         "10–100× faster install — Rust resolver vs Python resolver",
         "uv.lock locks exact versions across all environments (CI, Docker, dev)",
         "uv run scripts/… runs in the managed venv without activation ceremony",
         "In CI: cache the uv layer by hash of uv.lock — near-instant rebuilds",
-    ], "muUV")
+    ], "uvWhy")
 
-    _ic(slide, rx, 5.40, rw, 0.74, "THREE BUILD STAGES", AMBER, [
-        "Node 22: npm ci + vite build → /dist  (frontend bundle)",
-        "uv builder: uv sync → .venv  (Python deps, no dev extras)",
-        "python:3.13-slim: copy .venv + /dist → lean 180 MB runtime image",
-    ], "muStg")
+    _ic(slide, rx, 3.80, rw, 1.90, "uv IN THIS PROJECT", AMBER, [
+        "uv run prefixes every Python command in this repo — no venv activation ceremony",
+        "uv.lock is committed to git — reproducible installs across dev, CI, and Docker",
+        "CI caches ~/.cache/uv keyed on the uv.lock hash — near-instant reinstalls on a cache hit",
+    ], "uvProj")
+
+    _rect(slide, rx, 5.86, rw, 0.44, TEAL_DARK, "uvNote")
+    tb_n = _tb(slide, rx + 0.12, 5.92, rw - 0.20, 0.30)
+    _para(tb_n.text_frame, "uv sync --frozen: reproducible, layer-cached, no requirements.txt drift — 10× faster builds", 10, TEAL)
 
 
 # ── N12: GEOClient ────────────────────────────────────────────────────────────
@@ -2405,7 +2446,7 @@ def add_ranking_service_slide(prs: Presentation) -> None:
     for i, (label, pts, col) in enumerate(signals):
         by = bar_y_start + i * (bar_h + bar_gap)
         tb_l = _tb(slide, rx, by + 0.13, 2.40, 0.30)
-        _para(tb_l.text_frame, label, 11, WHITE)
+        _para(tb_l.text_frame, label, 11, INK)
         bw = (pts / 30) * bar_max_w
         _rect(slide, bar_left, by + 0.12, bw, bar_h - 0.24, col, f"rsBar{i}")
         tb_p = _tb(slide, bar_left + bw + 0.08, by + 0.13, 0.60, 0.28)
@@ -2546,19 +2587,19 @@ def add_rag_slide(prs: Presentation) -> None:
         "Retrieval-Augmented Generation: add relevant context to LLM prompts",
         "Avoids hallucination by grounding answers in real retrieved documents",
         "Two phases: indexing (at startup) + retrieval (at query time)",
-        "Our docs: GEO dataset summaries + gene annotation chunks (~300 entries)",
+        "Our docs: GEO dataset summaries + gene annotation chunks (~150 entries today, unbounded)",
     ], "rg1")
     _ic(slide, 0.5, 2.72, 5.80, 1.10, "WHY NOT PGVECTOR / FAISS?", BLUE, [
-        "Our corpus is small (~300 chunks) — numpy is 100% sufficient",
+        "Our corpus is small (~150 chunks) — numpy is 100% sufficient",
         "Zero infrastructure: no Postgres extension, no C library install",
-        "numpy.dot(query_vec, doc_matrix.T) → cosine similarities in one line",
+        "(emb_matrix @ q) / (‖rows‖·‖q‖) → cosine similarity, one array op",
     ], "rg2")
     _ic(slide, 0.5, 3.94, 5.80, 1.90, "INDEXING PHASE (at startup)", BLUE, [
-        "Load rag_docs.json: list of { id, content, metadata } documents",
-        "Call Mistral embed API: batch encode all content strings → 1024-dim vectors",
-        "Save to rag_index.json: { vectors: [[…], …], docs: [{…}, …] }",
-        "Loaded into memory as numpy array on server startup — never re-computed",
-        "Rebuild: uv run python scripts/build_rag_index.py (run after adding docs)",
+        "Glob backend/datasets/*.json → build {accession, content, metadata} doc per file",
+        "sha256 each file; skip if unchanged since last run (rag_index.json)",
+        "Mistral embed API called once per new/changed doc → 1024-dim vector",
+        "Persist 3 files: rag_docs.json (docs), rag_embeddings.npy (vectors), rag_index.json (hashes)",
+        "No standalone script — DatasetRAGService.index_datasets() runs automatically at startup",
     ], "rg3")
 
     _divline(slide, color=BLUE)
@@ -2570,7 +2611,7 @@ def add_rag_slide(prs: Presentation) -> None:
     _fc(slide, [
         ("User sends message",               "chat: 'What is TP53 HR in lung cancer?'", BLUE),
         ("Embed query with mistral-embed",    "1024-dim vector via Mistral API", TEAL),
-        ("numpy.dot(q, index_matrix.T)",      "Cosine similarity vs all ~300 docs", PURPLE),
+        ("(emb_matrix @ q) / norms",          "Cosine similarity vs all ~150 docs", PURPLE),
         ("Top-5 chunks by similarity score",  "GEO summaries most relevant to query", AMBER),
         ("Inject into system prompt",         "'Context: [doc1 text] [doc2 text] …'", TEAL),
         ("LLM generates grounded response",   "Cites real GSE IDs from retrieved context", CORAL),
@@ -2578,7 +2619,7 @@ def add_rag_slide(prs: Presentation) -> None:
 
     _rect(slide, rx, 5.96, rw, 0.44, TEAL_DARK, "rgNote")
     tb_n = _tb(slide, rx + 0.12, 6.02, rw - 0.20, 0.30)
-    _para(tb_n.text_frame, "Index location: backend/data/rag_index.json  ·  Doc sources: backend/data/rag_docs.json", 10, TEAL)
+    _para(tb_n.text_frame, "Vectors: rag_embeddings.npy  ·  Docs: rag_docs.json  ·  Change-hash: rag_index.json", 10, TEAL)
 
 
 # ── N19: Domain Score ─────────────────────────────────────────────────────────
@@ -2891,8 +2932,8 @@ def add_caching_layers_slide(prs: Presentation) -> None:
          "Skip NCBI FTP re-download (2–30 min)",     "one .parquet per GPL ID",                  "persists forever",     PURPLE),
         ("Dataset Cache",    "Parquet files",        "backend/datasets/",
          "Skip series_matrix re-parse (30–120 s)",   "one .parquet per GSE ID",                  "persists forever",     AMBER),
-        ("RAG Index",        "numpy array",          "backend/data/rag_index.json",
-         "Avoid re-embedding 300 docs on each start","loaded to RAM at startup",                  "rebuild on doc change",CORAL),
+        ("RAG Index",        "numpy array",          "backend/data/rag_embeddings.npy",
+         "Avoid re-embedding ~150 docs on each start","docs in rag_docs.json, hash in rag_index.json","re-embeds only changed docs (sha256)",CORAL),
         ("Conversation Fetch","TTL 30 s",            "chatSlice.ts (frontend)",
          "Skip repeated GET /conversations API calls","timestamp gated in Redux Toolkit",          "cleared on new message",BLUE),
     ]
@@ -3046,309 +3087,420 @@ def add_error_handling_slide(prs: Presentation) -> None:
     _para(tb_n.text_frame, "grep WARNING geo_logs/app.log — see all recoverable errors by type and frequency", 10, TEAL)
 
 
+# ── N26: CI/CD Pipeline ───────────────────────────────────────────────────────
+
+def add_cicd_pipeline_slide(prs: Presentation) -> None:
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    _set_bg(slide)
+    _title_block(slide, "CI/CD Pipeline: From git push to Live", TEAL)
+
+    tb_sub = _tb(slide, 0.5, 1.02, 12.333, 0.28)
+    _para(tb_sub.text_frame,
+          "GitHub Actions builds, publishes, and deploys on every push to main — no manual step",
+          13, MUTED)
+
+    stages = [
+        ("git push",         "Push to main\ntriggers workflow",                  BLUE),
+        ("Docker Buildx",    "3-stage build:\nnode → uv → python-slim",          TEAL),
+        ("Push to Registry", "Tag + push image\nto ghcr.io  (GHCR)",             PURPLE),
+        ("SSH Deploy",       "Actions SSHes into\nHetzner (appleboy/ssh-action)", AMBER),
+        ("docker compose",   "pull latest image\nup -d  (zero downtime)",        TEAL),
+    ]
+    _fh(slide, stages, 0.5, 1.45, 2.40, 1.65, gap=0.08, pfx="cd", acol=TEAL)
+
+    tb_rh = _tb(slide, 0.5, 3.35, 12.333, 0.30)
+    _para(tb_rh.text_frame, "WHAT IS A CONTAINER REGISTRY?", 12, TEAL, bold=True)
+    _ic(slide, 0.5, 3.70, 12.333, 1.90, "GHCR — GITHUB CONTAINER REGISTRY", TEAL, [
+        "A registry is versioned storage for container images — like npm or PyPI, but for Docker images",
+        "CI pushes a tagged image after every build; the server only ever pulls, it never builds",
+        "GHCR is free for this repo and auth is automatic via GITHUB_TOKEN — no extra secret to manage",
+        "Image: ghcr.io/svarogjk/geo-survival-analysis:latest",
+    ], "cdreg")
+
+    _rect(slide, 0.5, 5.85, 12.333, 0.65, TEAL, "cdBottom")
+    tb_bt = _tb(slide, 0.5, 5.88, 12.333, 0.55)
+    _para(tb_bt.text_frame, "git push → live in ~3 minutes  ·  zero-downtime docker compose up -d",
+          16, BG, bold=True, align=PP_ALIGN.CENTER)
+
+
 # ── Main builder ───────────────────────────────────────────────────────────────
 
-def create_presentation(output_path: Path, screenshots_dir: Path) -> None:
+def _build_slide_list(screenshots_dir: Path) -> list[Callable[[Presentation], None]]:
+    """Ordered slide builders — list position (1-based) is the slide's number in the deck."""
+    return [
+        # ── SECTION 1: Hook & Problem ───────────────────────────────────────────
+        # Slide 1
+        lambda prs: add_title_slide(
+            prs,
+            "GEO Survival Analysis",
+            "Cross-Dataset Cancer Biomarker Discovery from NCBI GEO",
+            "PyData Yerevan · Software Engineering Section  ·  FastAPI · lifelines · pydantic-ai · React",
+        ),
+        # Slide 2
+        lambda prs: add_combined_intro_slide(prs),
+
+        # ── SECTION 2: Domain Primer ────────────────────────────────────────────
+        # Slide 3
+        lambda prs: add_survival_primer_slide(prs),
+        # Slide 4
+        lambda prs: add_km_curve_slide(prs),
+        # Slide 5
+        lambda prs: add_hr_slide(prs),
+        # Slide 6
+        lambda prs: add_meta_analysis_slide(prs),
+
+        # ── SECTION 3: What We Built ────────────────────────────────────────────
+        # Slide 7
+        lambda prs: add_comparison_table_slide(prs),
+
+        # ── SECTION 3b: Clinical Reality (predictive value + responsible use) ───
+        # Slide 8: predictive biomarkers + benefit for real patients
+        lambda prs: add_two_col_slide(
+            prs,
+            "Predictive Biomarkers: Benefit for Real Patients",
+            left_header="FROM PROGNOSTIC TO PREDICTIVE",
+            left_header_color=TEAL,
+            left_bullets=[
+                "Prognostic = who is high-risk. Predictive = whose outcome changes with treatment",
+                "Tested with an  expression × treatment  interaction in a Cox model — per-arm HRs + interaction p, aggregated across independent GEO cohorts",
+                "Validated multi-gene signature → high / intermediate / low-risk groups (Harrell's C-index, cross-cohort) — stratified-medicine logic à la Oncotype DX",
+                "Single-sample scoring → one tumour profile → reference risk group + advisory, evidence-grounded treatments to discuss",
+            ],
+            right_header="WHY A PATIENT BENEFITS",
+            right_bullets=[
+                "Risk stratification can spare low-risk patients overtreatment and flag high-risk for escalation — discussed with the care team",
+                "Treatment suggestions grounded in CIViC / DGIdb biomarker→therapy evidence + outcomes from GEO cohorts where the treatment was documented",
+                "A gene significant in 8 independent cohorts carries far more weight than one significant in a single study",
+            ],
+            accent=TEAL,
+            bottom_badge="Advisory & hypothesis-generating — suggestions to discuss with the tumour board, validated prospectively",
+        ),
+        # Slide 9: what "predictive" means — and what it doesn't
+        lambda prs: add_two_col_slide(
+            prs,
+            "What ‘Predictive’ Means Here — and What It Doesn't",
+            left_header="WHAT WE CLAIM — HONESTLY",
+            left_header_color=TEAL,
+            left_bullets=[
+                "Surfaces treatment-effect-modifying expression biomarkers validated across cohorts",
+                "Turns a tumour profile into advisory treatment options to consider",
+                "Every output carries a research-use, validate-prospectively label",
+            ],
+            right_header="WHAT WE NEVER CLAIM",
+            right_bullets=[
+                "Not a validated companion diagnostic — never “this patient will respond to drug X”",
+                "Not a prescription — advisory “to discuss” only; directive/prescribing language is stripped at the API layer",
+                "Not de-novo drug-response modelling — only documented associations",
+                "Not a clinical decision-making device — clear of FDA-CDS / EU-MDR territory",
+            ],
+            accent=CORAL,
+            bottom_badge="Research use only · hypothesis-generating · not a prescription, not a guarantee of response, not a clinical decision device",
+        ),
+        # Slide 10: limitations in real clinical practice
+        lambda prs: add_gap_cards_slide(
+            prs,
+            "Limitations in Real Clinical Practice",
+            cards=[
+                ("HIPAA / PHI",
+                 "Patient expression submitted for scoring is held in-memory only — never persisted, never logged; no PII in logs",
+                 PURPLE),
+                ("Research use only",
+                 "Not FDA-cleared, not a CDS device; complements companion-diagnostic tools, does not replace them",
+                 CORAL),
+                ("Underpowered interactions",
+                 "Interaction tests are weak in small per-arm cohorts; predictive claims must state this",
+                 AMBER),
+                ("Non-standardized annotations",
+                 "GEO treatment metadata is inconsistent; cohort comparability is limited",
+                 BLUE),
+                ("Cross-platform normalization",
+                 "Rank / z-within-cohort normalization is mandatory — a documented method limitation",
+                 TEAL),
+                ("Validate prospectively",
+                 "All findings are hypothesis-generating; clinical use requires independent prospective validation",
+                 PURPLE),
+            ],
+            accent=CORAL,
+        ),
+
+        # ── SECTION 4: Backend Deep Dive ────────────────────────────────────────
+        lambda prs: add_backend_arch_visual_slide(prs),  # Slide 11: visual routes → services schema
+        lambda prs: add_fastapi_slide(prs),              # Slide 12
+        lambda prs: add_pydantic_slide(prs),             # Slide 13
+        lambda prs: add_asyncio_slide(prs),              # Slide 14
+        lambda prs: add_pydantic_ai_slide(prs),          # Slide 15
+        lambda prs: add_lifelines_slide(prs),            # Slide 16
+        lambda prs: add_sqlalchemy_slide(prs),           # Slide 17
+        lambda prs: add_mistral_slide(prs),              # Slide 18
+        lambda prs: add_uv_slide(prs),                   # Slide 19
+
+        # ── SECTION 5: Frontend Deep Dive ───────────────────────────────────────
+        lambda prs: add_frontend_arch_visual_slide(prs),  # Slide 20: visual component tree + Redux + API
+        lambda prs: add_react_slide(prs),                 # Slide 21
+        lambda prs: add_redux_slide(prs),                 # Slide 22
+        lambda prs: add_sse_frontend_slide(prs),          # Slide 23
+        lambda prs: add_recharts_slide(prs),              # Slide 24
+
+        # ── SECTION 6: Pipeline & Services ──────────────────────────────────────
+        # Slide 25: 6-step workflow overview
+        lambda prs: add_workflow_slide(
+            prs,
+            "The 6-Step Workflow We Automate",
+            steps=[
+                ("1", "Search Datasets",
+                 "Query NCBI Entrez eSearch with disease + tissue keywords — returns GSE accession IDs"),
+                ("2", "Parse Formats",
+                 "Download SOFT/miniML files; parse tabular blocks; extract expression matrix + sample metadata"),
+                ("3", "Map Probe → Gene",
+                 "Fetch GPL annotation; detect probe_id → gene_symbol column; aggregate multi-probe; cache as Parquet"),
+                ("4", "Find Survival Data",
+                 "Detect OS time + event columns via regex; pydantic-ai handles edge cases; align to sample IDs"),
+                ("5", "Run Cox + KM",
+                 "Median-split expression per gene → high/low groups; CoxPHFitter; log-rank; HR + 95% CI per dataset"),
+                ("6", "Synthesise Across Studies",
+                 "Rank genes by # significant cohorts; pool HRs; report I² heterogeneity; export CSV + Methods text"),
+            ],
+            bottom_text="GEO Survival Analysis automates all 6 steps  ·  under 5 minutes  ·  no coding required",
+        ),
+        lambda prs: add_geoclient_slide(prs),          # Slide 26
+        lambda prs: add_geoloader_slide(prs),          # Slide 27
+        lambda prs: add_orchestrator_slide(prs),       # Slide 28
+        lambda prs: add_ranking_service_slide(prs),    # Slide 29
+        lambda prs: add_gene_babel_slide(prs),         # Slide 30
+        lambda prs: add_gene_cache_slide(prs),         # Slide 31
+
+        # Slide 32: Statistical engine overview
+        lambda prs: add_two_col_slide(
+            prs,
+            "Statistical Engine: lifelines",
+            left_header="METHODS",
+            left_header_color=PURPLE,
+            left_bullets=[
+                "Median split — expression → high / low groups per dataset",
+                "Log-rank test — non-parametric group comparison (p-value)",
+                "Cox PH regression — hazard ratio + 95% confidence interval",
+                "KaplanMeierFitter — time-to-event survival probability curves",
+                "Cross-cohort ranking — genes sorted by n_significant, then avg p",
+                "Heterogeneity — Cochran Q statistic + I² on forest plots",
+            ],
+            right_header="DATA FLOW",
+            right_bullets=[
+                "INPUT: GSE series_matrix.txt.gz",
+                "→ probe_id × sample expression matrix  (pandas DataFrame)",
+                "→ probe → gene symbol  (GPL annotation, parquet cache)",
+                "→ high / low groups  (median split per dataset)",
+                "→ Cox PH fit  →  HR, p-value, 95% CI",
+                "→ KM fitter  →  survival probability curves",
+                "OUTPUT: ranked gene list  (cross-dataset consistency)",
+            ],
+            accent=PURPLE,
+            bottom_badge="Significance: p < 0.05  ·  min_occurrence: 2 datasets  ·  ~600 COSMIC cancer genes filter",
+        ),
+        lambda prs: add_survival_service_slide(prs),   # Slide 33
+
+        # ── SECTION 7: AI Chat ──────────────────────────────────────────────────
+        # Slide 34: AI Chat overview
+        lambda prs: add_architecture_slide(
+            prs,
+            "AI Chat: pydantic-ai + RAG + Domain Score",
+            layers=[
+                ("User",
+                 ["React Chat UI", "Natural language question", "Streaming response (SSE)"],
+                 BLUE),
+                ("Agent",
+                 ["pydantic-ai  Agent", "Mistral (default)  ·  Claude Haiku (optional)",
+                  "Dynamic system prompt", "History trim  ≤ 16K chars"],
+                 TEAL),
+                ("5 Tools",
+                 ["search_known_datasets", "search_geo_datasets",
+                  "get_gene_info", "estimate_query", "get_user_recent_results"],
+                 AMBER),
+                ("RAG + Data",
+                 ["GEO dataset cache (parquet)", "NCBI Entrez  (live)",
+                  "Mistral embed 1024-dim  (numpy cosine)", "SQLite results history"],
+                 PURPLE),
+            ],
+            accent=TEAL,
+        ),
+        lambda prs: add_chat_tools_slide(prs),         # Slide 35
+        lambda prs: add_rag_slide(prs),                # Slide 36
+        lambda prs: add_domain_score_slide(prs),       # Slide 37
+
+        # ── SECTION 8: Cross-Cutting Concerns ───────────────────────────────────
+        lambda prs: add_sse_pipeline_slide(prs),       # Slide 38
+        lambda prs: add_jwt_slide(prs),                # Slide 39
+        lambda prs: add_data_pipeline_slide(prs),      # Slide 40
+        lambda prs: add_caching_layers_slide(prs),     # Slide 41
+        lambda prs: add_asyncio_gather_slide(prs),     # Slide 42
+        lambda prs: add_error_handling_slide(prs),     # Slide 43
+
+        # ── SECTION 9: Engineering Decisions ────────────────────────────────────
+        lambda prs: add_db_comparison_slide(prs),      # Slide 44
+
+        # Slide 45: CI/CD pipeline
+        lambda prs: add_cicd_pipeline_slide(prs),
+
+        # Slide 46: Server setup — one-time steps, contrasted with the automatic CI/CD above
+        lambda prs: add_workflow_slide(
+            prs,
+            "Server Setup: One-Time Steps",
+            steps=[
+                ("1", "Provision Server",
+                 "Hetzner CX32 — 4 vCPU, 8 GB RAM, 80 GB NVMe, Ubuntu 24.04"),
+                ("2", "Install Docker",
+                 "apt install docker.io docker-compose-plugin; systemctl enable --now docker"),
+                ("3", "Point DNS",
+                 "A record at the registrar (Spaceship) → server's public IP"),
+                ("4", "Add GitHub Secrets",
+                 "HETZNER_HOST, HETZNER_SSH_KEY, MISTRAL_KEY, ANTHROPIC_KEY, JWT_SECRET_KEY"),
+                ("5", "First docker compose up",
+                 "Caddy auto-issues a TLS cert via Let's Encrypt on first request"),
+                ("6", "Push to main",
+                 "CI/CD takes over from here — every future push deploys itself"),
+            ],
+            bottom_text="Steps 1-5 happen once — after that, deployment is fully automatic",
+        ),
+
+        # Slide 47: Why these vendors
+        lambda prs: add_two_col_slide(
+            prs,
+            "Why Hetzner? Why Spaceship?",
+            left_header="WHY HETZNER (SERVER)",
+            left_header_color=TEAL,
+            left_bullets=[
+                "CX32 — 4 vCPU / 8 GB RAM / 80 GB NVMe for ~$10/mo, a fraction of equivalent AWS/GCP pricing",
+                "NVMe local disk fits the growing GEO dataset cache (parquet files heading toward 50-100 GB)",
+                "Flat, predictable pricing — no surprise egress or bandwidth fees",
+                "One-click resize to CX42 (8 vCPU / 16 GB) when traffic grows — no migration needed",
+            ],
+            right_header="WHY SPACESHIP (DOMAIN REGISTRAR)",
+            right_bullets=[
+                "Transparent, flat renewal pricing — no dark-pattern upsells at checkout",
+                "Free WHOIS / ID privacy protection included by default",
+                "Clean, modern dashboard — fast to point the A record at the Hetzner IP",
+            ],
+            accent=TEAL,
+            bottom_badge="Boring, cheap infrastructure on purpose — budget goes into the science, not the hosting bill",
+        ),
+
+        # ── SECTION 10: Demo ────────────────────────────────────────────────────
+        # Slide 48
+        lambda prs: add_image_slide(
+            prs,
+            "Demo: Natural Language Query",
+            _find_screenshot(screenshots_dir, "starting_page.png"),
+            'Type a natural language query — e.g. "What genes predict poor survival in triple-negative breast cancer?"',
+        ),
+        # Slide 49
+        lambda prs: add_image_slide(
+            prs,
+            "Demo: Volcano Plot & Gene Results",
+            _find_screenshot(screenshots_dir, "volcano_plot.png"),
+            "Ranked genes with hazard ratios, p-values, and risk direction consistency across datasets",
+        ),
+        # Slide 50
+        lambda prs: add_image_slide(
+            prs,
+            "Demo: Kaplan-Meier Survival Curves",
+            _find_screenshot(screenshots_dir, "kaplan_meier_curves.png", "km_curves.png"),
+            "Compare survival probability between high and low expression groups — interpretable by clinicians",
+        ),
+
+        # ── SECTION 11: Lessons Learned ─────────────────────────────────────────
+        # Slide 51
+        lambda prs: add_gap_cards_slide(
+            prs,
+            "What We Learned",
+            cards=[
+                ("asyncio.gather",
+                 "Parallel downloads cut wall time from 20 min → 2 min — the single biggest engineering win",
+                 TEAL),
+                ("Hybrid metadata detection",
+                 "Regex catches ~70% of survival columns; pydantic-ai structured output handles the rest",
+                 PURPLE),
+                ("Disk-first caching",
+                 "Parquet in platform_mappings/ survives restarts; OrderedDict LRU is a fast in-memory layer on top",
+                 BLUE),
+                ("uv in Docker",
+                 "uv sync --frozen: reproducible, layer-cached, no requirements.txt drift — 10× faster builds",
+                 AMBER),
+                ("RAG at query time",
+                 "Embedding + cosine similarity retrieves live context; agent cites real data, no hallucinations",
+                 TEAL),
+                ("pydantic-ai is lightweight",
+                 "No LangChain overhead — structured output, tool calling, streaming all work natively",
+                 CORAL),
+            ],
+            accent=TEAL,
+        ),
+    ]
+
+
+def _parse_slide_spec(spec: str) -> list[int]:
+    """Parse "5,12,20-22" into a sorted, deduped list of 1-based slide numbers."""
+    numbers: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            numbers.update(range(int(lo), int(hi) + 1))
+        else:
+            numbers.add(int(part))
+    return sorted(numbers)
+
+
+def create_presentation(
+    output_path: Path,
+    screenshots_dir: Path,
+    slide_numbers: list[int] | None = None,
+) -> None:
+    builders = _build_slide_list(screenshots_dir)
+
+    if slide_numbers is not None:
+        invalid = [n for n in slide_numbers if not (1 <= n <= len(builders))]
+        if invalid:
+            raise ValueError(f"Invalid slide number(s) {invalid} — deck has {len(builders)} slides")
+        selected = [builders[n - 1] for n in slide_numbers]
+    else:
+        selected = builders
+
     prs = Presentation()
     prs.slide_width  = Inches(13.333)
     prs.slide_height = Inches(7.5)
 
-    # ── SECTION 1: Hook & Problem ──────────────────────────────────────────────
-    # Slide 1
-    add_title_slide(
-        prs,
-        "GEO Survival Analysis",
-        "Cross-Dataset Cancer Biomarker Discovery from NCBI GEO",
-        "PyData Yerevan · Software Engineering Section  ·  FastAPI · lifelines · pydantic-ai · React",
-    )
-    # Slide 2
-    add_combined_intro_slide(prs)
-
-    # ── SECTION 2: Domain Primer ───────────────────────────────────────────────
-    # Slide 3
-    add_survival_primer_slide(prs)
-    # Slide 4
-    add_km_curve_slide(prs)
-    # Slide 5
-    add_hr_slide(prs)
-    # Slide 6
-    add_meta_analysis_slide(prs)
-
-    # ── SECTION 3: What We Built ───────────────────────────────────────────────
-    # Slide 7
-    add_comparison_table_slide(prs)
-
-    # ── SECTION 3b: Clinical Reality (predictive value + responsible use) ──────
-    # Slide 7a: predictive biomarkers + benefit for real patients
-    add_two_col_slide(
-        prs,
-        "Predictive Biomarkers: Benefit for Real Patients",
-        left_header="FROM PROGNOSTIC TO PREDICTIVE",
-        left_header_color=TEAL,
-        left_bullets=[
-            "Prognostic = who is high-risk. Predictive = whose outcome changes with treatment",
-            "Tested with an  expression × treatment  interaction in a Cox model — per-arm HRs + interaction p, aggregated across independent GEO cohorts",
-            "Validated multi-gene signature → high / intermediate / low-risk groups (Harrell's C-index, cross-cohort) — stratified-medicine logic à la Oncotype DX",
-            "Single-sample scoring → one tumour profile → reference risk group + advisory, evidence-grounded treatments to discuss",
-        ],
-        right_header="WHY A PATIENT BENEFITS",
-        right_bullets=[
-            "Risk stratification can spare low-risk patients overtreatment and flag high-risk for escalation — discussed with the care team",
-            "Treatment suggestions grounded in CIViC / DGIdb biomarker→therapy evidence + outcomes from GEO cohorts where the treatment was documented",
-            "A gene significant in 8 independent cohorts carries far more weight than one significant in a single study",
-        ],
-        accent=TEAL,
-        bottom_badge="Advisory & hypothesis-generating — suggestions to discuss with the tumour board, validated prospectively",
-    )
-    # Slide 7b: what "predictive" means — and what it doesn't
-    add_two_col_slide(
-        prs,
-        "What ‘Predictive’ Means Here — and What It Doesn't",
-        left_header="WHAT WE CLAIM — HONESTLY",
-        left_header_color=TEAL,
-        left_bullets=[
-            "Surfaces treatment-effect-modifying expression biomarkers validated across cohorts",
-            "Turns a tumour profile into advisory treatment options to consider",
-            "Every output carries a research-use, validate-prospectively label",
-        ],
-        right_header="WHAT WE NEVER CLAIM",
-        right_bullets=[
-            "Not a validated companion diagnostic — never “this patient will respond to drug X”",
-            "Not a prescription — advisory “to discuss” only; directive/prescribing language is stripped at the API layer",
-            "Not de-novo drug-response modelling — only documented associations",
-            "Not a clinical decision-making device — clear of FDA-CDS / EU-MDR territory",
-        ],
-        accent=CORAL,
-        bottom_badge="Research use only · hypothesis-generating · not a prescription, not a guarantee of response, not a clinical decision device",
-    )
-    # Slide 7c: limitations in real clinical practice
-    add_gap_cards_slide(
-        prs,
-        "Limitations in Real Clinical Practice",
-        cards=[
-            ("HIPAA / PHI",
-             "Patient expression submitted for scoring is held in-memory only — never persisted, never logged; no PII in logs",
-             PURPLE),
-            ("Research use only",
-             "Not FDA-cleared, not a CDS device; complements companion-diagnostic tools, does not replace them",
-             CORAL),
-            ("Underpowered interactions",
-             "Interaction tests are weak in small per-arm cohorts; predictive claims must state this",
-             AMBER),
-            ("Non-standardized annotations",
-             "GEO treatment metadata is inconsistent; cohort comparability is limited",
-             BLUE),
-            ("Cross-platform normalization",
-             "Rank / z-within-cohort normalization is mandatory — a documented method limitation",
-             TEAL),
-            ("Validate prospectively",
-             "All findings are hypothesis-generating; clinical use requires independent prospective validation",
-             PURPLE),
-        ],
-        accent=CORAL,
-    )
-
-    # ── SECTION 4: Backend Deep Dive ──────────────────────────────────────────
-    add_backend_arch_visual_slide(prs)  # Slide 8: visual routes → services schema
-    add_fastapi_slide(prs)              # Slide 9
-    add_pydantic_slide(prs)             # Slide 10
-    add_asyncio_slide(prs)              # Slide 11
-    add_pydantic_ai_slide(prs)          # Slide 12
-    add_lifelines_slide(prs)            # Slide 13
-    add_sqlalchemy_slide(prs)           # Slide 14
-    add_mistral_uv_slide(prs)           # Slide 15
-
-    # ── SECTION 5: Frontend Deep Dive ─────────────────────────────────────────
-    add_frontend_arch_visual_slide(prs)  # Slide 16: visual component tree + Redux + API
-    add_react_slide(prs)                 # Slide 17
-    add_redux_slide(prs)                 # Slide 18
-    add_sse_frontend_slide(prs)          # Slide 19
-    add_recharts_slide(prs)              # Slide 20
-
-    # ── SECTION 6: Pipeline & Services ────────────────────────────────────────
-    # Slide 21: 6-step workflow overview
-    add_workflow_slide(
-        prs,
-        "The 6-Step Workflow We Automate",
-        steps=[
-            ("1", "Search Datasets",
-             "Query NCBI Entrez eSearch with disease + tissue keywords — returns GSE accession IDs"),
-            ("2", "Parse Formats",
-             "Download SOFT/miniML files; parse tabular blocks; extract expression matrix + sample metadata"),
-            ("3", "Map Probe → Gene",
-             "Fetch GPL annotation; detect probe_id → gene_symbol column; aggregate multi-probe; cache as Parquet"),
-            ("4", "Find Survival Data",
-             "Detect OS time + event columns via regex; pydantic-ai handles edge cases; align to sample IDs"),
-            ("5", "Run Cox + KM",
-             "Median-split expression per gene → high/low groups; CoxPHFitter; log-rank; HR + 95% CI per dataset"),
-            ("6", "Synthesise Across Studies",
-             "Rank genes by # significant cohorts; pool HRs; report I² heterogeneity; export CSV + Methods text"),
-        ],
-        bottom_text="GEO Survival Analysis automates all 6 steps  ·  under 5 minutes  ·  no coding required",
-    )
-    add_geoclient_slide(prs)          # Slide 22
-    add_geoloader_slide(prs)          # Slide 23
-    add_orchestrator_slide(prs)       # Slide 24
-    add_ranking_service_slide(prs)    # Slide 25
-    add_gene_babel_slide(prs)         # Slide 26
-    add_gene_cache_slide(prs)         # Slide 27
-
-    # Slide 28: Statistical engine overview
-    add_two_col_slide(
-        prs,
-        "Statistical Engine: lifelines",
-        left_header="METHODS",
-        left_header_color=PURPLE,
-        left_bullets=[
-            "Median split — expression → high / low groups per dataset",
-            "Log-rank test — non-parametric group comparison (p-value)",
-            "Cox PH regression — hazard ratio + 95% confidence interval",
-            "KaplanMeierFitter — time-to-event survival probability curves",
-            "Cross-cohort ranking — genes sorted by n_significant, then avg p",
-            "Heterogeneity — Cochran Q statistic + I² on forest plots",
-        ],
-        right_header="DATA FLOW",
-        right_bullets=[
-            "INPUT: GSE series_matrix.txt.gz",
-            "→ probe_id × sample expression matrix  (pandas DataFrame)",
-            "→ probe → gene symbol  (GPL annotation, parquet cache)",
-            "→ high / low groups  (median split per dataset)",
-            "→ Cox PH fit  →  HR, p-value, 95% CI",
-            "→ KM fitter  →  survival probability curves",
-            "OUTPUT: ranked gene list  (cross-dataset consistency)",
-        ],
-        accent=PURPLE,
-        bottom_badge="Significance: p < 0.05  ·  min_occurrence: 2 datasets  ·  ~600 COSMIC cancer genes filter",
-    )
-    add_survival_service_slide(prs)   # Slide 29
-
-    # ── SECTION 7: AI Chat ─────────────────────────────────────────────────────
-    # Slide 30: AI Chat overview
-    add_architecture_slide(
-        prs,
-        "AI Chat: pydantic-ai + RAG + Domain Score",
-        layers=[
-            ("User",
-             ["React Chat UI", "Natural language question", "Streaming response (SSE)"],
-             BLUE),
-            ("Agent",
-             ["pydantic-ai  Agent", "Mistral (default)  ·  Claude Haiku (optional)",
-              "Dynamic system prompt", "History trim  ≤ 16K chars"],
-             TEAL),
-            ("5 Tools",
-             ["search_known_datasets", "search_geo_datasets",
-              "get_gene_info", "estimate_query", "get_user_recent_results"],
-             AMBER),
-            ("RAG + Data",
-             ["GEO dataset cache (parquet)", "NCBI Entrez  (live)",
-              "Mistral embed 1024-dim  (numpy cosine)", "SQLite results history"],
-             PURPLE),
-        ],
-        accent=TEAL,
-    )
-    add_chat_tools_slide(prs)         # Slide 31
-    add_rag_slide(prs)                # Slide 32
-    add_domain_score_slide(prs)       # Slide 33
-
-    # ── SECTION 8: Cross-Cutting Concerns ─────────────────────────────────────
-    add_sse_pipeline_slide(prs)       # Slide 34
-    add_jwt_slide(prs)                # Slide 35
-    add_data_pipeline_slide(prs)      # Slide 36
-    add_caching_layers_slide(prs)     # Slide 37
-    add_asyncio_gather_slide(prs)     # Slide 38
-    add_error_handling_slide(prs)     # Slide 39
-
-    # ── SECTION 9: Engineering Decisions ──────────────────────────────────────
-    add_db_comparison_slide(prs)      # Slide 40
-
-    # Slide 41: Deployment
-    add_two_col_slide(
-        prs,
-        "Deployment Pipeline",
-        left_header="MULTI-STAGE DOCKER BUILD",
-        left_header_color=TEAL,
-        left_bullets=[
-            "Stage 1: node:22-alpine — npm ci + vite build  (React SPA → /dist)",
-            "Stage 2: uv:python3.13 — uv sync --frozen --no-dev  (.venv)",
-            "Stage 3: python:3.13-slim runtime — copy .venv + frontend/dist",
-            "CMD: alembic upgrade head && uvicorn app.main:app --port 8000",
-            "GitHub Actions: push → build → push ghcr.io → SSH deploy",
-        ],
-        right_header="HETZNER CX32  ·  CADDY  ·  DOCKER COMPOSE",
-        right_bullets=[
-            "Caddy: automatic TLS + flush_interval=-1  (enables SSE streaming)",
-            "SQLite default; DATABASE_URL env var → PostgreSQL (no code change)",
-            "Named volumes: app_data · platform_mappings · geo_logs",
-            "Why Caddy: zero-config TLS + native SSE, one-line Caddyfile",
-            "Cost: ~$10/mo  (CX32 — 4 vCPU, 8 GB RAM, 80 GB NVMe)",
-        ],
-        accent=TEAL,
-        bottom_badge="git push → live in ~3 min  ·  zero-downtime docker compose up -d",
-    )
-
-    # ── SECTION 10: Demo ───────────────────────────────────────────────────────
-    # Slide 42
-    add_image_slide(
-        prs,
-        "Demo: Natural Language Query",
-        _find_screenshot(screenshots_dir, "starting_page.png"),
-        'Type a natural language query — e.g. "What genes predict poor survival in triple-negative breast cancer?"',
-    )
-    # Slide 43
-    add_image_slide(
-        prs,
-        "Demo: Volcano Plot & Gene Results",
-        _find_screenshot(screenshots_dir, "volcano_plot.png"),
-        "Ranked genes with hazard ratios, p-values, and risk direction consistency across datasets",
-    )
-    # Slide 44
-    add_image_slide(
-        prs,
-        "Demo: Kaplan-Meier Survival Curves",
-        _find_screenshot(screenshots_dir, "kaplan_meier_curves.png", "km_curves.png"),
-        "Compare survival probability between high and low expression groups — interpretable by clinicians",
-    )
-
-    # ── SECTION 11: Lessons Learned ───────────────────────────────────────────
-    # Slide 45
-    add_gap_cards_slide(
-        prs,
-        "What We Learned",
-        cards=[
-            ("asyncio.gather",
-             "Parallel downloads cut wall time from 20 min → 2 min — the single biggest engineering win",
-             TEAL),
-            ("Hybrid metadata detection",
-             "Regex catches ~70% of survival columns; pydantic-ai structured output handles the rest",
-             PURPLE),
-            ("Disk-first caching",
-             "Parquet in platform_mappings/ survives restarts; OrderedDict LRU is a fast in-memory layer on top",
-             BLUE),
-            ("uv in Docker",
-             "uv sync --frozen: reproducible, layer-cached, no requirements.txt drift — 10× faster builds",
-             AMBER),
-            ("RAG at query time",
-             "Embedding + cosine similarity retrieves live context; agent cites real data, no hallucinations",
-             TEAL),
-            ("pydantic-ai is lightweight",
-             "No LangChain overhead — structured output, tool calling, streaming all work natively",
-             CORAL),
-        ],
-        accent=TEAL,
-    )
+    for build in selected:
+        build(prs)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prs.save(output_path)
-    print(f"Saved {output_path}  ({output_path.stat().st_size // 1024} KB,  48 slides)")
+    if slide_numbers is not None:
+        print(f"Saved {output_path}  ({output_path.stat().st_size // 1024} KB,  "
+              f"{len(selected)} of {len(builders)} slides — preview)")
+    else:
+        print(f"Saved {output_path}  ({output_path.stat().st_size // 1024} KB,  {len(selected)} slides)")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Generate the GEO Survival Analysis PowerPoint deck.")
+    parser.add_argument(
+        "--slides",
+        help='Preview only these slide numbers, e.g. "5,12,20-22" — written to a separate '
+             "preview file instead of the full deck.",
+    )
+    args = parser.parse_args()
+
     project_root    = Path(__file__).parent.parent
     screenshots_dir = project_root / "presentations" / "screenshots"
-    output_path     = project_root / "presentations" / "app_presentation.pptx"
 
     if not screenshots_dir.exists():
         print(f"Error: Screenshots directory not found: {screenshots_dir}")
         raise SystemExit(1)
 
-    create_presentation(output_path, screenshots_dir)
+    if args.slides:
+        output_path = project_root / "presentations" / "app_presentation.preview.pptx"
+        create_presentation(output_path, screenshots_dir, slide_numbers=_parse_slide_spec(args.slides))
+    else:
+        output_path = project_root / "presentations" / "app_presentation.pptx"
+        create_presentation(output_path, screenshots_dir)
