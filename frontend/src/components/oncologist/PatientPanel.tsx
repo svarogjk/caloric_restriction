@@ -19,8 +19,6 @@ interface PatientPanelProps {
     initialExpression?: string
     /** Auto-run the personalize call once the data + result are ready. */
     autoRun?: boolean
-    /** Cancer type key (e.g. "breast") — enables treatment context toggle in the readout. */
-    cancerType?: string | null
 }
 
 /**
@@ -29,7 +27,7 @@ interface PatientPanelProps {
  * is no separate "build signature" step. Predictive + advisory, research use only.
  */
 const PatientPanel: React.FC<PatientPanelProps> = ({
-    resultId, modelId, label, initialCovariates, alwaysOpen, initialExpression, autoRun, cancerType,
+    resultId, modelId, label, initialCovariates, alwaysOpen, initialExpression, autoRun,
 }) => {
     const [enabled, setEnabled] = useState(!!alwaysOpen || !!initialExpression)
     const [exprText, setExprText] = useState(initialExpression ?? '')
@@ -43,7 +41,6 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
     const [modelIsDemo, setModelIsDemo] = useState(false)
     const [referenceCurves, setReferenceCurves] = useState<ReferenceKMCurve[] | undefined>()
     const [timeUnit, setTimeUnit] = useState('days')
-    const [resolvedCancerType, setResolvedCancerType] = useState<string | null>(null)
 
     // For a curated/pre-built model, load its covariates + demo capability up front.
     useEffect(() => {
@@ -99,7 +96,6 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
             setPrediction(resp.prediction)
             setResolvedModelId(resp.model_id)
             setModelIsDemo(resp.model_is_demo)
-            setResolvedCancerType(resp.cancer_type)
             setCovariates(resp.clinical_covariates)        // reveal clinical fields for refinement
             // Fetch full model once for the multi-group reference KM.
             try {
@@ -240,9 +236,6 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
                             modelIsDemo={modelIsDemo}
                             referenceCurves={referenceCurves}
                             timeUnit={timeUnit}
-                            cancerType={cancerType ?? resolvedCancerType}
-                            expressionRaw={exprText}
-                            clinicalValues={clinical}
                         />
                     )}
                 </>

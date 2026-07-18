@@ -1,4 +1,4 @@
-import { ReferenceKMCurve, TreatmentComparison, SurvivalAtHorizon } from '../services/api'
+import { ReferenceKMCurve, TreatmentKMEvidence } from '../services/api'
 import { KMChartCurve } from '../components/KaplanMeierChart'
 
 /** Risk-group colours shared by the signature panel and Oncologist Mode. */
@@ -11,36 +11,83 @@ export const GROUP_COLORS: Record<string, string> = {
 /** Distinct line colours for each treatment cohort in a multi-treatment KM chart (up to 6). */
 export const TREATMENT_COLORS = ['#6366f1', '#ec4899', '#10b981', '#f59e0b', '#3b82f6', '#ef4444']
 
-/** 5-year survival probability for one treatment cohort, formatted for display. */
-export function fiveYearSurvival(t: TreatmentComparison): string {
-    const horizon = t.predicted_survival?.find((h: SurvivalAtHorizon) => h.horizon_label === '5-year')
-    if (!horizon) return '—'
-    return `${(horizon.survival_probability * 100).toFixed(0)}%`
+// Minimum evidentiary bar before a cohort KM curve is plotted at all — below
+// this, a curve is too unstable/misleading to show even when the backend
+// technically returns one (e.g. a risk tertile that ends up with 1 event
+// after a whole-cohort floor was checked pre-split). Matches this codebase's
+// MIN_EVENTS convention (`SignatureService.MIN_EVENTS`); the sample floor is
+// a companion stability check for the same reason.
+const MIN_CURVE_EVENTS = 5
+const MIN_CURVE_SAMPLES = 15
+
+export interface InsufficientCurve {
+    drug: string
+    nSamples: number
+    nEvents: number
 }
 
-/** One KM curve per ready treatment cohort — the patient's assigned risk group within
- *  each treatment-specific model — for a shared multi-treatment KaplanMeierChart.
- *  When `baseline` is supplied (the patient's own predicted curve, unrelated to any
- *  treatment-specific model), it is prepended as a neutral dashed reference line so
- *  it's directly comparable against each treatment's cohort curve on the same plot. */
-export function treatmentComparisonCurves(
-    treatments: TreatmentComparison[], patientRiskGroup: string | null,
+export interface TopTreatmentCurves {
+    curves: KMChartCurve[]
+    /** Drugs whose cohort data resolved but didn't clear the minimum n/events
+     *  bar to plot responsibly — surfaced as a footnote, never silently dropped. */
+    insufficientN: InsufficientCurve[]
+}
+
+/** One representative KM curve per drug, built from its real-GEO-cohort evidence
+ *  (F24b `cohort_km`), for the combined top-N treatment comparison chart.
+ *
+ *  Tier 1 ("arm_comparison" — treated vs untreated within the patient's own
+ *  training cohort) is drawn solid: observational, but at least same-population.
+ *  Tier 2 ("cohort_reference" — a treatment-matched but otherwise DIFFERENT GEO
+ *  cohort) is drawn finely dotted and visually subordinate, since it is not
+ *  directly comparable to the patient's baseline population. When `baseline` is
+ *  supplied (the patient's own predicted curve), it is prepended as a thick
+ *  dashed reference line. Every plotted curve's label carries its n/event count
+ *  so a reader never has to cross-reference the table to judge stability. */
+export function topTreatmentCurves(
+    drugs: string[],
+    cohortKm: Record<string, TreatmentKMEvidence>,
+    patientRiskGroup: string | null,
     baseline?: ReferenceKMCurve | null,
-): KMChartCurve[] {
-    // Index by position in the full list (not the filtered "ready" subset) so a
-    // treatment's colour always matches between this chart and the comparison table.
-    const curves: KMChartCurve[] = treatments.flatMap((t, i) => {
-        if (!t.reference_km || t.is_building) return []
-        const group = (t.risk_group ?? patientRiskGroup ?? 'low').toLowerCase()
-        const curve = t.reference_km.find((c) => c.group === group) ?? t.reference_km[0]
-        if (!curve) return []
-        return [{
-            key: t.slug,
-            label: t.name,
-            times: curve.times,
-            survival_probabilities: curve.survival_probabilities,
-            color: TREATMENT_COLORS[i % TREATMENT_COLORS.length],
-        }]
+): TopTreatmentCurves {
+    const insufficientN: InsufficientCurve[] = []
+    const curves: KMChartCurve[] = drugs.flatMap((drug, i): KMChartCurve[] => {
+        const km = cohortKm[drug.toLowerCase()]
+        if (!km || km.is_building) return []
+        const color = TREATMENT_COLORS[i % TREATMENT_COLORS.length]
+        if (km.tier === 'arm_comparison' && km.arms && km.arms.length > 0) {
+            const arm = km.arms[km.arms.length - 1]
+            if (arm.n_events < MIN_CURVE_EVENTS || arm.n_samples < MIN_CURVE_SAMPLES) {
+                insufficientN.push({ drug, nSamples: arm.n_samples, nEvents: arm.n_events })
+                return []
+            }
+            return [{
+                key: drug,
+                label: `${drug} (n=${arm.n_samples}, ${arm.n_events} events, same-cohort)`,
+                times: arm.km_curve.times,
+                survival_probabilities: arm.km_curve.survival_probabilities,
+                ci_lower: arm.km_curve.ci_lower,
+                ci_upper: arm.km_curve.ci_upper,
+                color,
+            }]
+        }
+        if (km.tier === 'cohort_reference' && km.reference_km && km.reference_km.length > 0) {
+            const group = (patientRiskGroup ?? 'low').toLowerCase()
+            const curve = km.reference_km.find((c) => c.group === group) ?? km.reference_km[0]
+            if (curve.n_events < MIN_CURVE_EVENTS || curve.n_samples < MIN_CURVE_SAMPLES) {
+                insufficientN.push({ drug, nSamples: curve.n_samples, nEvents: curve.n_events })
+                return []
+            }
+            return [{
+                key: drug,
+                label: `${drug} (n=${curve.n_samples}, ${curve.n_events} events, different cohort)`,
+                times: curve.times,
+                survival_probabilities: curve.survival_probabilities,
+                color,
+                strokeDasharray: '2 3',
+            }]
+        }
+        return []
     })
 
     if (baseline && baseline.times.length > 0) {
@@ -51,11 +98,11 @@ export function treatmentComparisonCurves(
             survival_probabilities: baseline.survival_probabilities,
             color: '#374151',
             strokeWidth: 3,
-            dashed: true,
+            strokeDasharray: '8 4',
         })
     }
 
-    return curves
+    return { curves, insufficientN }
 }
 
 /** Parse pasted "GENE value" lines (space/comma/colon/tab separated) into a map. */

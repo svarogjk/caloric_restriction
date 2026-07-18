@@ -508,7 +508,7 @@ class TherapyEvidenceRecord(BaseModel):
     approved: Optional[bool] = None
     source_db: Optional[str] = None
     # Real-GEO-cohort survival evidence for this drug (F24b), attached for
-    # the top few highest-confidence rows only; see _select_top_drugs.
+    # the top few highest-confidence rows only; see _rank_drugs_by_gene_priority.
     cohort_km: Optional[TreatmentKMEvidence] = None
 
 
@@ -516,6 +516,11 @@ class TherapyRationaleResponse(BaseModel):
     rationale: str
     evidence: list[TherapyEvidenceRecord]
     domain_score: int
+    # Full drug ranking (round-robined across genes, evidence-level ordered,
+    # resistance/adverse-outcome rows excluded) — see _rank_drugs_by_gene_priority.
+    # Only the first `_MAX_COHORT_KM_DRUGS` are auto-resolved above; the rest are
+    # candidates the frontend can resolve on demand via /therapy-rationale/cohort-km.
+    ranked_drugs: list[str] = Field(default_factory=list)
     disclaimer: str = (
         "Advisory only — treatments to consider and discuss with the care team, "
         "grounded in documented biomarker–therapy evidence from public knowledge "
@@ -581,13 +586,30 @@ def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence:
 _CIVIC_LEVEL_RANK = {"A": 0, "B": 1}
 _MAX_COHORT_KM_DRUGS = 8
 
+# CIViC Predictive/Prognostic significance values that document the OPPOSITE
+# of a suggestion worth discussing (resistance, adverse response, poor
+# outcome). These rows stay visible in the cited evidence table (honest
+# disclosure) but are excluded from `_rank_drugs_by_gene_priority` so a
+# documented-resistance drug never gets promoted to a "consider" comparison
+# curve next to the patient's baseline.
+_NEGATIVE_CIVIC_SIGNIFICANCE = ("resistance", "adverse response", "poor outcome")
 
-def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -> list[str]:
-    """Pick up to `max_n` distinct drug names worth a cohort-KM lookup,
+
+def _is_negative_civic(e: dict) -> bool:
+    if e.get("source") != "CIViC":
+        return False
+    sig = (e.get("significance") or "").lower()
+    return any(term in sig for term in _NEGATIVE_CIVIC_SIGNIFICANCE)
+
+
+def _rank_drugs_by_gene_priority(evidence: list[dict]) -> list[str]:
+    """Full ranking of distinct drug names worth a cohort-KM lookup,
     round-robined across the risk-driving genes so one gene's several
     approved drugs (e.g. HDAC4's several HDAC inhibitors) can't consume the
-    whole budget and leave other genes (e.g. NOTCH2, APC) never checked at
-    all. Evidence strength only orders candidates within a gene."""
+    whole list and leave other genes (e.g. NOTCH2, APC) always last. Evidence
+    strength only orders candidates within a gene. Drugs with documented
+    CIViC resistance/adverse/poor-outcome significance are excluded — see
+    `_is_negative_civic`."""
     def rank(e: dict) -> int:
         if e.get("source") == "CIViC":
             return _CIVIC_LEVEL_RANK.get((e.get("evidence_level") or "").upper(), 2)
@@ -595,6 +617,8 @@ def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -
 
     by_gene: "OrderedDict[str, list[dict]]" = OrderedDict()
     for e in evidence:
+        if _is_negative_civic(e):
+            continue
         by_gene.setdefault(e["gene"], []).append(e)
     for bucket in by_gene.values():
         bucket.sort(key=rank)
@@ -602,11 +626,9 @@ def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -
     picked: list[str] = []
     seen: set[str] = set()
     queues = {gene: iter(bucket) for gene, bucket in by_gene.items()}
-    while len(picked) < max_n and queues:
+    while queues:
         exhausted = []
         for gene, queue in queues.items():
-            if len(picked) >= max_n:
-                break
             for e in queue:
                 key = e["drug"].strip().lower()
                 if key in seen:
@@ -619,6 +641,13 @@ def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -
         for gene in exhausted:
             queues.pop(gene, None)
     return picked
+
+
+def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -> list[str]:
+    """Head of `_rank_drugs_by_gene_priority`, capped so a single generate()
+    call doesn't fan out into many concurrent Tier-2 GEO cohort builds
+    (~2-5 min each, uncapped globally in TreatmentContextService)."""
+    return _rank_drugs_by_gene_priority(evidence)[:max_n]
 
 
 async def _resolve_cohort_km(
@@ -735,6 +764,7 @@ async def therapy_rationale(request: TherapyRationaleRequest):
     # /therapy-rationale/cohort-km). Every record gets an explicit tier —
     # "not_checked" for drugs outside this round's budget — instead of a
     # silent `None` the UI has no way to explain.
+    ranked_drugs = _rank_drugs_by_gene_priority(evidence)
     top_drugs = _select_top_drugs(evidence)
     cohort_cache: dict = {}
     km_by_drug: dict[str, TreatmentKMEvidence] = {}
@@ -749,7 +779,9 @@ async def therapy_rationale(request: TherapyRationaleRequest):
             build_error="Not checked for GEO cohort data this round.",
         )
 
-    return TherapyRationaleResponse(rationale=rationale, evidence=records, domain_score=domain_score)
+    return TherapyRationaleResponse(
+        rationale=rationale, evidence=records, domain_score=domain_score, ranked_drugs=ranked_drugs,
+    )
 
 
 class CohortKMRequest(BaseModel):

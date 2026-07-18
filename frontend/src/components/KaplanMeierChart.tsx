@@ -14,6 +14,9 @@ export interface KMChartCurve {
     strokeWidth?: number
     strokeOpacity?: number
     dashed?: boolean
+    /** Explicit dash pattern (e.g. '2 4' for a fine dotted line, distinguishing a
+     *  different-cohort curve from a solid same-cohort one). Overrides `dashed`. */
+    strokeDasharray?: string
 }
 
 interface KaplanMeierChartProps {
@@ -101,7 +104,7 @@ const KaplanMeierChart: React.FC<KaplanMeierChartProps> = ({ curves, timeUnit = 
                             stroke={c.color}
                             strokeWidth={c.strokeWidth ?? 2}
                             strokeOpacity={c.strokeOpacity ?? 1}
-                            strokeDasharray={c.dashed ? '5 5' : undefined}
+                            strokeDasharray={c.strokeDasharray ?? (c.dashed ? '5 5' : undefined)}
                             dot={false}
                             connectNulls
                         />,

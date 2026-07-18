@@ -502,6 +502,10 @@ export interface TherapyRationaleResponse {
     rationale: string
     evidence: TherapyEvidenceRecord[]
     domain_score: number
+    /** Full drug ranking (round-robined across genes, evidence-level ordered,
+     *  documented-resistance rows excluded). Only the first 8 are auto-resolved
+     *  for cohort KM — the rest are candidates for on-demand lookup. */
+    ranked_drugs: string[]
     disclaimer: string
 }
 

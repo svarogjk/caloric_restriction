@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react'
 import { PredictResponse, ReferenceKMCurve } from '../../services/api'
-import { GROUP_COLORS, parsePastedExpression } from '../../utils/signatureViz'
+import { GROUP_COLORS } from '../../utils/signatureViz'
 import KaplanMeierChart, { KMChartCurve } from '../KaplanMeierChart'
 import TherapyDirections from './TherapyDirections'
 import PatientReport from './PatientReport'
@@ -14,12 +14,6 @@ interface PatientReadoutProps {
      *  back to the prediction's single assigned-group curve when absent. */
     referenceCurves?: ReferenceKMCurve[]
     timeUnit?: string
-    /** Cancer type key (e.g. "breast") — enables the treatment context toggle. */
-    cancerType?: string | null
-    /** Raw "GENE value" expression string for the scored patient. */
-    expressionRaw?: string
-    /** Clinical covariates supplied by the user. */
-    clinicalValues?: Record<string, string | number> | null
 }
 
 /**
@@ -29,7 +23,6 @@ interface PatientReadoutProps {
  */
 const PatientReadout: React.FC<PatientReadoutProps> = ({
     prediction: result, modelId, cancerLabel, modelIsDemo, referenceCurves, timeUnit = 'days',
-    cancerType, expressionRaw, clinicalValues,
 }) => {
     const curves = referenceCurves && referenceCurves.length ? referenceCurves : [result.reference_km]
     const kmCurves: KMChartCurve[] = useMemo(() => curves.map((c) => ({
@@ -44,7 +37,6 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
     const hasKmData = curves.some((c) => c.times.length > 0)
     const perYear = timeUnit.toLowerCase().startsWith('month') ? 12 : 365
     const maxAbs = Math.max(1e-9, ...result.contributions.map((c) => Math.abs(c.contribution)))
-    const expression = useMemo(() => parsePastedExpression(expressionRaw ?? ''), [expressionRaw])
 
     return (
         <div className="mt-6 space-y-4">
@@ -157,9 +149,6 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
                 <TherapyDirections
                     modelId={modelId}
                     riskGroup={result.risk_group}
-                    cancerType={cancerType}
-                    expression={expression}
-                    clinical={clinicalValues}
                     baselineCurve={result.reference_km}
                 />
             </div>
