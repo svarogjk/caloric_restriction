@@ -36,5 +36,15 @@ presentations/*
 practice_exercises/
 backend/data/rag_embeddings.npy
 
+# SQLite database (persisted via Docker volume on server, not tracked in git)
+backend/geo_chat.db
+backend/geo_chat.db-journal
+backend/geo_chat.db-shm
+backend/geo_chat.db-wal
+
+# RAG cache (regenerated at runtime, persisted via Docker volume on server)
+backend/data/rag_docs.json
+backend/data/rag_index.json
+
 # Raw therapy KB dumps (compact data/therapy_evidence.json is committed instead)
 backend/data/therapy_sources/

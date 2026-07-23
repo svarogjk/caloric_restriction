@@ -22,6 +22,7 @@ frontend/.vite/
 backend/geo_logs/
 backend/platform_mappings/
 backend/datasets/
+backend/*.db*
 # backend/data/ contains rag_index.json (the RAG hash-tracking file).
 # It is intentionally excluded: the container creates /app/data/ empty at build
 # time (via RUN mkdir -p), and Railway mounts a persistent volume there so the
