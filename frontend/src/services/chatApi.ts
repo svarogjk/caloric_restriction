@@ -181,7 +181,7 @@ export const chatApi = {
     async sendMessage(
         conversationId: string,
         content: string,
-        model: string = 'mistral',
+        model: string = 'mistral-large',
     ): Promise<MessageResponse> {
         const response = await chatClient.post(
             `/conversations/${conversationId}/messages`,

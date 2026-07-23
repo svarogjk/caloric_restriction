@@ -50,6 +50,18 @@ class AnalysisRequest(BaseModel):
         max_length=500,
         description="Optional list of gene symbols to restrict analysis to (batch mode)"
     )
+    hazard_ratio_upper: float = Field(
+        default=1.2,
+        ge=1.0,
+        le=20.0,
+        description="A gene is significant if HR >= this (risk-associated)"
+    )
+    hazard_ratio_lower: float = Field(
+        default=0.8,
+        ge=0.01,
+        le=1.0,
+        description="...or HR <= this (protective-associated)"
+    )
 
     @field_validator("gene_filter", mode="before")
     @classmethod

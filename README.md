@@ -84,7 +84,7 @@ uv run alembic upgrade head
 
 ```bash
 cd backend
-uv run python -m uvicorn app.main:app --reload --port 8000
+uv run python -m uvicorn app.main:app --reload --reload-dir app --port 8000
 ```
 
 ### 5. Start the frontend

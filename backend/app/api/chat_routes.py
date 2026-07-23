@@ -116,7 +116,7 @@ class SendMessageRequest(BaseModel):
     """Request to send a message."""
 
     content: str = Field(..., min_length=1, max_length=5000)
-    model: str = Field(default="mistral", pattern="^(mistral|anthropic|claude)$")
+    model: str = Field(default="mistral-large", pattern="^(mistral|mistral-large|anthropic|claude)$")
     stream: bool = False
     user_settings: Optional[UserSettings] = None
 

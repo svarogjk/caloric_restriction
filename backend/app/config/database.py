@@ -6,6 +6,7 @@ Uses SQLite with aiosqlite for zero-infrastructure local storage.
 
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 import os
 
@@ -20,10 +21,13 @@ from sqlalchemy.pool import NullPool
 
 logger = logging.getLogger(__name__)
 
-# Database URL - from environment or default SQLite
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Database URL - from environment or default SQLite, anchored to backend/ so
+# it resolves to the same file regardless of the process's working directory.
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "sqlite+aiosqlite:///./geo_chat.db",
+    f"sqlite+aiosqlite:///{_BACKEND_DIR / 'geo_chat.db'}",
 )
 
 logger.info(f"Using database: {DATABASE_URL}")

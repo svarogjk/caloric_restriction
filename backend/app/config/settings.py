@@ -4,17 +4,21 @@ Application settings configuration.
 Loads settings from environment variables with sensible defaults.
 """
 
+from pathlib import Path
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings
 
 _PLACEHOLDER_SECRET = "changeme-generate-with-openssl-rand-hex-32"
+_BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _BACKEND_DIR / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Database
-    database_url: str = "sqlite+aiosqlite:///./geo_chat.db"
+    database_url: str = f"sqlite+aiosqlite:///{_BACKEND_DIR / 'geo_chat.db'}"
 
     # JWT Authentication
     jwt_secret_key: str = _PLACEHOLDER_SECRET
@@ -37,7 +41,7 @@ class Settings(BaseSettings):
         return v
 
     class Config:
-        env_file = ".env"
+        env_file = _ENV_FILE
         env_file_encoding = "utf-8"
         extra = "ignore"  # Ignore extra env vars
 

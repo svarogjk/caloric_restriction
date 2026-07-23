@@ -91,8 +91,8 @@ class GEODataLoaderService:
     Service for loading GEO expression data with AI-powered format detection
     """
     
-    # Storage directory for processed datasets (relative to project root)
-    DATASETS_DIR = Path("datasets")
+    # Storage directory for processed datasets (relative to backend/, not CWD)
+    DATASETS_DIR = Path(__file__).parent.parent.parent / "datasets"
     
     def __init__(self, model: str = "mistral"):
         """Initialize data loader with AI agent"""
@@ -182,7 +182,7 @@ class GEODataLoaderService:
             if dataset_path.exists():
                 logger.info(f"Loading from datasets folder: {dataset_path}")
                 try:
-                    return self._load_from_storage(dataset_path, dataset)
+                    return await asyncio.to_thread(self._load_from_storage, dataset_path, dataset)
                 except Exception as e:
                     logger.warning(f"Storage load failed: {e}, loading from source")
 
@@ -228,7 +228,7 @@ class GEODataLoaderService:
             loaded_data = await self.apply_gene_mapping(loaded_data)
 
             # Save to datasets folder
-            self._save_to_storage(loaded_data)
+            await asyncio.to_thread(self._save_to_storage, loaded_data)
 
             logger.info(f"Successfully loaded {dataset.accession}: "
                        f"{loaded_data.expression_matrix.shape[0]} genes, "
@@ -255,21 +255,24 @@ class GEODataLoaderService:
                 logger.warning(f"Series matrix not available: {response.status_code}")
                 return None
             
-            # Decompress and preview
-            content = gzip.decompress(response.content).decode('utf-8')
+            # Decompress and preview (CPU-bound — offload so it doesn't stall
+            # the event loop and other concurrent requests)
+            content = await asyncio.to_thread(
+                lambda: gzip.decompress(response.content).decode('utf-8')
+            )
             log_memory_checkpoint("series_matrix_decompressed", context_id=dataset.accession)
             preview_lines = content.split('\n')[:100]
             preview_text = '\n'.join(preview_lines)
-            
+
             # Get AI strategy for parsing
             strategy = await self._get_loading_strategy(
                 preview_text,
                 dataset.accession,
                 "series_matrix"
             )
-            
-            # Parse according to strategy
-            return self._parse_series_matrix(content, dataset, strategy)
+
+            # Parse according to strategy (also CPU-bound)
+            return await asyncio.to_thread(self._parse_series_matrix, content, dataset, strategy)
         
         except Exception as e:
             logger.error(f"Error loading series matrix: {e}")
@@ -539,7 +542,7 @@ Determine the optimal parsing strategy for this file."""
                 logger.warning("Cannot save data without expression_matrix")
                 return
             
-            storage_path = Path("datasets") / f"{data.accession}.parquet"
+            storage_path = self.DATASETS_DIR / f"{data.accession}.parquet"
             
             # Save expression matrix
             data.expression_matrix.to_parquet(storage_path)

@@ -68,7 +68,11 @@ async def build_signature(
         raise HTTPException(status_code=404, detail="Analysis result not found")
 
     try:
-        return await signature_service.build_from_result(result, max_genes=request.max_genes)
+        model = await signature_service.build_from_result(result, max_genes=request.max_genes)
+        # Persist so this model survives a dev-server reload or LRU eviction,
+        # same as the /personalize auto-build path.
+        signature_service.save_model_to_disk(model)
+        return model
     except ValueError as e:
         # Expected, user-actionable failures (no cached cohorts, too few genes).
         logger.warning("Signature build rejected: %s", e)

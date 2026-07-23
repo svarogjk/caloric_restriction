@@ -122,6 +122,8 @@ export function streamAnalysis(
     cancerGenesOnly: boolean = false,
     geneFilter: string[] | null = null,
     minOccurrence: number = 2,
+    hazardRatioUpper: number = 1.2,
+    hazardRatioLower: number = 0.8,
     onProgress: (event: AnalysisProgressEvent) => void,
     onComplete: (result: SurvivalAnalysisResponse) => void,
     onError: (message: string) => void,
@@ -133,6 +135,8 @@ export function streamAnalysis(
         ranking_multiplier: String(rankingMultiplier),
         min_occurrence: String(minOccurrence),
         cancer_genes_only: String(cancerGenesOnly),
+        hazard_ratio_upper: String(hazardRatioUpper),
+        hazard_ratio_lower: String(hazardRatioLower),
     })
     if (organism) {
         params.set('organism', organism)
@@ -479,6 +483,7 @@ export interface TreatmentKMEvidence {
     n_total: number | null
     caveat: string
     is_building: boolean
+    build_stage: string | null
     build_error: string | null
 }
 
@@ -548,6 +553,7 @@ export interface TreatmentComparison {
     n_patients: number | null
     pooled_c_index: number | null
     is_building: boolean
+    build_stage: string | null
     build_error: string | null
     disclaimer: string
 }

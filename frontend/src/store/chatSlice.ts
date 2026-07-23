@@ -149,7 +149,7 @@ export interface ChatState {
     isLoading: boolean
     error: string | null
     currentEstimation: QueryEstimation | null
-    selectedModel: 'mistral' | 'anthropic'
+    selectedModel: 'mistral' | 'mistral-large' | 'anthropic'
     sidebarOpen: boolean
     // Search/Analysis settings
     datasetCount: number
@@ -157,6 +157,8 @@ export interface ChatState {
     organism: string | null
     cancerGenesOnly: boolean
     geneFilterInput: string
+    hazardRatioUpper: number
+    hazardRatioLower: number
     // Analysis state
     analysisResults: AnalysisResult | null
     analysisLoading: boolean
@@ -186,14 +188,16 @@ const initialState: ChatState = {
     isLoading: false,
     error: null,
     currentEstimation: null,
-    selectedModel: 'mistral',
+    selectedModel: 'mistral-large',
     sidebarOpen: true,
     // Search/Analysis settings
-    datasetCount: 10,
-    rankingMultiplier: 3,
+    datasetCount: 20,
+    rankingMultiplier: 5,
     organism: 'Homo sapiens',
     cancerGenesOnly: true,
     geneFilterInput: '',
+    hazardRatioUpper: 1.2,
+    hazardRatioLower: 0.8,
     // Analysis state
     analysisResults: null,
     analysisLoading: false,
@@ -361,7 +365,10 @@ export const runAnalysis = createAsyncThunk(
         { getState, dispatch, rejectWithValue }
     ) => {
         const state = getState() as { chat: ChatState }
-        const { selectedModel, datasetCount, rankingMultiplier, organism, cancerGenesOnly, geneFilterInput } = state.chat
+        const {
+            selectedModel, datasetCount, rankingMultiplier, organism, cancerGenesOnly, geneFilterInput,
+            hazardRatioUpper, hazardRatioLower,
+        } = state.chat
 
         // Parse gene filter input: split by newlines and commas, trim, filter empty, uppercase
         const geneFilter: string[] | null = geneFilterInput.trim()
@@ -390,6 +397,8 @@ export const runAnalysis = createAsyncThunk(
                 cancerGenesOnly,
                 geneFilter,
                 2,
+                hazardRatioUpper,
+                hazardRatioLower,
                 (progress) => {
                     dispatch(setAnalysisProgress({
                         stage: progress.stage,
@@ -460,7 +469,7 @@ const chatSlice = createSlice({
         addMessage: (state, action: PayloadAction<Message>) => {
             state.messages.push(action.payload)
         },
-        setSelectedModel: (state, action: PayloadAction<'mistral' | 'anthropic'>) => {
+        setSelectedModel: (state, action: PayloadAction<'mistral' | 'mistral-large' | 'anthropic'>) => {
             state.selectedModel = action.payload
         },
         clearEstimation: (state) => {
@@ -483,6 +492,12 @@ const chatSlice = createSlice({
         },
         setGeneFilterInput: (state, action: PayloadAction<string>) => {
             state.geneFilterInput = action.payload
+        },
+        setHazardRatioUpper: (state, action: PayloadAction<number>) => {
+            state.hazardRatioUpper = action.payload
+        },
+        setHazardRatioLower: (state, action: PayloadAction<number>) => {
+            state.hazardRatioLower = action.payload
         },
         clearAnalysisResults: (state) => {
             state.analysisResults = null
@@ -715,6 +730,8 @@ export const {
     setOrganism,
     setCancerGenesOnly,
     setGeneFilterInput,
+    setHazardRatioUpper,
+    setHazardRatioLower,
     clearAnalysisResults,
     setAnalysisProgress,
     startStreaming,

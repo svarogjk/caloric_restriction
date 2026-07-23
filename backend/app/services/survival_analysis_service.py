@@ -3,6 +3,7 @@ Survival Analysis Service
 Performs survival analysis on GEO datasets to identify genes associated with lifespan/longevity
 """
 
+import asyncio
 import logging
 import hashlib
 import re
@@ -234,10 +235,192 @@ If no survival data is present, set has_survival_data to false."""
     )
 
 
+@dataclass
+class _RiskSetIndex:
+    """Risk-set bookkeeping shared by every gene in a dataset.
+
+    Built once from (time, event) alone — identical for every gene, since
+    only the covariate (expression) values differ — and reused by both the
+    vectorized log-rank test and the vectorized Cox fit below.
+    """
+
+    order: np.ndarray            # sample positions sorted by time, descending
+    events_sorted: np.ndarray    # event indicator reordered by `order`
+    start_pos: np.ndarray        # first sorted-position of each event tie-group
+    end_pos: np.ndarray          # last sorted-position of each event tie-group
+    d: np.ndarray                # event count per tie-group (d_k)
+    n_at_risk: np.ndarray        # total at-risk count per tie-group (n_k)
+    max_tie: int                 # largest d_k, bounds the Efron correction loop
+
+
+def _build_risk_set_index(times: np.ndarray, events: np.ndarray) -> Optional["_RiskSetIndex"]:
+    """Sort samples by time (descending) and locate each tied event-time group.
+
+    Returns None when there are no observed events at all (nothing to fit).
+    """
+    order = np.argsort(-times, kind="stable")
+    times_sorted = times[order]
+    events_sorted = events[order].astype(np.float64)
+
+    n = len(times_sorted)
+    is_new_group = np.empty(n, dtype=bool)
+    is_new_group[0] = True
+    if n > 1:
+        is_new_group[1:] = times_sorted[1:] != times_sorted[:-1]
+    group_id = np.cumsum(is_new_group) - 1
+    n_groups = int(group_id[-1]) + 1
+
+    group_first = np.searchsorted(group_id, np.arange(n_groups), side="left")
+    group_last = np.searchsorted(group_id, np.arange(n_groups), side="right") - 1
+
+    events_cum = np.concatenate([[0.0], np.cumsum(events_sorted)])
+    d_per_group = events_cum[group_last + 1] - events_cum[group_first]
+    n_per_group = (group_last + 1).astype(np.float64)
+
+    event_groups = np.nonzero(d_per_group > 0)[0]
+    if len(event_groups) == 0:
+        return None
+
+    return _RiskSetIndex(
+        order=order,
+        events_sorted=events_sorted,
+        start_pos=group_first[event_groups],
+        end_pos=group_last[event_groups],
+        d=d_per_group[event_groups],
+        n_at_risk=n_per_group[event_groups],
+        max_tie=int(d_per_group[event_groups].max()),
+    )
+
+
+def _segment_sums(values: np.ndarray, idx: "_RiskSetIndex") -> np.ndarray:
+    """Sum `values` (n_genes, n_samples), already event-masked, within each
+    tie group [start_pos, end_pos] — via a zero-padded cumulative sum."""
+    padded = np.concatenate(
+        [np.zeros((values.shape[0], 1)), np.cumsum(values, axis=1)], axis=1
+    )
+    return padded[:, idx.end_pos + 1] - padded[:, idx.start_pos]
+
+
+def _vectorized_logrank_p(high_mask_sorted: np.ndarray, idx: "_RiskSetIndex") -> np.ndarray:
+    """Two-group (Mantel-Haenszel) log-rank test p-value for every gene at once.
+
+    `high_mask_sorted` is (n_genes, n_samples) boolean, already reordered to
+    match `idx.order`. Matches `lifelines.statistics.logrank_test` (no
+    continuity correction — the same default the scalar per-gene path uses).
+    """
+    high = high_mask_sorted.astype(np.float64)
+    n_high_k = np.cumsum(high, axis=1)[:, idx.end_pos]
+
+    high_event = high * idx.events_sorted[None, :]
+    d_high_k = _segment_sums(high_event, idx)
+
+    n_k = idx.n_at_risk[None, :]
+    d_k = idx.d[None, :]
+
+    p_high = n_high_k / n_k
+    expected_high = d_k * p_high
+    denom = np.where(n_k > 1, n_k - 1, 1.0)
+    variance = d_k * p_high * (1 - p_high) * (n_k - d_k) / denom
+    variance = np.where(n_k > 1, variance, 0.0)
+
+    o_minus_e = np.sum(d_high_k - expected_high, axis=1)
+    total_variance = np.sum(variance, axis=1)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        z = np.where(total_variance > 0, o_minus_e / np.sqrt(total_variance), np.nan)
+
+    return stats.chi2.sf(z ** 2, df=1)
+
+
+def _vectorized_cox_fit(
+    X_sorted: np.ndarray,
+    idx: "_RiskSetIndex",
+    max_iter: int = 25,
+    tol: float = 1e-6,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Univariate Cox proportional hazards fit (Efron ties) for every gene at
+    once, via vectorized Newton-Raphson on the partial log-likelihood.
+
+    `X_sorted` is (n_genes, n_samples), covariate (expression) values
+    reordered to match `idx.order`. Mirrors `lifelines.CoxPHFitter` for the
+    single-covariate case (same Efron score/information formulas, same
+    Wald-based inference), but solves every gene's independent 1-parameter
+    optimization simultaneously instead of one `.fit()` call per gene.
+
+    Returns (beta, se, converged). Genes that fail to converge (numerical
+    overflow, non-positive information, runaway coefficient) come back with
+    `converged=False` so the caller can re-run just those through the exact
+    `lifelines`-backed scalar path rather than trusting an unstable fit.
+    """
+    n_genes, _n_samples = X_sorted.shape
+    events_row = idx.events_sorted[None, :]
+    sum_x_k = _segment_sums(events_row * X_sorted, idx)  # constant across iterations
+
+    beta = np.zeros(n_genes)
+    delta = np.full(n_genes, np.nan)
+    info_final = np.zeros(n_genes)
+
+    for _ in range(max_iter):
+        with np.errstate(over="ignore", invalid="ignore"):
+            w = np.exp(beta[:, None] * X_sorted)
+        xw = X_sorted * w
+        x2w = X_sorted ** 2 * w
+
+        S0_k = np.cumsum(w, axis=1)[:, idx.end_pos]
+        S1_k = np.cumsum(xw, axis=1)[:, idx.end_pos]
+        S2_k = np.cumsum(x2w, axis=1)[:, idx.end_pos]
+
+        s0_k = _segment_sums(events_row * w, idx)
+        s1_k = _segment_sums(events_row * xw, idx)
+        s2_k = _segment_sums(events_row * x2w, idx)
+
+        score = sum_x_k.sum(axis=1).copy()
+        info = np.zeros(n_genes)
+
+        for l in range(idx.max_tie):
+            valid = idx.d > l
+            if not valid.any():
+                continue
+            frac = np.where(valid, l / np.where(idx.d > 0, idx.d, 1.0), 0.0)[None, :]
+            denom = np.where(valid[None, :], S0_k - frac * s0_k, 1.0)
+            num1 = S1_k - frac * s1_k
+            num2 = S2_k - frac * s2_k
+            with np.errstate(invalid="ignore", divide="ignore"):
+                term1 = num1 / denom
+                term2 = num2 / denom - term1 ** 2
+            mask = valid[None, :]
+            score -= np.sum(np.where(mask, term1, 0.0), axis=1)
+            info += np.sum(np.where(mask, term2, 0.0), axis=1)
+
+        with np.errstate(invalid="ignore", divide="ignore"):
+            delta = np.where(info > 0, score / info, np.nan)
+        valid_step = np.isfinite(delta)
+        beta = np.where(valid_step, beta + delta, beta)
+        info_final = info
+
+        max_delta = np.max(np.abs(delta[valid_step])) if valid_step.any() else 0.0
+        if max_delta < tol:
+            break
+
+    se = np.full(n_genes, np.nan)
+    positive_info = info_final > 0
+    se[positive_info] = 1.0 / np.sqrt(info_final[positive_info])
+
+    converged = (
+        np.isfinite(beta)
+        & np.isfinite(se)
+        & positive_info
+        & (np.abs(np.where(np.isfinite(delta), delta, np.inf)) < tol)
+        & (np.abs(beta) < 50)  # runaway-coefficient guard: e^50 is not a real hazard ratio
+    )
+
+    return beta, se, converged
+
+
 class SurvivalAnalysisService:
     """
     Service for performing survival analysis on gene expression data
-    
+
     Identifies genes whose expression levels are associated with survival outcomes
     using Kaplan-Meier analysis and Cox proportional hazards regression.
     """
@@ -245,25 +428,29 @@ class SurvivalAnalysisService:
     def __init__(
         self,
         p_value_threshold: float = 0.05,
-        hazard_ratio_threshold: float = 1.5,
+        hazard_ratio_upper: float = 1.2,
+        hazard_ratio_lower: float = 0.8,
         min_samples_per_group: int = 5,
         model: str = "mistral"
     ):
         """
         Initialize survival analysis service
-        
+
         Args:
             p_value_threshold: Significance threshold for Cox regression p-value
-            hazard_ratio_threshold: Minimum hazard ratio to consider meaningful
+            hazard_ratio_upper: A gene is significant if HR >= this (risk-associated)
+            hazard_ratio_lower: ...or HR <= this (protective-associated). Not required
+                to be the reciprocal of hazard_ratio_upper — set independently.
             min_samples_per_group: Minimum samples required per expression group
             model: LLM model for survival data detection
         """
         if not LIFELINES_AVAILABLE:
             raise ImportError("lifelines library required for survival analysis. "
                             "Install with: pip install lifelines")
-        
+
         self.p_value_threshold = p_value_threshold
-        self.hazard_ratio_threshold = hazard_ratio_threshold
+        self.hazard_ratio_upper = hazard_ratio_upper
+        self.hazard_ratio_lower = hazard_ratio_lower
         self.min_samples_per_group = min_samples_per_group
         self.model = model
         self._detection_agent = None
@@ -630,35 +817,21 @@ Determine if this dataset contains survival data and identify the relevant colum
 
         logger.info(f"Analyzing {len(expression_matrix)} genes across {len(common_samples)} samples (filtered={len(loaded_data.expression_matrix)} total genes before sample filtering)")
 
-        # Perform survival analysis for each gene
-        significant_genes = []
-        n_analyzed = 0
+        # Perform survival analysis for each gene. This is CPU-bound (per-gene
+        # CoxPHFitter fits), so it's run off the event loop thread — otherwise
+        # it monopolizes the single asyncio event loop and stalls every other
+        # concurrent request (e.g. a second browser tab) for the duration.
+        significant_genes, n_analyzed = await asyncio.to_thread(
+            self._analyze_all_genes,
+            expression_matrix,
+            survival_df,
+            loaded_data.probe_to_gene_mapping,
+            metadata_aligned,
+            covariate_columns if metadata_aligned is not None else None,
+            treatment_binary,
+            treatment_arm_names,
+        )
 
-        for gene_id in expression_matrix.index:
-            try:
-                gene_result = self._analyze_gene_survival(
-                    gene_id=gene_id,
-                    expression=expression_matrix.loc[gene_id],
-                    survival_df=survival_df,
-                    probe_to_gene=loaded_data.probe_to_gene_mapping,
-                    metadata_df=metadata_aligned,
-                    covariate_columns=covariate_columns if metadata_aligned is not None else None,
-                    treatment_binary=treatment_binary,
-                    treatment_arm_names=treatment_arm_names,
-                )
-                
-                n_analyzed += 1
-                
-                if gene_result and gene_result.is_significant:
-                    significant_genes.append(gene_result)
-                    
-            except Exception as e:
-                logger.debug(f"Error analyzing gene {gene_id}: {e}")
-                continue
-        
-        # Sort by Cox p-value
-        significant_genes.sort(key=lambda x: x.cox_p_value)
-        
         logger.info(f"Found {len(significant_genes)} significant genes out of {n_analyzed} analyzed")
         
         log_memory_checkpoint("analyze_survival_end", context_id=loaded_data.accession)
@@ -1099,6 +1272,364 @@ Determine if this dataset contains survival data and identify the relevant colum
             logger.debug(f"Multivariate Cox failed: {e}")
             return None, None, None
 
+    def _analyze_all_genes(
+        self,
+        expression_matrix: pd.DataFrame,
+        survival_df: pd.DataFrame,
+        probe_to_gene: Optional[Dict[str, str]],
+        metadata_aligned: Optional[pd.DataFrame],
+        covariate_columns: Optional[List[str]],
+        treatment_binary: Optional[pd.Series],
+        treatment_arm_names: Optional[Dict[int, str]],
+    ) -> Tuple[List[GeneSurvivalResult], int]:
+        """Synchronous per-gene survival analysis, meant to be run via asyncio.to_thread.
+
+        Tries the vectorized fast path (log-rank + Cox for every gene in one
+        batch of numpy ops) first; falls back to the exact per-gene
+        `lifelines` loop — unchanged — for any gene it can't safely fast-path,
+        or for the whole dataset if the vectorized path hits anything
+        unexpected.
+        """
+        try:
+            return self._analyze_all_genes_vectorized(
+                expression_matrix,
+                survival_df,
+                probe_to_gene,
+                metadata_aligned,
+                covariate_columns,
+                treatment_binary,
+                treatment_arm_names,
+            )
+        except Exception as e:
+            logger.warning(f"Vectorized gene analysis failed ({e}); falling back to per-gene loop")
+            return self._analyze_all_genes_scalar(
+                expression_matrix,
+                survival_df,
+                probe_to_gene,
+                metadata_aligned,
+                covariate_columns,
+                treatment_binary,
+                treatment_arm_names,
+            )
+
+    def _analyze_all_genes_vectorized(
+        self,
+        expression_matrix: pd.DataFrame,
+        survival_df: pd.DataFrame,
+        probe_to_gene: Optional[Dict[str, str]],
+        metadata_aligned: Optional[pd.DataFrame],
+        covariate_columns: Optional[List[str]],
+        treatment_binary: Optional[pd.Series],
+        treatment_arm_names: Optional[Dict[int, str]],
+    ) -> Tuple[List[GeneSurvivalResult], int]:
+        """Fast path: log-rank + univariate Cox for every gene at once.
+
+        Genes with any missing expression value fall back to the scalar path
+        immediately (their risk sets differ from every other gene's, so they
+        can't share the batched computation). Among the rest, any gene whose
+        vectorized Cox fit doesn't cleanly converge also falls back to the
+        scalar path rather than trusting an unstable result. Only genes that
+        clear the significance bar get the expensive KM-curve /
+        multivariate / interaction extras computed at all — those were
+        previously computed for every gene regardless of significance, even
+        though only significant genes are ever returned.
+        """
+        gene_ids = expression_matrix.index.to_numpy()
+        X_all = expression_matrix.to_numpy(dtype=np.float64)
+        n_genes, n_samples = X_all.shape
+
+        significant_genes: List[GeneSurvivalResult] = []
+        n_analyzed = 0
+
+        has_nan = np.isnan(X_all).any(axis=1)
+        dirty_positions = np.nonzero(has_nan)[0]
+        clean_positions = np.nonzero(~has_nan)[0]
+
+        if len(dirty_positions) > 0:
+            dirty_genes, dirty_n = self._analyze_all_genes_scalar(
+                expression_matrix.iloc[dirty_positions],
+                survival_df, probe_to_gene, metadata_aligned,
+                covariate_columns, treatment_binary, treatment_arm_names,
+            )
+            significant_genes.extend(dirty_genes)
+            n_analyzed += dirty_n
+
+        if len(clean_positions) == 0:
+            significant_genes.sort(key=lambda x: x.cox_p_value)
+            return significant_genes, n_analyzed
+
+        times = survival_df['time'].to_numpy(dtype=np.float64)
+        events = survival_df['event'].to_numpy(dtype=np.float64)
+        risk_index = _build_risk_set_index(times, events)
+
+        X_clean = X_all[clean_positions]
+        clean_gene_ids = gene_ids[clean_positions]
+
+        if risk_index is None:
+            # No observed events at all — nothing to fit for any gene.
+            n_analyzed += len(clean_positions)
+            significant_genes.sort(key=lambda x: x.cox_p_value)
+            return significant_genes, n_analyzed
+
+        median_per_gene = np.median(X_clean, axis=1)
+        high_mask = X_clean >= median_per_gene[:, None]
+        n_high = high_mask.sum(axis=1)
+        n_low = n_samples - n_high
+        valid_split = (
+            (n_samples >= self.min_samples_per_group * 2)
+            & (n_high >= self.min_samples_per_group)
+            & (n_low >= self.min_samples_per_group)
+        )
+
+        # Every clean gene is "attempted" here, matching the scalar loop's
+        # counting: n_analyzed increments whenever the per-gene call doesn't
+        # raise, regardless of whether it found a valid split.
+        n_analyzed += len(clean_positions)
+
+        X_sorted = X_clean[:, risk_index.order]
+        beta, se, cox_converged = _vectorized_cox_fit(X_sorted, risk_index)
+
+        high_mask_sorted = high_mask[:, risk_index.order]
+        log_rank_p = _vectorized_logrank_p(high_mask_sorted, risk_index)
+
+        needs_fallback = valid_split & ~cox_converged
+        if needs_fallback.any():
+            fallback_positions = np.nonzero(needs_fallback)[0]
+            fallback_genes, _fallback_n = self._analyze_all_genes_scalar(
+                expression_matrix.loc[clean_gene_ids[fallback_positions]],
+                survival_df, probe_to_gene, metadata_aligned,
+                covariate_columns, treatment_binary, treatment_arm_names,
+            )
+            # These genes are already counted in n_analyzed above.
+            significant_genes.extend(fallback_genes)
+
+        use_fast = valid_split & cox_converged
+        hazard_ratio = np.exp(beta)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            z = np.where(se > 0, beta / se, np.nan)
+        cox_p = stats.chi2.sf(z ** 2, df=1)
+        z_crit = stats.norm.ppf(0.975)
+        hr_ci_lower = np.exp(beta - z_crit * se)
+        hr_ci_upper = np.exp(beta + z_crit * se)
+
+        is_significant = (
+            use_fast
+            & (cox_p < self.p_value_threshold)
+            & ((hazard_ratio >= self.hazard_ratio_upper) | (hazard_ratio <= self.hazard_ratio_lower))
+        )
+
+        survival_time = survival_df['time']
+        survival_event = survival_df['event']
+        for pos in np.nonzero(is_significant)[0]:
+            gene_id = clean_gene_ids[pos]
+            high = high_mask[pos]
+            result = self._finalize_gene_result(
+                gene_id=gene_id,
+                gene_symbol=probe_to_gene.get(gene_id) if probe_to_gene else None,
+                expression=pd.Series(X_clean[pos], index=expression_matrix.columns),
+                survival_data=survival_df,
+                high_group=survival_df[high],
+                low_group=survival_df[~high],
+                n_high=int(n_high[pos]),
+                n_low=int(n_low[pos]),
+                hazard_ratio=float(hazard_ratio[pos]),
+                hr_ci_lower=float(hr_ci_lower[pos]),
+                hr_ci_upper=float(hr_ci_upper[pos]),
+                cox_p=float(cox_p[pos]),
+                log_rank_p=float(log_rank_p[pos]),
+                metadata_df=metadata_aligned,
+                covariate_columns=covariate_columns,
+                treatment_binary=treatment_binary,
+                treatment_arm_names=treatment_arm_names,
+            )
+            if result is not None:
+                significant_genes.append(result)
+
+        significant_genes.sort(key=lambda x: x.cox_p_value)
+        return significant_genes, n_analyzed
+
+    def _finalize_gene_result(
+        self,
+        gene_id: str,
+        gene_symbol: Optional[str],
+        expression: pd.Series,
+        survival_data: pd.DataFrame,
+        high_group: pd.DataFrame,
+        low_group: pd.DataFrame,
+        n_high: int,
+        n_low: int,
+        hazard_ratio: float,
+        hr_ci_lower: float,
+        hr_ci_upper: float,
+        cox_p: float,
+        log_rank_p: float,
+        metadata_df: Optional[pd.DataFrame],
+        covariate_columns: Optional[List[str]],
+        treatment_binary: Optional[pd.Series],
+        treatment_arm_names: Optional[Dict[int, str]],
+    ) -> GeneSurvivalResult:
+        """Build the full result for a gene already known to be significant
+        from the vectorized log-rank/Cox pass: KM curves, multivariate Cox
+        (F13), and the treatment-interaction predictive test (F16b).
+
+        This is the same work `_analyze_gene_survival` does after its own Cox
+        fit — duplicated rather than shared so the existing, directly-tested
+        scalar path stays untouched. Only called for genes that clear the
+        significance bar, since non-significant genes never reach the caller.
+        """
+        km_curve_high = None
+        km_curve_low = None
+        median_high = None
+        median_low = None
+        try:
+            kmf = KaplanMeierFitter()
+
+            def sanitize_value(val):
+                if val is None or pd.isna(val) or np.isinf(val):
+                    return None
+                return float(val)
+
+            def sanitize_list(lst):
+                if lst is None:
+                    return None
+                return [sanitize_value(v) for v in lst]
+
+            kmf.fit(high_group['time'], event_observed=high_group['event'])
+            median_high = kmf.median_survival_time_
+            km_curve_high = KMCurveData(
+                times=sanitize_list(kmf.survival_function_.index.tolist()),
+                survival_probabilities=sanitize_list(kmf.survival_function_['KM_estimate'].tolist()),
+                ci_lower=sanitize_list(kmf.confidence_interval_['KM_estimate_lower_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
+                ci_upper=sanitize_list(kmf.confidence_interval_['KM_estimate_upper_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
+                n_samples=int(n_high),
+                n_events=int(high_group['event'].sum())
+            )
+
+            kmf.fit(low_group['time'], event_observed=low_group['event'])
+            median_low = kmf.median_survival_time_
+            km_curve_low = KMCurveData(
+                times=sanitize_list(kmf.survival_function_.index.tolist()),
+                survival_probabilities=sanitize_list(kmf.survival_function_['KM_estimate'].tolist()),
+                ci_lower=sanitize_list(kmf.confidence_interval_['KM_estimate_lower_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
+                ci_upper=sanitize_list(kmf.confidence_interval_['KM_estimate_upper_0.95'].tolist()) if hasattr(kmf, 'confidence_interval_') else None,
+                n_samples=int(n_low),
+                n_events=int(low_group['event'].sum())
+            )
+        except Exception as e:
+            logger.debug(f"Error calculating KM curves for {gene_id}: {e}")
+            median_high = None
+            median_low = None
+
+        is_significant = (
+            cox_p < self.p_value_threshold and
+            (hazard_ratio >= self.hazard_ratio_upper or
+             hazard_ratio <= self.hazard_ratio_lower)
+        )
+        expression_direction = "high_risk" if hazard_ratio > 1 else "low_risk"
+
+        def safe_float(value):
+            if value is None or pd.isna(value) or np.isinf(value):
+                return None
+            return float(value)
+
+        adjusted_hr: Optional[float] = None
+        adjusted_p: Optional[float] = None
+        covariates_used: Optional[List[str]] = None
+        if metadata_df is not None and covariate_columns:
+            aligned_meta = metadata_df.loc[
+                metadata_df.index.intersection(survival_data.index)
+            ] if metadata_df.index.name == survival_data.index.name or set(metadata_df.index).issuperset(set(survival_data.index)) else None
+            if aligned_meta is not None and len(aligned_meta) == len(survival_data):
+                adjusted_hr, adjusted_p, covariates_used = self._fit_multivariate_cox(
+                    expression_col=expression,
+                    time_col=survival_data['time'],
+                    event_col=survival_data['event'],
+                    metadata_df=aligned_meta,
+                    covariate_candidates=covariate_columns,
+                )
+
+        interaction_p: Optional[float] = None
+        treatment_arms: Optional[List[Dict[str, Any]]] = None
+        is_predictive = False
+        if treatment_binary is not None and treatment_arm_names is not None:
+            arm_aligned = treatment_binary.reindex(survival_data.index)
+            if arm_aligned.notna().sum() >= self.min_samples_per_group * 2:
+                fit = self._fit_interaction_cox(
+                    expression_col=expression,
+                    time_col=survival_data['time'],
+                    event_col=survival_data['event'],
+                    treatment_binary=arm_aligned,
+                    arm_names=treatment_arm_names,
+                )
+                if fit is not None:
+                    interaction_p, treatment_arms = fit
+                    is_predictive = interaction_p < self.p_value_threshold
+
+        return GeneSurvivalResult(
+            gene_id=gene_id,
+            gene_symbol=gene_symbol,
+            hazard_ratio=hazard_ratio,
+            hazard_ratio_ci_lower=hr_ci_lower,
+            hazard_ratio_ci_upper=hr_ci_upper,
+            log_rank_p_value=log_rank_p,
+            cox_p_value=cox_p,
+            median_survival_high=safe_float(median_high),
+            median_survival_low=safe_float(median_low),
+            is_significant=is_significant,
+            expression_direction=expression_direction,
+            n_samples_high=n_high,
+            n_samples_low=n_low,
+            km_curve_high=km_curve_high,
+            km_curve_low=km_curve_low,
+            adjusted_hazard_ratio=safe_float(adjusted_hr),
+            multivariate_cox_p=safe_float(adjusted_p),
+            covariates_used=covariates_used,
+            interaction_p_value=safe_float(interaction_p),
+            treatment_arms=treatment_arms,
+            is_predictive=is_predictive,
+        )
+
+    def _analyze_all_genes_scalar(
+        self,
+        expression_matrix: pd.DataFrame,
+        survival_df: pd.DataFrame,
+        probe_to_gene: Optional[Dict[str, str]],
+        metadata_aligned: Optional[pd.DataFrame],
+        covariate_columns: Optional[List[str]],
+        treatment_binary: Optional[pd.Series],
+        treatment_arm_names: Optional[Dict[int, str]],
+    ) -> Tuple[List[GeneSurvivalResult], int]:
+        """Exact per-gene `lifelines` loop — unchanged. Used for genes with
+        missing expression values, genes whose vectorized Cox fit didn't
+        converge, and as the whole-batch fallback if vectorization errors."""
+        significant_genes = []
+        n_analyzed = 0
+
+        for gene_id in expression_matrix.index:
+            try:
+                gene_result = self._analyze_gene_survival(
+                    gene_id=gene_id,
+                    expression=expression_matrix.loc[gene_id],
+                    survival_df=survival_df,
+                    probe_to_gene=probe_to_gene,
+                    metadata_df=metadata_aligned,
+                    covariate_columns=covariate_columns,
+                    treatment_binary=treatment_binary,
+                    treatment_arm_names=treatment_arm_names,
+                )
+
+                n_analyzed += 1
+
+                if gene_result and gene_result.is_significant:
+                    significant_genes.append(gene_result)
+
+            except Exception as e:
+                logger.debug(f"Error analyzing gene {gene_id}: {e}")
+                continue
+
+        significant_genes.sort(key=lambda x: x.cox_p_value)
+        return significant_genes, n_analyzed
+
     def _analyze_gene_survival(
         self,
         gene_id: str,
@@ -1225,8 +1756,8 @@ Determine if this dataset contains survival data and identify the relevant colum
         # Determine if significant
         is_significant = (
             cox_p < self.p_value_threshold and
-            (hazard_ratio >= self.hazard_ratio_threshold or 
-             hazard_ratio <= 1/self.hazard_ratio_threshold)
+            (hazard_ratio >= self.hazard_ratio_upper or
+             hazard_ratio <= self.hazard_ratio_lower)
         )
         
         # Determine expression direction

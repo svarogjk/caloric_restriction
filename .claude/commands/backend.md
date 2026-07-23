@@ -8,7 +8,7 @@ user-invocable: true
 Start the backend server:
 
 ```bash
-cd backend && uv run python -m uvicorn app.main:app --reload --port 8000
+cd backend && uv run python -m uvicorn app.main:app --reload --reload-dir app --port 8000
 ```
 
 - **Port**: 8000

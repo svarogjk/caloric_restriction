@@ -95,6 +95,8 @@ async def search_datasets(
             ranking_multiplier=request.ranking_multiplier,
             cancer_genes_only=request.cancer_genes_only,
             gene_filter=request.gene_filter,
+            hazard_ratio_upper=request.hazard_ratio_upper,
+            hazard_ratio_lower=request.hazard_ratio_lower,
         )
         
         # Convert orchestrator result to API response (shared builder includes F16 adjusted Cox)
@@ -248,6 +250,8 @@ async def stream_analysis(
     ranking_multiplier: int = Query(default=3, ge=1, le=10),
     cancer_genes_only: bool = Query(default=False),
     gene_filter: Optional[List[str]] = Query(default=None),
+    hazard_ratio_upper: float = Query(default=1.2, ge=1.0, le=20.0),
+    hazard_ratio_lower: float = Query(default=0.8, ge=0.01, le=1.0),
 ):
     """
     Stream analysis progress via Server-Sent Events (SSE).
@@ -286,6 +290,8 @@ async def stream_analysis(
                 ranking_multiplier=ranking_multiplier,
                 cancer_genes_only=cancer_genes_only,
                 gene_filter=parsed_gene_filter,
+                hazard_ratio_upper=hazard_ratio_upper,
+                hazard_ratio_lower=hazard_ratio_lower,
                 progress_callback=progress_cb,
             )
             response_obj = _build_analysis_response(

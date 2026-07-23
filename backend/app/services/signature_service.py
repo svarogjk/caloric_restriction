@@ -963,6 +963,10 @@ class SignatureService:
                 return model
         model = await self.build_from_result(result, max_genes=max_genes, cancer_type=cancer_type)
         self._result_models[result_id] = model.model_id
+        # Persist so this model survives a dev-server reload or LRU eviction —
+        # get_model() already falls back to disk for any model_id (see
+        # save_model_to_disk), it just wasn't being written here before.
+        self.save_model_to_disk(model)
         return model
 
     async def build_from_result(

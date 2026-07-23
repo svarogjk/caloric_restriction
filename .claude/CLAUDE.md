@@ -6,7 +6,7 @@ See @../README.md for project overview and @../backend/pyproject.toml for Python
 
 ```bash
 # Servers
-cd backend && uv run python -m uvicorn app.main:app --reload --port 8000
+cd backend && uv run python -m uvicorn app.main:app --reload --reload-dir app --port 8000
 cd frontend && npm run dev
 
 # Backend validate

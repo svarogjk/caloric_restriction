@@ -188,10 +188,16 @@ class PydanticAIService:
 
         if mistral_key:
             models["mistral"] = MistralModel(
-                "magistral-small-latest",
+                "mistral-small-latest",
                 provider=MistralProvider(api_key=mistral_key),
             )
-            logger.info("Initialized Magistral Small model")
+            logger.info("Initialized Mistral Small model")
+
+            models["mistral-large"] = MistralModel(
+                "mistral-large-latest",
+                provider=MistralProvider(api_key=mistral_key),
+            )
+            logger.info("Initialized Mistral Large model")
 
         anthropic_key = os.getenv("ANTHROPIC_KEY")
         if not anthropic_key:
@@ -330,7 +336,7 @@ class PydanticAIService:
     async def generate_response(
         self,
         messages: list[dict],
-        model: str = "mistral",
+        model: str = "mistral-large",
         estimation_context: dict | None = None,
         conversation_id: str | None = None,
         deps_override: AgentDeps | None = None,
@@ -340,7 +346,7 @@ class PydanticAIService:
 
         Args:
             messages: Full conversation history as dicts with 'role'/'content'
-            model: Model name ('mistral' or 'anthropic')
+            model: Model name ('mistral', 'mistral-large', or 'anthropic')
             estimation_context: Optional pre-flight estimation data
             conversation_id: Used for metrics logging
             deps_override: Per-request AgentDeps with user_settings/user_id
@@ -382,7 +388,7 @@ class PydanticAIService:
     async def stream_response(
         self,
         messages: list[dict],
-        model: str = "mistral",
+        model: str = "mistral-large",
         estimation_context: dict | None = None,
         conversation_id: str | None = None,
         deps_override: AgentDeps | None = None,

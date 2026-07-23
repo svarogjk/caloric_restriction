@@ -947,6 +947,7 @@ const AnalysisResultsDisplay: React.FC<AnalysisResultsDisplayProps> = ({ results
                         label={results.query}
                         initialExpression={personalizeEnabled ? patientExpression : undefined}
                         autoRun={personalizeEnabled && !!patientExpression.trim()}
+                        geneCount={results.common_genes.length}
                     />
                 )}
 

@@ -13,6 +13,8 @@ import {
     setOrganism,
     setCancerGenesOnly,
     setGeneFilterInput,
+    setHazardRatioUpper,
+    setHazardRatioLower,
     runAnalysis,
     saveAnalysisResult,
     clearAnalysisResults,
@@ -40,6 +42,8 @@ const ChatContainer: React.FC = () => {
         organism,
         cancerGenesOnly,
         geneFilterInput,
+        hazardRatioUpper,
+        hazardRatioLower,
         analysisResults,
         analysisLoading,
         analysisError,
@@ -117,7 +121,7 @@ const ChatContainer: React.FC = () => {
         }
     }
 
-    const handleModelChange = (model: 'mistral' | 'anthropic') => {
+    const handleModelChange = (model: 'mistral' | 'mistral-large' | 'anthropic') => {
         dispatch(setSelectedModel(model))
     }
 
@@ -161,10 +165,11 @@ const ChatContainer: React.FC = () => {
                         {/* Model Selector */}
                         <select
                             value={selectedModel}
-                            onChange={(e) => handleModelChange(e.target.value as 'mistral' | 'anthropic')}
+                            onChange={(e) => handleModelChange(e.target.value as 'mistral' | 'mistral-large' | 'anthropic')}
                             className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
                         >
-                            <option value="mistral">magistral-small-latest</option>
+                            <option value="mistral-large">mistral-large-latest</option>
+                            <option value="mistral">mistral-small-latest</option>
                             <option value="anthropic">claude-haiku-4-5-20251001</option>
                         </select>
                     </div>
@@ -238,6 +243,75 @@ const ChatContainer: React.FC = () => {
                                     Cancer genes only (~600)
                                 </label>
                             </div>
+                        </div>
+
+                        {/* Significance Thresholds */}
+                        <div className="mt-3 p-3 rounded-lg border border-gray-200 bg-white">
+                            <div className="flex items-center justify-between mb-2">
+                                <span className="text-sm font-medium text-gray-700">Significance thresholds</span>
+                                <span className="text-xs font-mono text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
+                                    HR ≥ {hazardRatioUpper.toFixed(2)} or HR ≤ {hazardRatioLower.toFixed(2)}
+                                </span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                {/* Risk threshold (upper) */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label htmlFor="chat-hr-upper" className="text-xs font-medium text-rose-700">
+                                            Risk gate (HR ≥)
+                                        </label>
+                                        <span className="text-xs font-mono text-rose-700 bg-rose-50 border border-rose-100 rounded px-1.5 py-0.5">
+                                            {hazardRatioUpper.toFixed(2)}
+                                        </span>
+                                    </div>
+                                    <input
+                                        id="chat-hr-upper"
+                                        type="range"
+                                        min={1.05}
+                                        max={3}
+                                        step={0.05}
+                                        value={hazardRatioUpper}
+                                        onChange={(e) => dispatch(setHazardRatioUpper(Number(e.target.value)))}
+                                        className="w-full accent-rose-600 cursor-pointer"
+                                    />
+                                    <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+                                        <span>1.05 (loose)</span>
+                                        <span>3.00 (strict)</span>
+                                    </div>
+                                </div>
+
+                                {/* Protective threshold (lower) */}
+                                <div>
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label htmlFor="chat-hr-lower" className="text-xs font-medium text-emerald-700">
+                                            Protective gate (HR ≤)
+                                        </label>
+                                        <span className="text-xs font-mono text-emerald-700 bg-emerald-50 border border-emerald-100 rounded px-1.5 py-0.5">
+                                            {hazardRatioLower.toFixed(2)}
+                                        </span>
+                                    </div>
+                                    <input
+                                        id="chat-hr-lower"
+                                        type="range"
+                                        min={0.3}
+                                        max={0.95}
+                                        step={0.05}
+                                        value={hazardRatioLower}
+                                        onChange={(e) => dispatch(setHazardRatioLower(Number(e.target.value)))}
+                                        className="w-full accent-emerald-600 cursor-pointer"
+                                    />
+                                    <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+                                        <span>0.30 (strict)</span>
+                                        <span>0.95 (loose)</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                                A gene counts as significant when its hazard ratio clears one of these gates
+                                (and p &lt; 0.05). Looser gates surface more candidates — including more
+                                treatment-effect-modifying (predictive) genes — but take longer to compute
+                                and add noise; stricter gates are faster and cleaner but may miss weaker signals.
+                            </p>
                         </div>
 
                         {/* Candidate Genes Batch Mode */}

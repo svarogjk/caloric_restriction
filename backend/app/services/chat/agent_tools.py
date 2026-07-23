@@ -30,7 +30,7 @@ class AgentDeps:
     user_settings: dict | None = None  # per-request user configuration
     user_id: str | None = None         # authenticated user ID (None for guests)
     db_session: Any | None = None      # per-request DB session for history queries
-    model: str = "mistral"             # active LLM selection, forwarded to sub-services
+    model: str = "mistral-large"       # active LLM selection, forwarded to sub-services
 
 
 async def search_known_datasets(ctx: RunContext["AgentDeps"], query: str) -> str:

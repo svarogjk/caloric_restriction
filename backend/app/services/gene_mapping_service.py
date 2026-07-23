@@ -797,23 +797,24 @@ class GeneMappingService:
                     headers = parts
                     
                     # Find ID and Gene Symbol columns
+                    # Normalize separators ('.' as in "Gene.Symbol") so header variants match consistently
                     for idx, header in enumerate(headers):
-                        header_upper = header.upper().strip()
-                        
+                        header_upper = header.upper().strip().replace('.', ' ')
+
                         # Look for ID column
                         if header_upper in ['ID', 'PROBE_ID', 'ID_REF', 'PROBESET_ID']:
                             id_idx = idx
                         # Look for Gene Symbol column (exclude GENE_ID which contains numeric Entrez IDs)
-                        elif header_upper in ['GENE SYMBOL', 'GENE_SYMBOL', 'SYMBOL', 'GENE_NAME', 
+                        elif header_upper in ['GENE SYMBOL', 'GENE_SYMBOL', 'SYMBOL', 'GENE_NAME',
                                                'GENE ASSIGNMENT', 'GENE_ASSIGNMENT']:
                             # Make sure it's not GENE_ID column
                             if 'GENE_ID' not in header_upper and 'GENEID' not in header_upper:
                                 symbol_idx = idx
-                    
+
                     # Fallback: look for columns containing 'gene' and 'symbol'
                     if symbol_idx is None:
                         for idx, header in enumerate(headers):
-                            header_upper = header.upper()
+                            header_upper = header.upper().replace('.', ' ')
                             if 'GENE' in header_upper and 'SYMBOL' in header_upper:
                                 symbol_idx = idx
                                 break
@@ -919,44 +920,76 @@ class GeneMappingService:
                         logger.debug(f"Found header at line {lines_processed}: {[h.lstrip('#') for h in headers[:10]]}")
                         
                         # First pass: look for exact matches
-                        # Clean headers by removing #, =, and extra spaces
+                        # Clean headers by removing #, =, and extra spaces. Normalize '.'/'-' separators
+                        # (e.g. "Gene.Symbol" as used by some Affymetrix platforms) so they match the
+                        # same candidates as underscore/space variants.
+                        def _clean_header(h: str) -> str:
+                            return h.lstrip('#').split('=')[0].strip().upper().replace('.', '_').replace('-', '_')
+
                         for idx, header in enumerate(headers):
-                            # Remove # prefix and any " = " suffix pattern (e.g., "#ID = " -> "ID")
-                            header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                            
-                            if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION']:
+                            header_clean = _clean_header(header)
+                            if header_clean in ['ID', 'ID_REF', 'PROBE_ID', 'SEQUENCE_ACCESSION'] and id_idx is None:
                                 id_idx = idx
-                            # Prioritize GENE_SYMBOL over GENE_ID (numeric Entrez IDs)
-                            # Include "GENE SYMBOL" (with space) for platforms like GPL16043
-                            elif header_clean in ['GENE_SYMBOL', 'GENE SYMBOL', 'SYMBOL', 'GENE_NAME', 'ORF', 'GENE']:
+
+                        # Exact-match tiers for the gene symbol column, most specific first, so a real
+                        # "GENE SYMBOL" column always wins over a less specific "GENE_NAME" column
+                        # regardless of which one appears later in the header row.
+                        exact_symbol_tiers = [
+                            ['GENE_SYMBOL', 'GENE SYMBOL'],
+                            ['SYMBOL'],
+                            ['GENE_NAME'],
+                            ['ORF'],
+                            ['GENE'],
+                        ]
+                        for keywords in exact_symbol_tiers:
+                            for idx, header in enumerate(headers):
+                                header_clean = _clean_header(header)
                                 # Make sure it's not GENE_ID column (we want symbols, not numeric IDs)
-                                if 'GENE_ID' not in header_clean and 'GENEID' not in header_clean:
+                                if 'GENE_ID' in header_clean or 'GENEID' in header_clean:
+                                    continue
+                                if header_clean in keywords:
                                     symbol_idx = idx
-                        
+                                    break
+                            if symbol_idx is not None:
+                                break
+
                         # Second pass: flexible matching for ID column
                         if id_idx is None:
                             for idx, header in enumerate(headers):
-                                header_clean = header.lstrip('#').split('=')[0].strip().upper()
+                                header_clean = _clean_header(header)
                                 if any(x in header_clean for x in ['ID', 'ACCESSION', 'PROBE']):
                                     id_idx = idx
                                     break
-                        
-                        # Third pass: flexible matching for gene symbol column
+
+                        # Third pass: flexible matching for gene symbol column. Evaluated in priority
+                        # tiers across ALL headers (rather than stopping at the first header matching
+                        # any keyword) so a genuine "Gene Symbol" column always wins over a "Gene Title"
+                        # or "Description" column that happens to appear earlier and contains "GENE".
                         if symbol_idx is None:
-                            for idx, header in enumerate(headers):
-                                header_clean = header.lstrip('#').split('=')[0].strip().upper()
-                                # Exclude GENE_ID and UNIGENE columns (UniGene IDs like Hs.XXXXX are not HGNC symbols)
-                                if ('GENE_ID' not in header_clean and 'GENEID' not in header_clean
-                                        and 'UNIGENE' not in header_clean):
-                                    if any(x in header_clean for x in ['GENE_SYMBOL', 'GENE_NAME', 'SYMBOL',
-                                                                         'ORF', 'GENE', 'DESCRIPTION', 'PRODUCT']):
+                            symbol_tiers = [
+                                ['GENE_SYMBOL', 'SYMBOL'],
+                                ['GENE_NAME'],
+                                ['ORF'],
+                                ['GENE'],
+                                ['DESCRIPTION', 'PRODUCT'],
+                            ]
+                            for keywords in symbol_tiers:
+                                for idx, header in enumerate(headers):
+                                    header_clean = _clean_header(header)
+                                    # Exclude GENE_ID and UNIGENE columns (UniGene IDs like Hs.XXXXX are not HGNC symbols)
+                                    if ('GENE_ID' in header_clean or 'GENEID' in header_clean
+                                            or 'UNIGENE' in header_clean):
+                                        continue
+                                    if any(k in header_clean for k in keywords):
                                         symbol_idx = idx
                                         break
-                        
+                                if symbol_idx is not None:
+                                    break
+
                         # Fourth pass: use common aliases
                         if symbol_idx is None:
                             for idx, header in enumerate(headers):
-                                header_clean = header.lstrip('#').split('=')[0].strip().upper()
+                                header_clean = _clean_header(header)
                                 if any(x == header_clean for x in ['NAME', 'TITLE', 'DEFINITION']):
                                     symbol_idx = idx
                                     break

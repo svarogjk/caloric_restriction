@@ -56,10 +56,15 @@ class AnalysisResultService:
 
     async def find_recent_by_query(self, db: AsyncSession, query: str) -> Optional[dict]:
         """Find the most recent saved result whose query matches (case-insensitive).
-        Used by Oncologist Mode (F20) to instantly load a pre-run curated analysis."""
+        Used by Oncologist Mode (F20) to instantly load a pre-run curated analysis.
+
+        Excludes zero-gene results — a query that legitimately (or transiently)
+        found no significant genes would otherwise poison every future call for
+        that exact query string, since callers treat any match here as a usable
+        cache hit and never retry a fresh orchestrator run."""
         stmt = (
             select(AnalysisResult)
-            .where(AnalysisResult.query.ilike(query))
+            .where(AnalysisResult.query.ilike(query), AnalysisResult.n_genes_found > 0)
             .order_by(desc(AnalysisResult.created_at))
             .limit(1)
         )

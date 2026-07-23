@@ -227,6 +227,7 @@ class TreatmentComparison(BaseModel):
     n_patients: Optional[int] = None
     pooled_c_index: Optional[float] = None
     is_building: bool = False
+    build_stage: Optional[str] = None        # Live progress message while is_building
     build_error: Optional[str] = None
     disclaimer: str = TREATMENT_RUO_DISCLAIMER
 
@@ -292,4 +293,5 @@ class TreatmentKMEvidence(BaseModel):
     n_total: Optional[int] = None
     caveat: str = ""
     is_building: bool = False
+    build_stage: Optional[str] = None        # Live progress message while is_building
     build_error: Optional[str] = None

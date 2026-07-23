@@ -93,7 +93,8 @@ class GEOSurvivalWorkflowOrchestrator:
         self.loader_service = GEODataLoaderService(model=model)
         self.survival_service = SurvivalAnalysisService(
             p_value_threshold=0.05,
-            hazard_ratio_threshold=1.5,
+            hazard_ratio_upper=1.2,
+            hazard_ratio_lower=0.8,
             min_samples_per_group=5,
             model=model
         )
@@ -109,9 +110,14 @@ class GEOSurvivalWorkflowOrchestrator:
         model: str,
         cancer_genes_only: bool,
         gene_filter: Optional[List[str]] = None,
+        hazard_ratio_upper: float = 1.2,
+        hazard_ratio_lower: float = 0.8,
     ) -> str:
         gene_filter_key = "|".join(sorted(gene_filter)) if gene_filter else ""
-        raw = f"{query.lower().strip()}|{max_datasets}|{organism}|{model}|{cancer_genes_only}|{gene_filter_key}"
+        raw = (
+            f"{query.lower().strip()}|{max_datasets}|{organism}|{model}|{cancer_genes_only}|"
+            f"{gene_filter_key}|{hazard_ratio_upper}|{hazard_ratio_lower}"
+        )
         return hashlib.md5(raw.encode()).hexdigest()
 
     async def analyze_query(
@@ -124,11 +130,13 @@ class GEOSurvivalWorkflowOrchestrator:
         ranking_multiplier: int = 3,
         cancer_genes_only: bool = False,
         gene_filter: Optional[List[str]] = None,
+        hazard_ratio_upper: float = 1.2,
+        hazard_ratio_lower: float = 0.8,
         progress_callback: Optional[Callable[[str, str, Optional[int], Optional[int]], Awaitable[None]]] = None,
     ) -> CrossDatasetSurvivalAnalysis:
         """
         Complete survival analysis workflow for a query
-        
+
         Args:
             query: Search query (e.g., "cancer survival prognosis")
             max_datasets: Maximum datasets to analyze
@@ -136,7 +144,9 @@ class GEOSurvivalWorkflowOrchestrator:
             min_occurrence: Minimum datasets where gene must appear
             model: LLM model to use ('mistral' or 'claude')
             ranking_multiplier: Multiplier for datasets to rank before analysis
-        
+            hazard_ratio_upper: A gene is significant if HR >= this (risk-associated)
+            hazard_ratio_lower: ...or HR <= this (protective-associated)
+
         Returns:
             CrossDatasetSurvivalAnalysis with survival-associated genes
         """
@@ -155,7 +165,10 @@ class GEOSurvivalWorkflowOrchestrator:
             set(g.upper() for g in gene_filter) if gene_filter else None
         )
 
-        cache_key = self._make_cache_key(query, max_datasets, organism, use_model, cancer_genes_only, gene_filter)
+        cache_key = self._make_cache_key(
+            query, max_datasets, organism, use_model, cancer_genes_only, gene_filter,
+            hazard_ratio_upper, hazard_ratio_lower,
+        )
         if cache_key in self._analysis_cache:
             self._analysis_cache.move_to_end(cache_key)
             logger.info(f"Returning cached analysis result for '{query}'")
@@ -170,6 +183,13 @@ class GEOSurvivalWorkflowOrchestrator:
             self.loader_service.set_model(model)
             self.survival_service.set_model(model)
             self.current_model = model
+
+        # Significance thresholds are request-scoped, not fixed at service
+        # construction — set them on the shared survival_service instance for
+        # the duration of this call (same mutate-shared-instance pattern as
+        # the model swap above).
+        self.survival_service.hazard_ratio_upper = hazard_ratio_upper
+        self.survival_service.hazard_ratio_lower = hazard_ratio_lower
 
         # Step 1: Search GEO for datasets with survival/clinical data
         await _cb("searching_geo", "Searching GEO for matching datasets...", None, None)

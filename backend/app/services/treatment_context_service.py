@@ -188,6 +188,8 @@ class TreatmentContextService:
     def __init__(self, signature_service: "SignatureService") -> None:
         self._sig = signature_service
         self._building: set[str] = set()  # model_ids currently being built
+        # model_id -> latest human-readable progress message, while building.
+        self._build_stage: dict[str, str] = {}
         # model_id -> (reason, cached_at_monotonic) for recent failed/empty builds.
         self._negative_cache: "OrderedDict[str, tuple[str, float]]" = OrderedDict()
 
@@ -276,7 +278,10 @@ class TreatmentContextService:
                 self._build_and_cache_negative(cancer_key, entry, mid),
                 name=f"treatment_build_{mid}",
             )
-        return TreatmentKMEvidence(drug=drug_name, tier="unavailable", is_building=True)
+        return TreatmentKMEvidence(
+            drug=drug_name, tier="unavailable", is_building=True,
+            build_stage=self._build_stage.get(mid),
+        )
 
     def _match_curated_entry(
         self, cancer_key: str, drug_name: str, synonyms: Optional[list[str]] = None
@@ -371,6 +376,7 @@ class TreatmentContextService:
 
         return TreatmentComparison(
             name=entry["name"], slug=entry["slug"], is_building=True,
+            build_stage=self._build_stage.get(mid),
         )
 
     async def _build_treatment_model(
@@ -391,7 +397,11 @@ class TreatmentContextService:
         if mid in self._building:
             return
         self._building.add(mid)
+        self._build_stage[mid] = "Checking for a cached analysis…"
         logger.info("Treatment model build started: %s (%s)", mid, entry["query"])
+
+        async def _progress(stage: str, message: str, current: Optional[int], total: Optional[int]) -> None:
+            self._build_stage[mid] = message
 
         try:
             # Try to find a cached GEO analysis matching this query first.
@@ -419,7 +429,9 @@ class TreatmentContextService:
                 query=entry["query"],
                 max_datasets=10,
                 min_occurrence=2,
+                progress_callback=_progress,
             )
+            self._build_stage[mid] = "Training the prognostic signature…"
             result_dict = _build_analysis_response(raw).model_dump()
             model = await self._sig.build_from_result(result_dict, cancer_type=cancer_type)
             model.model_id = mid
@@ -430,6 +442,7 @@ class TreatmentContextService:
             logger.warning("Treatment model build failed for %s: %s", mid, exc)
         finally:
             self._building.discard(mid)
+            self._build_stage.pop(mid, None)
 
 
 # Module-level singleton — wired in main.py

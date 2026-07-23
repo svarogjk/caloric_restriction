@@ -18,6 +18,7 @@ interface TherapyDirectionsProps {
 }
 
 const POLL_INTERVAL_MS = 15_000
+const POLL_TIMEOUT_MS = 10 * 60_000
 const PRESET_TOP_N = [5, 10]
 const DEFAULT_TOP_N = 5
 // Mirrors backend `_MAX_COHORT_KM_DRUGS` — the generate() call auto-resolves
@@ -51,8 +52,10 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
     const [error, setError] = useState<string | null>(null)
     const [cohortKm, setCohortKm] = useState<Record<string, TreatmentKMEvidence>>({})
     const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const pollStartRef = useRef<number | null>(null)
     const [topN, setTopN] = useState<number | 'all'>(DEFAULT_TOP_N)
     const [checkingMore, setCheckingMore] = useState(false)
+    const [pollTimedOut, setPollTimedOut] = useState(false)
 
     useEffect(() => () => {
         if (pollRef.current) clearTimeout(pollRef.current)
@@ -72,9 +75,17 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
         try {
             const results = await getCohortKM({ modelId, drugs })
             const stillBuilding = mergeCohortKm(results)
-            if (stillBuilding.length > 0) {
-                pollRef.current = setTimeout(() => pollCohortKm(stillBuilding), POLL_INTERVAL_MS)
+            if (stillBuilding.length === 0) {
+                pollStartRef.current = null
+                return
             }
+            const elapsed = Date.now() - (pollStartRef.current ?? Date.now())
+            if (elapsed > POLL_TIMEOUT_MS) {
+                pollStartRef.current = null
+                setPollTimedOut(true)
+                return
+            }
+            pollRef.current = setTimeout(() => pollCohortKm(stillBuilding), POLL_INTERVAL_MS)
         } catch {
             // Network hiccup — stop polling silently; Regenerate will retry.
         }
@@ -83,6 +94,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
     const generate = async () => {
         setLoading(true)
         setError(null)
+        setPollTimedOut(false)
         if (pollRef.current) {
             clearTimeout(pollRef.current)
             pollRef.current = null
@@ -102,6 +114,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
             }
             setCohortKm(initial)
             if (building.length > 0) {
+                pollStartRef.current = Date.now()
                 pollRef.current = setTimeout(() => pollCohortKm(building), POLL_INTERVAL_MS)
             }
         } catch (err) {
@@ -138,10 +151,12 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
         const batch = notCheckedDrugs.slice(0, COHORT_KM_BATCH)
         if (batch.length === 0) return
         setCheckingMore(true)
+        setPollTimedOut(false)
         try {
             const results = await getCohortKM({ modelId, drugs: batch })
             const stillBuilding = mergeCohortKm(results)
             if (stillBuilding.length > 0) {
+                pollStartRef.current = Date.now()
                 pollRef.current = setTimeout(() => pollCohortKm(stillBuilding), POLL_INTERVAL_MS)
             }
         } catch {
@@ -238,10 +253,18 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                                 prescription or a prediction that you will respond.
                             </p>
 
-                            {buildingDrugs.length > 0 && (
+                            {buildingDrugs.length > 0 && !pollTimedOut && (
                                 <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded p-2 mb-2 flex items-center gap-2">
                                     <div className="w-3 h-3 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-                                    Building cohort models for {buildingDrugs.join(', ')}… (~2 min each, auto-refreshing)
+                                    {cohortKm[buildingDrugs[0].toLowerCase()]?.build_stage
+                                        ?? `Building cohort models for ${buildingDrugs.join(', ')}… (~2 min each, auto-refreshing)`}
+                                </div>
+                            )}
+
+                            {buildingDrugs.length > 0 && pollTimedOut && (
+                                <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded p-2 mb-2">
+                                    Still building {buildingDrugs.join(', ')} after 10 minutes — this can happen
+                                    with less-common drugs. Click Regenerate to retry, or check back shortly.
                                 </div>
                             )}
 

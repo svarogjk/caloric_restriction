@@ -133,7 +133,7 @@ class ChatService:
         self,
         conversation_id: str,
         content: str,
-        model: str = "mistral",
+        model: str = "mistral-large",
         user_settings: Optional[dict] = None,
         user_id: Optional[str] = None,
     ) -> ChatResponse:
@@ -259,7 +259,7 @@ class ChatService:
         self,
         conversation_id: str,
         content: str,
-        model: str = "mistral",
+        model: str = "mistral-large",
         user_settings: Optional[dict] = None,
         user_id: Optional[str] = None,
         result_sink: Optional[dict] = None,
