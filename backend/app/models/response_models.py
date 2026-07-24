@@ -111,6 +111,12 @@ class AnalysisResponse(BaseModel):
     result_id: Optional[str] = None
     # Diagnostic info when 0 genes found
     diagnostics: Optional[AnalysisDiagnostics] = None
+    # Whether this analysis restricted to the COSMIC cancer gene set. Persisted
+    # (not just carried in `diagnostics`, which is only set on 0-gene results) so
+    # anything derived from this saved analysis later — e.g. a signature model,
+    # or a treatment-cohort build for one of the model's genes — can reuse the
+    # same filter setting instead of guessing or hardcoding it.
+    cancer_genes_only: bool = False
 
 
 class HealthResponse(BaseModel):

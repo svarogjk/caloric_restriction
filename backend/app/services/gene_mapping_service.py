@@ -59,7 +59,41 @@ class GeneMappingService:
         self._load_memory_cache_index()
         # Load empty mapping platforms cache (this prevents infinite retry loops)
         self._load_empty_mapping_platforms_cache()
-    
+
+    @staticmethod
+    def _extract_gene_symbol(raw_value: str) -> Optional[str]:
+        """Extract a clean gene symbol from a raw annotation field value.
+
+        A plain "Gene Symbol" column holds the symbol directly. Affymetrix
+        Gene/Exon ST arrays instead expose a "gene_assignment" column, packing
+        multiple '///'-separated assignments, each itself a ' // '-separated
+        tuple: accession // gene_symbol // gene_title // cytoband // entrez_id.
+        Naively storing that whole string (or its first ' // ' field, the
+        accession) as the "symbol" produces values that will never match a
+        real gene symbol. This picks the symbol field (index 1) out of the
+        first assignment when the compound format is detected, and otherwise
+        falls back to the raw trimmed value for plain columns.
+        """
+        if not raw_value:
+            return None
+        value = raw_value.strip()
+        if not value or value.lower() in ('null', 'na', 'n/a', '---'):
+            return None
+
+        # Multiple assignments separated by '///' - use the first
+        first_assignment = value.split('///')[0].strip()
+        if not first_assignment:
+            return None
+
+        if ' // ' in first_assignment:
+            fields = [f.strip() for f in first_assignment.split(' // ')]
+            symbol = fields[1] if len(fields) > 1 else None
+            if not symbol or symbol == '---':
+                return None
+            return symbol
+
+        return first_assignment or None
+
     def _load_memory_cache_index(self) -> None:
         """Load index of cached platforms (not the actual data) to track what's cached on disk"""
         try:
@@ -839,19 +873,10 @@ class GeneMappingService:
                     if not probe_id:
                         continue
                     
-                    gene_symbol = None
-                    if symbol_idx is not None and len(parts) > symbol_idx:
-                        gene_symbol = parts[symbol_idx].strip()
-                    
-                    # Handle multiple genes separated by ///
-                    if gene_symbol and '///' in gene_symbol:
-                        gene_symbol = gene_symbol.split('///')[0].strip()
-                    
-                    # Also handle // separator sometimes used
-                    if gene_symbol and ' // ' in gene_symbol:
-                        gene_symbol = gene_symbol.split(' // ')[0].strip()
-                    
-                    if gene_symbol and gene_symbol.lower() not in ['', 'null', 'na', 'n/a', '---']:
+                    raw_value = parts[symbol_idx].strip() if symbol_idx is not None and len(parts) > symbol_idx else None
+                    gene_symbol = self._extract_gene_symbol(raw_value) if raw_value else None
+
+                    if gene_symbol:
                         mapping[probe_id] = gene_symbol
             
             if mapping:
@@ -1013,19 +1038,14 @@ class GeneMappingService:
                     if not probe_id or probe_id.startswith('#'):
                         continue
                     
-                    # Extract gene symbol
-                    gene_symbol = None
-                    if symbol_idx is not None and len(parts) > symbol_idx:
-                        gene_symbol = parts[symbol_idx].strip()
-                    
-                    # Use first gene if multiple are listed (separated by ///)
-                    if gene_symbol and '///' in gene_symbol:
-                        gene_symbol = gene_symbol.split('///')[0].strip()
-                    
-                    # Skip if no valid gene symbol
-                    if not gene_symbol or gene_symbol == '' or gene_symbol.lower() in ['null', 'na', 'n/a']:
+                    # Extract gene symbol (handles both plain "Gene Symbol" columns and
+                    # compound Affymetrix "gene_assignment" columns, see _extract_gene_symbol)
+                    raw_value = parts[symbol_idx].strip() if symbol_idx is not None and len(parts) > symbol_idx else None
+                    gene_symbol = self._extract_gene_symbol(raw_value) if raw_value else None
+
+                    if not gene_symbol:
                         continue
-                    
+
                     mapping[probe_id] = gene_symbol
                     
                     # Log progress every 100k lines

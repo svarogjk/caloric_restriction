@@ -66,10 +66,10 @@ def svc():
 
 
 def _assert_matches_scalar(svc, expr_df, survival_df, hr_rtol=1e-3, p_atol=1e-3):
-    scalar_genes, scalar_n = svc._analyze_all_genes_scalar(
+    scalar_genes, scalar_n, _scalar_pvalues = svc._analyze_all_genes_scalar(
         expr_df, survival_df, None, None, None, None, None
     )
-    vec_genes, vec_n = svc._analyze_all_genes_vectorized(
+    vec_genes, vec_n, _vec_pvalues = svc._analyze_all_genes_vectorized(
         expr_df, survival_df, None, None, None, None, None
     )
 

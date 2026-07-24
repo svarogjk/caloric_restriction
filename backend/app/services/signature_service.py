@@ -265,6 +265,7 @@ class SignatureService:
         time_unit: str,
         is_demo: bool,
         cancer_type: Optional[str] = None,
+        cancer_genes_only: bool = False,
     ) -> PrognosticModel:
         """Fit on the largest cohort, validate on the rest.
 
@@ -405,6 +406,7 @@ class SignatureService:
             pooled_c_index=float(pooled_c),
             c_index_expression_only=float(pooled_c),
             is_demo=is_demo,
+            cancer_genes_only=cancer_genes_only,
         )
 
         # Combined clinical + expression model (no-op when no usable covariates).
@@ -1033,7 +1035,7 @@ class SignatureService:
 
         return self._build_from_cohorts(
             query=query, cohorts=cohorts, time_unit=time_unit, is_demo=False,
-            cancer_type=cancer_type,
+            cancer_type=cancer_type, cancer_genes_only=bool(result.get("cancer_genes_only", False)),
         )
 
     async def _reload_cohort(self, accession: str):

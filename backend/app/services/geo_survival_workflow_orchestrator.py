@@ -219,9 +219,10 @@ class GEOSurvivalWorkflowOrchestrator:
         await self._preload_platforms(top_datasets)
 
         # Step 4: Load and analyze each dataset for survival
-        await _cb("analyzing_genes", "Running survival analysis across datasets...", None, None)
+        await _cb("analyzing_genes", f"Analyzing {len(top_datasets)} datasets...", 0, len(top_datasets))
         survival_results = await self._analyze_datasets_survival(
-            top_datasets, cancer_genes_only=cancer_genes_only, gene_filter=gene_filter_set
+            top_datasets, cancer_genes_only=cancer_genes_only, gene_filter=gene_filter_set,
+            progress_callback=_cb,
         )
 
         # Retry with next batch if too few datasets yielded results
@@ -236,7 +237,8 @@ class GEOSurvivalWorkflowOrchestrator:
             await _cb("loading_dataset", f"Loading additional datasets ({already_tried}/{len(ranked_datasets)})...", already_tried, len(ranked_datasets))
             await self._preload_platforms(next_batch)
             extra_results = await self._analyze_datasets_survival(
-                next_batch, cancer_genes_only=cancer_genes_only, gene_filter=gene_filter_set
+                next_batch, cancer_genes_only=cancer_genes_only, gene_filter=gene_filter_set,
+                progress_callback=_cb,
             )
             survival_results.extend(extra_results)
             already_tried = next_batch_end
@@ -540,17 +542,29 @@ class GEOSurvivalWorkflowOrchestrator:
         datasets: List[GEODataset],
         cancer_genes_only: bool = False,
         gene_filter: Optional[set] = None,
+        progress_callback: Optional[Callable[[str, str, Optional[int], Optional[int]], Awaitable[None]]] = None,
     ) -> List[SurvivalAnalysisResult]:
         """Load and analyze datasets for survival associations"""
 
         logger.info(f"_analyze_datasets_survival called with cancer_genes_only={cancer_genes_only}, gene_filter={gene_filter is not None}")
 
-        semaphore = asyncio.Semaphore(1)
-        
+        semaphore = asyncio.Semaphore(2)
+        total = len(datasets)
+        completed = 0
+
+        async def _report(message: str) -> None:
+            if progress_callback is not None:
+                try:
+                    await progress_callback("analyzing_genes", message, completed, total)
+                except Exception as cb_err:
+                    logger.warning(f"Progress callback error (ignored): {cb_err}")
+
         async def process_dataset(dataset: GEODataset) -> Optional[SurvivalAnalysisResult]:
+            nonlocal completed
             async with semaphore:
                 logger.info(f"Processing dataset for survival: {dataset.accession}")
-                
+                await _report(f"Downloading & analyzing {dataset.accession} ({completed}/{total} datasets done)...")
+
                 try:
                     # Load data
                     loaded_data = await self.loader_service.load_dataset(
@@ -686,7 +700,10 @@ class GEOSurvivalWorkflowOrchestrator:
                 except Exception as e:
                     logger.error(f"Error processing {dataset.accession}: {e}")
                     return None
-        
+                finally:
+                    completed += 1
+                    await _report(f"Analyzed {dataset.accession} ({completed}/{total} datasets done)")
+
         # Process all datasets
         results = await asyncio.gather(
             *[process_dataset(dataset) for dataset in datasets],

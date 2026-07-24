@@ -695,7 +695,8 @@ async def _resolve_cohort_km(
     if model.cancer_type:
         try:
             return await get_treatment_service().get_or_build_km_for_drug(
-                model.cancer_type, drug, synonyms=synonyms
+                model.cancer_type, drug, synonyms=synonyms,
+                cancer_genes_only=model.cancer_genes_only,
             )
         except RuntimeError as e:
             logger.warning("Tier-2 cohort lookup unavailable for %s: %s", drug, e)

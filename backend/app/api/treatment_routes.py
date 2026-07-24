@@ -23,6 +23,7 @@ router = APIRouter(tags=["treatment-context"])
 
 class WarmRequest(BaseModel):
     cancer_type: str
+    cancer_genes_only: bool = False
 
 
 class WarmResponse(BaseModel):
@@ -65,6 +66,7 @@ async def get_treatment_context(
         expression=request.expression,
         clinical=request.clinical,
         db=db,
+        cancer_genes_only=request.cancer_genes_only,
     )
 
 
@@ -86,7 +88,7 @@ async def warm_treatment_models(
         )
 
     service = get_treatment_service()
-    queued = await service.warm(cancer_type, db)
+    queued = await service.warm(cancer_type, db, cancer_genes_only=request.cancer_genes_only)
     entries = TREATMENT_QUERIES[cancer_type]
     all_slugs = {e["slug"] for e in entries}
     already_built = sorted(all_slugs - set(queued))

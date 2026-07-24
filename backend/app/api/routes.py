@@ -236,7 +236,8 @@ def _build_analysis_response(
         timestamp=result.timestamp.isoformat(),
         ranking_quality_score=result.ranking_quality_score,
         ranking_recommendations=result.ranking_recommendations,
-        diagnostics=diagnostics
+        diagnostics=diagnostics,
+        cancer_genes_only=cancer_genes_only,
     )
 
 

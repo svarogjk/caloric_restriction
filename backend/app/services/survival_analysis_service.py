@@ -16,6 +16,7 @@ from functools import partial
 import pandas as pd
 import numpy as np
 from scipy import stats
+from statsmodels.stats.multitest import multipletests
 from pydantic_ai import Agent
 from pydantic import BaseModel, Field
 
@@ -147,6 +148,10 @@ class GeneSurvivalResult:
     # n_samples, n_events}, ...] — powers the per-arm forest in the UI.
     treatment_arms: Optional[List[Dict[str, Any]]] = None
     is_predictive: bool = False
+    # Benjamini-Hochberg adjusted cox_p_value, corrected across every gene
+    # tested in the dataset (not just the raw-significant subset). is_significant
+    # is decided from this, not from the raw cox_p_value, once FDR correction runs.
+    fdr_adjusted_p_value: Optional[float] = None
 
 
 @dataclass
@@ -780,6 +785,24 @@ Determine if this dataset contains survival data and identify the relevant colum
         survival_df = survival_df.loc[common_samples]
         log_memory_checkpoint("expression_matrix_sliced", context_id=loaded_data.accession)
 
+        # Collapse multiple probes mapping to the same gene (mean expression)
+        # before per-gene analysis. Without this, a gene measured by several
+        # probes on the array gets Cox-fit once per probe instead of once,
+        # multiplying runtime and producing multiple independent "significant
+        # gene" entries downstream that collide (and get discarded) when
+        # results are aggregated across datasets by gene symbol.
+        probe_to_gene = loaded_data.probe_to_gene_mapping
+        if probe_to_gene:
+            genes_before_aggregation = len(expression_matrix)
+            expression_matrix, probe_to_gene = self._aggregate_probes_to_genes(
+                expression_matrix, probe_to_gene
+            )
+            if len(expression_matrix) != genes_before_aggregation:
+                logger.info(
+                    f"Aggregated {genes_before_aggregation} probes -> "
+                    f"{len(expression_matrix)} genes (mean expression) for {loaded_data.accession}"
+                )
+
         # Align metadata to common_samples for multivariate Cox (F13)
         metadata_aligned: Optional[pd.DataFrame] = None
         if covariate_columns and loaded_data.sample_metadata is not None:
@@ -825,7 +848,7 @@ Determine if this dataset contains survival data and identify the relevant colum
             self._analyze_all_genes,
             expression_matrix,
             survival_df,
-            loaded_data.probe_to_gene_mapping,
+            probe_to_gene,
             metadata_aligned,
             covariate_columns if metadata_aligned is not None else None,
             treatment_binary,
@@ -847,7 +870,40 @@ Determine if this dataset contains survival data and identify the relevant colum
             event_type=event_type,
             analysis_method="Cox proportional hazards + Kaplan-Meier"
         )
-    
+
+    @staticmethod
+    def _aggregate_probes_to_genes(
+        expression_matrix: pd.DataFrame,
+        probe_to_gene: Dict[str, str],
+    ) -> Tuple[pd.DataFrame, Dict[str, str]]:
+        """Collapse multiple probes mapping to the same gene symbol into a
+        single row (mean expression, matching the aggregation pattern in
+        signature_service._reduce_cohort_to_candidates). Probes without a
+        mapped gene symbol are kept as-is, indexed by their original probe ID.
+        """
+        rows: Dict[str, List[str]] = {}
+        unmapped: List[str] = []
+        for probe in expression_matrix.index:
+            symbol = probe_to_gene.get(probe)
+            if symbol:
+                rows.setdefault(symbol.upper().strip(), []).append(probe)
+            else:
+                unmapped.append(probe)
+
+        if not rows:
+            return expression_matrix, probe_to_gene
+
+        gene_matrix = pd.DataFrame(
+            {sym: expression_matrix.loc[probes].mean(axis=0) for sym, probes in rows.items()}
+        ).T
+
+        combined = (
+            pd.concat([gene_matrix, expression_matrix.loc[unmapped]])
+            if unmapped else gene_matrix
+        )
+        identity_mapping = {sym: sym for sym in rows}
+        return combined, identity_mapping
+
     def _extract_survival_data(
         self,
         loaded_data: LoadedGEOData,
@@ -1289,9 +1345,16 @@ Determine if this dataset contains survival data and identify the relevant colum
         `lifelines` loop — unchanged — for any gene it can't safely fast-path,
         or for the whole dataset if the vectorized path hits anything
         unexpected.
+
+        Significance is decided from the Benjamini-Hochberg FDR-adjusted
+        p-value across every gene tested in the dataset, not the raw Cox
+        p-value — per rules/survival-analysis.md ("Apply FDR correction when
+        analyzing many genes"). Without this, testing tens of thousands of
+        genes at a raw p<0.05 threshold produces thousands of false positives
+        by chance alone.
         """
         try:
-            return self._analyze_all_genes_vectorized(
+            candidates, n_analyzed, raw_pvalues = self._analyze_all_genes_vectorized(
                 expression_matrix,
                 survival_df,
                 probe_to_gene,
@@ -1302,7 +1365,7 @@ Determine if this dataset contains survival data and identify the relevant colum
             )
         except Exception as e:
             logger.warning(f"Vectorized gene analysis failed ({e}); falling back to per-gene loop")
-            return self._analyze_all_genes_scalar(
+            candidates, n_analyzed, raw_pvalues = self._analyze_all_genes_scalar(
                 expression_matrix,
                 survival_df,
                 probe_to_gene,
@@ -1311,6 +1374,54 @@ Determine if this dataset contains survival data and identify the relevant colum
                 treatment_binary,
                 treatment_arm_names,
             )
+
+        significant_genes = self._apply_fdr_correction(candidates, raw_pvalues)
+        return significant_genes, n_analyzed
+
+    def _apply_fdr_correction(
+        self,
+        candidates: List[GeneSurvivalResult],
+        raw_pvalues: Dict[str, float],
+    ) -> List[GeneSurvivalResult]:
+        """Re-decide significance via Benjamini-Hochberg FDR correction across
+        every gene actually tested (`raw_pvalues`), not just the raw-significant
+        subset (`candidates`).
+
+        `candidates` is a safe superset to re-filter without building full
+        results (KM curves, multivariate/interaction Cox) for the whole
+        genome: FDR-adjusted p-values are never smaller than the raw p-value,
+        so a gene that didn't clear the raw threshold can never clear the
+        FDR-corrected one either.
+        """
+        if not raw_pvalues:
+            return []
+
+        gene_ids = list(raw_pvalues.keys())
+        pvals = list(raw_pvalues.values())
+        try:
+            reject, adj_p, _, _ = multipletests(pvals, method='fdr_bh', alpha=self.p_value_threshold)
+            adj_p_by_gene = dict(zip(gene_ids, adj_p))
+            reject_by_gene = dict(zip(gene_ids, reject))
+        except ValueError as e:
+            logger.warning(f"FDR correction failed ({e}); falling back to raw p-value threshold")
+            adj_p_by_gene = dict(zip(gene_ids, pvals))
+            reject_by_gene = {gid: p < self.p_value_threshold for gid, p in raw_pvalues.items()}
+
+        significant_genes = []
+        for gene_result in candidates:
+            adj_p = adj_p_by_gene.get(gene_result.gene_id)
+            if adj_p is None:
+                continue
+            gene_result.fdr_adjusted_p_value = float(adj_p)
+            gene_result.is_significant = bool(reject_by_gene.get(gene_result.gene_id, False)) and (
+                gene_result.hazard_ratio >= self.hazard_ratio_upper
+                or gene_result.hazard_ratio <= self.hazard_ratio_lower
+            )
+            if gene_result.is_significant:
+                significant_genes.append(gene_result)
+
+        significant_genes.sort(key=lambda x: x.cox_p_value)
+        return significant_genes
 
     def _analyze_all_genes_vectorized(
         self,
@@ -1321,7 +1432,7 @@ Determine if this dataset contains survival data and identify the relevant colum
         covariate_columns: Optional[List[str]],
         treatment_binary: Optional[pd.Series],
         treatment_arm_names: Optional[Dict[int, str]],
-    ) -> Tuple[List[GeneSurvivalResult], int]:
+    ) -> Tuple[List[GeneSurvivalResult], int, Dict[str, float]]:
         """Fast path: log-rank + univariate Cox for every gene at once.
 
         Genes with any missing expression value fall back to the scalar path
@@ -1333,12 +1444,17 @@ Determine if this dataset contains survival data and identify the relevant colum
         multivariate / interaction extras computed at all — those were
         previously computed for every gene regardless of significance, even
         though only significant genes are ever returned.
+
+        Also returns `raw_pvalues`, the uncorrected Cox p-value for every gene
+        that got a valid fit (significant or not) — the `_analyze_all_genes`
+        caller needs the full test set to apply FDR correction.
         """
         gene_ids = expression_matrix.index.to_numpy()
         X_all = expression_matrix.to_numpy(dtype=np.float64)
         n_genes, n_samples = X_all.shape
 
         significant_genes: List[GeneSurvivalResult] = []
+        raw_pvalues: Dict[str, float] = {}
         n_analyzed = 0
 
         has_nan = np.isnan(X_all).any(axis=1)
@@ -1346,17 +1462,18 @@ Determine if this dataset contains survival data and identify the relevant colum
         clean_positions = np.nonzero(~has_nan)[0]
 
         if len(dirty_positions) > 0:
-            dirty_genes, dirty_n = self._analyze_all_genes_scalar(
+            dirty_genes, dirty_n, dirty_pvalues = self._analyze_all_genes_scalar(
                 expression_matrix.iloc[dirty_positions],
                 survival_df, probe_to_gene, metadata_aligned,
                 covariate_columns, treatment_binary, treatment_arm_names,
             )
             significant_genes.extend(dirty_genes)
+            raw_pvalues.update(dirty_pvalues)
             n_analyzed += dirty_n
 
         if len(clean_positions) == 0:
             significant_genes.sort(key=lambda x: x.cox_p_value)
-            return significant_genes, n_analyzed
+            return significant_genes, n_analyzed, raw_pvalues
 
         times = survival_df['time'].to_numpy(dtype=np.float64)
         events = survival_df['event'].to_numpy(dtype=np.float64)
@@ -1369,7 +1486,7 @@ Determine if this dataset contains survival data and identify the relevant colum
             # No observed events at all — nothing to fit for any gene.
             n_analyzed += len(clean_positions)
             significant_genes.sort(key=lambda x: x.cox_p_value)
-            return significant_genes, n_analyzed
+            return significant_genes, n_analyzed, raw_pvalues
 
         median_per_gene = np.median(X_clean, axis=1)
         high_mask = X_clean >= median_per_gene[:, None]
@@ -1395,13 +1512,16 @@ Determine if this dataset contains survival data and identify the relevant colum
         needs_fallback = valid_split & ~cox_converged
         if needs_fallback.any():
             fallback_positions = np.nonzero(needs_fallback)[0]
-            fallback_genes, _fallback_n = self._analyze_all_genes_scalar(
+            fallback_genes, _fallback_n, fallback_pvalues = self._analyze_all_genes_scalar(
                 expression_matrix.loc[clean_gene_ids[fallback_positions]],
                 survival_df, probe_to_gene, metadata_aligned,
                 covariate_columns, treatment_binary, treatment_arm_names,
             )
-            # These genes are already counted in n_analyzed above.
+            # These genes are already counted in n_analyzed above. The scalar
+            # p-values are authoritative here — the vectorized cox_p for
+            # these positions comes from a fit that didn't cleanly converge.
             significant_genes.extend(fallback_genes)
+            raw_pvalues.update(fallback_pvalues)
 
         use_fast = valid_split & cox_converged
         hazard_ratio = np.exp(beta)
@@ -1411,6 +1531,9 @@ Determine if this dataset contains survival data and identify the relevant colum
         z_crit = stats.norm.ppf(0.975)
         hr_ci_lower = np.exp(beta - z_crit * se)
         hr_ci_upper = np.exp(beta + z_crit * se)
+
+        for pos in np.nonzero(use_fast)[0]:
+            raw_pvalues[clean_gene_ids[pos]] = float(cox_p[pos])
 
         is_significant = (
             use_fast
@@ -1446,7 +1569,7 @@ Determine if this dataset contains survival data and identify the relevant colum
                 significant_genes.append(result)
 
         significant_genes.sort(key=lambda x: x.cox_p_value)
-        return significant_genes, n_analyzed
+        return significant_genes, n_analyzed, raw_pvalues
 
     def _finalize_gene_result(
         self,
@@ -1598,11 +1721,18 @@ Determine if this dataset contains survival data and identify the relevant colum
         covariate_columns: Optional[List[str]],
         treatment_binary: Optional[pd.Series],
         treatment_arm_names: Optional[Dict[int, str]],
-    ) -> Tuple[List[GeneSurvivalResult], int]:
+    ) -> Tuple[List[GeneSurvivalResult], int, Dict[str, float]]:
         """Exact per-gene `lifelines` loop — unchanged. Used for genes with
         missing expression values, genes whose vectorized Cox fit didn't
-        converge, and as the whole-batch fallback if vectorization errors."""
+        converge, and as the whole-batch fallback if vectorization errors.
+
+        Returns raw-significant genes (by the uncorrected p-value threshold)
+        plus `raw_pvalues` covering every gene that got a valid Cox fit,
+        significant or not — FDR correction (applied by the `_analyze_all_genes`
+        caller) needs the full test set, not just the raw-significant subset.
+        """
         significant_genes = []
+        raw_pvalues: Dict[str, float] = {}
         n_analyzed = 0
 
         for gene_id in expression_matrix.index:
@@ -1620,15 +1750,17 @@ Determine if this dataset contains survival data and identify the relevant colum
 
                 n_analyzed += 1
 
-                if gene_result and gene_result.is_significant:
-                    significant_genes.append(gene_result)
+                if gene_result:
+                    raw_pvalues[gene_id] = gene_result.cox_p_value
+                    if gene_result.is_significant:
+                        significant_genes.append(gene_result)
 
             except Exception as e:
                 logger.debug(f"Error analyzing gene {gene_id}: {e}")
                 continue
 
         significant_genes.sort(key=lambda x: x.cox_p_value)
-        return significant_genes, n_analyzed
+        return significant_genes, n_analyzed, raw_pvalues
 
     def _analyze_gene_survival(
         self,

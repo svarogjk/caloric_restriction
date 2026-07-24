@@ -164,8 +164,9 @@ def detect_cancer_type(query: str) -> Optional[str]:
     return None
 
 
-def _model_id(cancer_type: str, slug: str) -> str:
-    return f"treatment_{cancer_type}_{slug}"
+def _model_id(cancer_type: str, slug: str, cancer_genes_only: bool = False) -> str:
+    suffix = "_cgo" if cancer_genes_only else ""
+    return f"treatment_{cancer_type}_{slug}{suffix}"
 
 
 def _slugify_drug_name(drug_name: str) -> str:
@@ -223,6 +224,7 @@ class TreatmentContextService:
         expression: dict[str, float],
         clinical: Optional[dict[str, float | str]],
         db: "AsyncSession",
+        cancer_genes_only: bool = False,
     ) -> TreatmentComparisonResult:
         entries = TREATMENT_QUERIES.get(cancer_type.lower(), [])
         comparisons: list[TreatmentComparison] = []
@@ -234,13 +236,15 @@ class TreatmentContextService:
                 expression=expression,
                 clinical=clinical,
                 db=db,
+                cancer_genes_only=cancer_genes_only,
             )
             comparisons.append(comparison)
 
         return TreatmentComparisonResult(cancer_type=cancer_type, treatments=comparisons)
 
     async def get_or_build_km_for_drug(
-        self, cancer_type: str, drug_name: str, synonyms: Optional[list[str]] = None
+        self, cancer_type: str, drug_name: str, synonyms: Optional[list[str]] = None,
+        cancer_genes_only: bool = False,
     ) -> TreatmentKMEvidence:
         """Tier-2 cohort-reference KM evidence for a drug suggested in the
         "Treatments to consider" panel (F24b). Reuses a curated
@@ -250,6 +254,11 @@ class TreatmentContextService:
         curated entries are built. A short-TTL negative-result cache avoids
         re-running a full orchestrator pipeline on every Regenerate click for
         a drug with no matching GEO datasets.
+
+        `cancer_genes_only` should mirror the setting used for the patient's
+        originating analysis (`PrognosticModel.cancer_genes_only`) — it changes
+        the model_id (a `_cgo` suffix), so builds with and without the filter
+        never collide or reuse each other's cache.
         """
         cancer_key = cancer_type.lower()
         entry = self._match_curated_entry(cancer_key, drug_name, synonyms) or {
@@ -257,7 +266,7 @@ class TreatmentContextService:
             "slug": _slugify_drug_name(drug_name),
             "query": f"{cancer_type} {drug_name} overall survival",
         }
-        mid = _model_id(cancer_key, entry["slug"])
+        mid = _model_id(cancer_key, entry["slug"], cancer_genes_only)
 
         neg_reason = self._negative_cache_get(mid)
         if neg_reason is not None:
@@ -275,7 +284,7 @@ class TreatmentContextService:
 
         if mid not in self._building:
             asyncio.create_task(
-                self._build_and_cache_negative(cancer_key, entry, mid),
+                self._build_and_cache_negative(cancer_key, entry, mid, cancer_genes_only),
                 name=f"treatment_build_{mid}",
             )
         return TreatmentKMEvidence(
@@ -302,28 +311,30 @@ class TreatmentContextService:
         return None
 
     async def _build_and_cache_negative(
-        self, cancer_type: str, entry: dict[str, str], mid: str
+        self, cancer_type: str, entry: dict[str, str], mid: str, cancer_genes_only: bool = False,
     ) -> None:
         """Wraps `_build_treatment_model`; records a negative-cache entry when
         the build produced no usable model, so repeat requests for this drug
         don't re-trigger a fresh orchestrator run within the TTL window."""
-        await self._build_treatment_model(cancer_type, entry)
+        await self._build_treatment_model(cancer_type, entry, cancer_genes_only)
         if self._sig.get_model(mid) is None:
             self._negative_cache_put(mid, "No matching GEO cohort data available for this drug.")
 
-    async def warm(self, cancer_type: str, db: "AsyncSession") -> list[str]:
+    async def warm(
+        self, cancer_type: str, db: "AsyncSession", cancer_genes_only: bool = False,
+    ) -> list[str]:
         """Trigger background builds for all treatment models of a cancer type.
         Returns the list of slugs queued."""
         entries = TREATMENT_QUERIES.get(cancer_type.lower(), [])
         queued: list[str] = []
         for entry in entries:
-            mid = _model_id(cancer_type, entry["slug"])
+            mid = _model_id(cancer_type, entry["slug"], cancer_genes_only)
             if self._sig.get_model(mid) is not None:
                 continue
             if mid in self._building:
                 continue
             asyncio.create_task(
-                self._build_treatment_model(cancer_type.lower(), entry),
+                self._build_treatment_model(cancer_type.lower(), entry, cancer_genes_only),
                 name=f"treatment_build_{mid}",
             )
             queued.append(entry["slug"])
@@ -340,8 +351,9 @@ class TreatmentContextService:
         expression: dict[str, float],
         clinical: Optional[dict[str, float | str]],
         db: "AsyncSession",
+        cancer_genes_only: bool = False,
     ) -> TreatmentComparison:
-        mid = _model_id(cancer_type, entry["slug"])
+        mid = _model_id(cancer_type, entry["slug"], cancer_genes_only)
 
         # Model already available → score immediately.
         model = self._sig.get_model(mid)
@@ -370,7 +382,7 @@ class TreatmentContextService:
         # Model not on disk yet — kick off a background build if not already running.
         if mid not in self._building:
             asyncio.create_task(
-                self._build_treatment_model(cancer_type, entry),
+                self._build_treatment_model(cancer_type, entry, cancer_genes_only),
                 name=f"treatment_build_{mid}",
             )
 
@@ -380,9 +392,15 @@ class TreatmentContextService:
         )
 
     async def _build_treatment_model(
-        self, cancer_type: str, entry: dict[str, str]
+        self, cancer_type: str, entry: dict[str, str], cancer_genes_only: bool = False,
     ) -> None:
         """Background: build a treatment-specific signature model and persist it.
+
+        `cancer_genes_only` mirrors the setting from the patient's originating
+        analysis (`PrognosticModel.cancer_genes_only`) rather than being fixed —
+        it's what keeps this build in the "~2-5 min" range (testing ~600 curated
+        cancer genes) instead of hours (testing every probe on the platform),
+        while still matching whatever filter the user actually chose.
 
         Always invoked via `asyncio.create_task` — this coroutine outlives the
         HTTP request that queued it, so it opens its own DB session rather
@@ -393,32 +411,38 @@ class TreatmentContextService:
         """
         from app.services.analysis_result_service import analysis_result_service
 
-        mid = _model_id(cancer_type, entry["slug"])
+        mid = _model_id(cancer_type, entry["slug"], cancer_genes_only)
         if mid in self._building:
             return
         self._building.add(mid)
         self._build_stage[mid] = "Checking for a cached analysis…"
-        logger.info("Treatment model build started: %s (%s)", mid, entry["query"])
+        logger.info(
+            "Treatment model build started: %s (%s, cancer_genes_only=%s)",
+            mid, entry["query"], cancer_genes_only,
+        )
 
         async def _progress(stage: str, message: str, current: Optional[int], total: Optional[int]) -> None:
             self._build_stage[mid] = message
 
         try:
-            # Try to find a cached GEO analysis matching this query first.
+            # Try to find a cached GEO analysis matching this query first — but
+            # only reuse it if it was built with the same cancer_genes_only
+            # setting; a query string match alone doesn't guarantee that (the
+            # same query could have been run before under the other setting).
             async with get_db_session() as db:
                 cached = await analysis_result_service.find_recent_by_query(db, entry["query"])
                 full = (
                     await analysis_result_service.get_result(db, cached["result_id"])
                     if cached and cached.get("result_id") else None
                 )
-            if full:
+            if full and bool(full.get("cancer_genes_only", False)) == cancer_genes_only:
                 model = await self._sig.build_from_result(full, cancer_type=cancer_type)
                 model.model_id = mid
                 self._sig.save_model_to_disk(model)
                 logger.info("Treatment model built from cache: %s", mid)
                 return
 
-            # No cached analysis — run the full pipeline via the orchestrator.
+            # No matching cached analysis — run the full pipeline via the orchestrator.
             if self._sig.orchestrator is None:
                 logger.warning("Orchestrator unavailable, cannot build %s", mid)
                 return
@@ -429,10 +453,11 @@ class TreatmentContextService:
                 query=entry["query"],
                 max_datasets=10,
                 min_occurrence=2,
+                cancer_genes_only=cancer_genes_only,
                 progress_callback=_progress,
             )
             self._build_stage[mid] = "Training the prognostic signature…"
-            result_dict = _build_analysis_response(raw).model_dump()
+            result_dict = _build_analysis_response(raw, cancer_genes_only=cancer_genes_only).model_dump()
             model = await self._sig.build_from_result(result_dict, cancer_type=cancer_type)
             model.model_id = mid
             self._sig.save_model_to_disk(model)

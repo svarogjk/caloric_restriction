@@ -182,7 +182,20 @@ class GEODataLoaderService:
             if dataset_path.exists():
                 logger.info(f"Loading from datasets folder: {dataset_path}")
                 try:
-                    return await asyncio.to_thread(self._load_from_storage, dataset_path, dataset)
+                    loaded_data = await asyncio.to_thread(self._load_from_storage, dataset_path, dataset)
+                    if not loaded_data.probe_to_gene_mapping:
+                        # Cached per-dataset mapping is missing or was discarded as corrupted
+                        # (see _is_corrupted_mapping). Re-fetch from the authoritative
+                        # platform-level cache in platform_mappings/ — cheap even when it turns
+                        # up nothing, since unmappable platforms are skip-listed there.
+                        logger.info(
+                            f"No usable gene mapping cached for {dataset.accession}, "
+                            f"re-fetching from platform mapping service"
+                        )
+                        loaded_data = await self.apply_gene_mapping(loaded_data)
+                        if loaded_data.probe_to_gene_mapping:
+                            await asyncio.to_thread(self._save_to_storage, loaded_data)
+                    return loaded_data
                 except Exception as e:
                     logger.warning(f"Storage load failed: {e}, loading from source")
 
@@ -593,24 +606,31 @@ Determine the optimal parsing strategy for this file."""
     @staticmethod
     def _is_corrupted_mapping(mapping: Dict[str, str], sample_size: int = 50) -> bool:
         """Detect a corrupted probe->gene mapping where the gene_symbol values are
-        numeric expression values rather than real gene symbols (column swap during
-        ingestion of gene-level datasets, e.g. NanoString panels).
+        not real gene symbols — either numeric expression values (column swap during
+        ingestion of gene-level datasets, e.g. NanoString panels) or gene
+        descriptions/titles (e.g. "pre-mRNA processing factor 8" instead of "PRPF8"),
+        which happens when a platform annotation file's "Gene Title" column gets
+        captured instead of "Gene Symbol".
 
-        Returns True when the majority of sampled values parse as floats.
+        Returns True when the majority of sampled values parse as floats or look
+        like descriptions rather than symbols (contain a space, or are unusually long).
         """
         values = list(mapping.values())[:sample_size]
         if not values:
             return False
 
-        numeric_count = 0
+        bad_count = 0
         for v in values:
             try:
                 float(v)
-                numeric_count += 1
+                bad_count += 1
+                continue
             except (TypeError, ValueError):
                 pass
+            if isinstance(v, str) and (' ' in v.strip() or len(v) > 20):
+                bad_count += 1
 
-        return numeric_count > len(values) / 2
+        return bad_count > len(values) / 2
 
     def _load_from_storage(self, storage_path: Path, dataset: GEODataset) -> LoadedGEOData:
         """Load data from datasets folder with metadata restoration"""
@@ -664,12 +684,15 @@ Determine the optimal parsing strategy for this file."""
                     mapping_df = pd.read_parquet(mapping_path)
                     candidate_mapping = dict(zip(mapping_df['probe_id'], mapping_df['gene_symbol']))
                     # Guard against corrupted mappings where gene_symbol values are
-                    # actually numeric expression values (column swap during ingestion).
-                    # A None mapping lets gene-level index symbols flow through unmodified.
+                    # actually numeric expression values, or gene descriptions/titles,
+                    # rather than real symbols (column swap during ingestion).
+                    # A None mapping lets gene-level index symbols flow through unmodified,
+                    # and load_dataset() will re-fetch from the platform-level cache.
                     if self._is_corrupted_mapping(candidate_mapping):
                         logger.warning(
                             f"Discarding corrupted gene mapping for {dataset.accession}: "
-                            f"gene_symbol values look numeric (expression values, not symbols)"
+                            f"gene_symbol values don't look like real gene symbols "
+                            f"(numeric or description-like values found)"
                         )
                     else:
                         probe_to_gene_mapping = candidate_mapping

@@ -140,6 +140,10 @@ class PrognosticModel(BaseModel):
 
     is_demo: bool = False
     disclaimer: str = RUO_DISCLAIMER
+    # Whether the source analysis restricted to the COSMIC cancer gene set —
+    # carried forward so anything derived from this model (e.g. a treatment-
+    # cohort build for one of its genes) reuses the same filter setting.
+    cancer_genes_only: bool = False
 
 
 # ==================== Request / response models ====================
@@ -241,6 +245,10 @@ class TreatmentContextRequest(BaseModel):
     cancer_type: str = Field(..., description="One of: breast, lung, colorectal, ovarian, gastric, glioma")
     expression: dict[str, float] = Field(..., description="gene_symbol -> expression value for the patient")
     clinical: Optional[dict[str, float | str]] = None
+    cancer_genes_only: bool = Field(
+        default=False,
+        description="Restrict treatment-cohort builds to the curated COSMIC cancer gene set (faster builds).",
+    )
 
 
 # ==================== Per-treatment KM evidence (F24b) ====================
