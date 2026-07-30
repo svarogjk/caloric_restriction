@@ -449,15 +449,27 @@ class TreatmentContextService:
 
             from app.api.routes import _build_analysis_response
 
+            # min_occurrence=1: unlike the main cross-cohort search (whose whole
+            # value proposition is requiring a gene to replicate across >=2
+            # independent datasets), a narrow single-drug query like "breast
+            # PALBOCICLIB overall survival" realistically only ever turns up one
+            # usable GEO dataset. Requiring 2+ here means these builds almost
+            # never produce a gene, regardless of how good that one dataset is —
+            # confirmed repeatedly in production logs (every treatment build this
+            # session hit "Filtered N genes appearing in only 1 dataset"). A
+            # single well-analyzed cohort is exactly what "cohort_reference" tier
+            # is already framed/caveated for (COHORT_REFERENCE_CAVEAT).
             raw = await self._sig.orchestrator.analyze_query(
                 query=entry["query"],
                 max_datasets=10,
-                min_occurrence=2,
+                min_occurrence=1,
                 cancer_genes_only=cancer_genes_only,
                 progress_callback=_progress,
             )
             self._build_stage[mid] = "Training the prognostic signature…"
-            result_dict = _build_analysis_response(raw, cancer_genes_only=cancer_genes_only).model_dump()
+            result_dict = _build_analysis_response(
+                raw, cancer_genes_only=cancer_genes_only, min_occurrence=1
+            ).model_dump()
             model = await self._sig.build_from_result(result_dict, cancer_type=cancer_type)
             model.model_id = mid
             self._sig.save_model_to_disk(model)

@@ -4,7 +4,7 @@ import {
     TherapyRationaleResponse, TreatmentKMEvidence, ReferenceKMCurve,
 } from '../../services/api'
 import KaplanMeierChart from '../KaplanMeierChart'
-import { TREATMENT_COLORS, topTreatmentCurves } from '../../utils/signatureViz'
+import { classifyDrugCurve, topTreatmentCurves } from '../../utils/signatureViz'
 
 interface TherapyDirectionsProps {
     modelId: string
@@ -127,17 +127,41 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
 
     const hasGenerated = data !== null || loading || error !== null
     const rankedDrugs = data?.ranked_drugs ?? []
-    const displayedDrugs = topN === 'all' ? rankedDrugs : rankedDrugs.slice(0, topN)
+
+    // "Show top N" ranks by clinical priority, not data availability — a drug
+    // confirmed to have no GEO cohort data still burns one of the N slots.
+    // Backfill it with the next-ranked drug beyond the window that's already
+    // confirmed plottable (from data fetched eagerly at generate() time, no
+    // new network calls here), so N means N real curves whenever possible.
+    // Scope is limited to `unavailable` — `insufficient`/`not_checked`/
+    // `building` stay as-is (ambiguous or pending, not a confirmed dead end).
+    const classify = (d: string) => classifyDrugCurve(d, cohortKm, riskGroup ?? null)
+    const windowDrugs = topN === 'all' ? rankedDrugs : rankedDrugs.slice(0, topN)
+    const bumpedUnavailable = windowDrugs.filter((d) => classify(d) === 'unavailable')
+
+    let displayedDrugs = windowDrugs
+    if (topN !== 'all' && bumpedUnavailable.length > 0) {
+        const kept = windowDrugs.filter((d) => classify(d) !== 'unavailable')
+        const overflowPlottable = rankedDrugs.slice(topN).filter((d) => classify(d) === 'plottable')
+        const fill = overflowPlottable.slice(0, bumpedUnavailable.length)
+        const finalSet = new Set([...kept, ...fill])
+        displayedDrugs = rankedDrugs.filter((d) => finalSet.has(d)) // preserve rank order
+    }
     const displayedDrugKeys = new Set(displayedDrugs.map((d) => d.toLowerCase()))
-    const drugColor: Record<string, string> = {}
-    displayedDrugs.forEach((d, i) => { drugColor[d.toLowerCase()] = TREATMENT_COLORS[i % TREATMENT_COLORS.length] })
 
     const { curves, insufficientN } = topTreatmentCurves(displayedDrugs, cohortKm, riskGroup ?? null, baselineCurve)
     const chartedDrugKeys = new Set(curves.filter((c) => c.key !== '__baseline').map((c) => c.key.toLowerCase()))
+    // Sourced straight from `curves` (not a second index pass) so a table dot
+    // can never disagree with its chart line color.
+    const drugColor: Record<string, string> = {}
+    curves.forEach((c) => { if (c.key !== '__baseline') drugColor[c.key.toLowerCase()] = c.color })
 
     const buildingDrugs = displayedDrugs.filter((d) => cohortKm[d.toLowerCase()]?.is_building)
     const notCheckedDrugs = displayedDrugs.filter((d) => cohortKm[d.toLowerCase()]?.tier === 'not_checked')
-    const unavailableDrugs = displayedDrugs.filter((d) => cohortKm[d.toLowerCase()]?.tier === 'unavailable')
+    // Disclosure reads from the pre-backfill window, not `displayedDrugs` — a
+    // drug backfilled out of the visible set must stay disclosed here rather
+    // than silently disappearing.
+    const unavailableDrugs = bumpedUnavailable
 
     // Evidence rows for a drug that never entered `ranked_drugs` at all — i.e.
     // every row for that drug carried documented CIViC resistance/adverse

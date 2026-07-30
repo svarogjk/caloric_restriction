@@ -186,6 +186,14 @@ class SignatureService:
         # result_id -> model_id, so personalizing the same analysis reuses one
         # auto-built signature instead of rebuilding per patient.
         self._result_models: dict[str, str] = {}
+        # accession -> load_cohort_treatment_arms() result, across requests —
+        # the "Treatments to consider" panel polls every ~15s while any Tier-2
+        # cohort build is running, and each poll calls this per drug for the
+        # SAME training accession. Without this, the (disk reload + LLM survival-
+        # column detection) work was redone from scratch every single poll,
+        # since the caller-side memoization dict is created fresh per request.
+        self._cohort_arms_cache: "OrderedDict[str, Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str]]]]" = OrderedDict()
+        self._COHORT_ARMS_CACHE_MAX = 50
 
     # ---------- model store ----------
 
@@ -1130,12 +1138,29 @@ class SignatureService:
         assignment, once — reused across multiple drug-name match attempts
         (`match_treatment_arm_km`) so checking several candidate drugs against
         the same cohort doesn't repeat the LLM-backed column detection call
-        per drug.
+        per drug, and cached across requests (an accession's arm layout never
+        changes) so repeated "Treatments to consider" polls don't redo the
+        disk reload + LLM detection every ~15s while a Tier-2 build is running.
 
         Returns (survival_df[time, event], treatment_binary, arm_names) or
         None when the cohort isn't cached locally or has no usable
         survival/treatment columns.
         """
+        if accession in self._cohort_arms_cache:
+            self._cohort_arms_cache.move_to_end(accession)
+            return self._cohort_arms_cache[accession]
+
+        result = await self._load_cohort_treatment_arms_uncached(accession)
+
+        self._cohort_arms_cache[accession] = result
+        self._cohort_arms_cache.move_to_end(accession)
+        if len(self._cohort_arms_cache) > self._COHORT_ARMS_CACHE_MAX:
+            self._cohort_arms_cache.popitem(last=False)
+        return result
+
+    async def _load_cohort_treatment_arms_uncached(
+        self, accession: str
+    ) -> Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str]]]:
         if self.orchestrator is None:
             return None
         survival_service = self.orchestrator.survival_service
