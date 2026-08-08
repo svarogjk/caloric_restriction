@@ -192,7 +192,7 @@ const initialState: ChatState = {
     sidebarOpen: true,
     // Search/Analysis settings
     datasetCount: 20,
-    rankingMultiplier: 5,
+    rankingMultiplier: 10,
     organism: 'Homo sapiens',
     cancerGenesOnly: true,
     geneFilterInput: '',
