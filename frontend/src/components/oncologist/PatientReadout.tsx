@@ -14,6 +14,11 @@ interface PatientReadoutProps {
      *  back to the prediction's single assigned-group curve when absent. */
     referenceCurves?: ReferenceKMCurve[]
     timeUnit?: string
+    /** The patient's scored tumour profile — forwarded to "Treatments to
+     *  consider" so each drug's cohort-reference curve can be picked by
+     *  scoring the patient against that treatment-specific model. */
+    expression?: Record<string, number>
+    clinical?: Record<string, string>
 }
 
 /**
@@ -23,6 +28,7 @@ interface PatientReadoutProps {
  */
 const PatientReadout: React.FC<PatientReadoutProps> = ({
     prediction: result, modelId, cancerLabel, modelIsDemo, referenceCurves, timeUnit = 'days',
+    expression, clinical,
 }) => {
     const curves = referenceCurves && referenceCurves.length ? referenceCurves : [result.reference_km]
     const kmCurves: KMChartCurve[] = useMemo(() => curves.map((c) => ({
@@ -150,6 +156,9 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
                     modelId={modelId}
                     riskGroup={result.risk_group}
                     baselineCurve={result.reference_km}
+                    expression={expression}
+                    clinical={clinical}
+                    timeUnit={timeUnit}
                 />
             </div>
 

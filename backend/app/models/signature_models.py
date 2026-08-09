@@ -230,6 +230,7 @@ class TreatmentComparison(BaseModel):
     n_cohorts: Optional[int] = None
     n_patients: Optional[int] = None
     pooled_c_index: Optional[float] = None
+    time_unit: Optional[str] = None          # this model's survival-time unit ("days"/"months")
     is_building: bool = False
     build_stage: Optional[str] = None        # Live progress message while is_building
     build_error: Optional[str] = None
@@ -292,12 +293,25 @@ class TreatmentKMEvidence(BaseModel):
       not_checked      -> neither; this drug was outside the current
                            request's cohort-KM lookup budget (see
                            `_select_top_drugs`) — no lookup was attempted
+
+    For `cohort_reference`, `matched_risk_group` is the tertile the patient's
+    OWN expression actually falls into under THIS treatment-specific model's
+    coefficients/cutoffs — it is NOT the same as the patient's risk group
+    under their baseline model, because each treatment cohort trains its own
+    Cox model on a different GEO population with different genes/cutoffs.
+    Picking `reference_km` by matching risk-group LABEL across two unrelated
+    models is a category error (e.g. "high risk" tertile boundaries differ
+    per model); callers should select the curve by `matched_risk_group` when
+    present, falling back to the baseline label only if scoring failed
+    (e.g. no expression supplied, or no signature genes overlapped).
     """
     drug: str
     tier: str                                     # "arm_comparison" | "cohort_reference" | "unavailable" | "not_checked"
     accession: Optional[str] = None                # GSE backing an arm_comparison tier
     arms: Optional[List[TreatmentArmKM]] = None
     reference_km: Optional[List[ReferenceKMCurve]] = None
+    matched_risk_group: Optional[str] = None       # patient's group under THIS model (cohort_reference only)
+    time_unit: Optional[str] = None                # this model's survival-time unit ("days"/"months")
     n_total: Optional[int] = None
     caveat: str = ""
     is_building: bool = False

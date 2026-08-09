@@ -1023,7 +1023,7 @@ class SignatureService:
                 accessions.add(ds)
 
         cohorts: List[Tuple[str, pd.DataFrame, pd.DataFrame, Optional[pd.DataFrame]]] = []
-        time_unit = "days"
+        cohort_units: Dict[str, str] = {}
         for acc in accessions:
             loaded = await self._reload_cohort(acc)
             if loaded is None:
@@ -1032,14 +1032,23 @@ class SignatureService:
             if built is None:
                 continue
             gene_matrix, surv, clinical_df, unit = built
-            time_unit = unit or time_unit
             if gene_matrix.shape[0] >= 2 and gene_matrix.shape[1] >= 10:
                 cohorts.append((acc, gene_matrix, surv, clinical_df))
+                cohort_units[acc] = unit or "days"
 
         if not cohorts:
             raise ValueError(
                 "No cohorts had usable survival data to build a signature for this analysis"
             )
+
+        # `_build_from_cohorts` trains on the LARGEST cohort by sample count
+        # (its own "Largest = training" sort) — resolve time_unit from that
+        # specific cohort rather than whichever accession happened to be
+        # processed last above, so a mixed-unit candidate set (e.g. one
+        # cohort reporting os_days, another os_months) can't mislabel the
+        # training curve's displayed time axis.
+        training_acc = max(cohorts, key=lambda c: c[1].shape[1])[0]
+        time_unit = cohort_units.get(training_acc, "days")
 
         return self._build_from_cohorts(
             query=query, cohorts=cohorts, time_unit=time_unit, is_demo=False,

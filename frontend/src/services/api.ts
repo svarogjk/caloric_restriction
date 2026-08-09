@@ -480,6 +480,13 @@ export interface TreatmentKMEvidence {
     accession: string | null
     arms: TreatmentArmKM[] | null
     reference_km: ReferenceKMCurve[] | null
+    /** For `cohort_reference`: the risk tertile the patient's own expression
+     *  falls into under THIS treatment-specific model (its own genes/cutoffs)
+     *  — the correct key into `reference_km`. Null if no expression was sent
+     *  or scoring failed; callers should fall back to the baseline risk
+     *  group only in that case, never as the default. */
+    matched_risk_group: string | null
+    time_unit: string | null
     n_total: number | null
     caveat: string
     is_building: boolean
@@ -519,12 +526,20 @@ export async function getTherapyRationale(params: {
     genes?: string[]
     riskGroup?: string | null
     model?: string
+    /** Patient tumour profile — lets each suggested drug's cohort-reference
+     *  curve be picked by scoring the patient against that treatment-specific
+     *  model, instead of reusing this patient's baseline risk group as a
+     *  label match against an unrelated model's tertiles. Never persisted. */
+    expression?: Record<string, number>
+    clinical?: Record<string, string | number> | null
 }): Promise<TherapyRationaleResponse> {
     const response = await apiClient.post<TherapyRationaleResponse>('/chat/therapy-rationale', {
         model_id: params.modelId,
         genes: params.genes ?? [],
         risk_group: params.riskGroup ?? null,
         model: params.model ?? 'mistral',
+        expression: params.expression ?? {},
+        clinical: params.clinical ?? null,
     })
     return response.data
 }
@@ -532,10 +547,17 @@ export async function getTherapyRationale(params: {
 export async function getCohortKM(params: {
     modelId: string
     drugs: string[]
+    expression?: Record<string, number>
+    clinical?: Record<string, string | number> | null
 }): Promise<TreatmentKMEvidence[]> {
     const response = await apiClient.post<{ results: TreatmentKMEvidence[] }>(
         '/chat/therapy-rationale/cohort-km',
-        { model_id: params.modelId, drugs: params.drugs },
+        {
+            model_id: params.modelId,
+            drugs: params.drugs,
+            expression: params.expression ?? {},
+            clinical: params.clinical ?? null,
+        },
     )
     return response.data.results
 }
@@ -552,6 +574,7 @@ export interface TreatmentComparison {
     n_cohorts: number | null
     n_patients: number | null
     pooled_c_index: number | null
+    time_unit: string | null
     is_building: boolean
     build_stage: string | null
     build_error: string | null

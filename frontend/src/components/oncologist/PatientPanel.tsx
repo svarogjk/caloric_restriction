@@ -45,6 +45,11 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
     const [modelIsDemo, setModelIsDemo] = useState(false)
     const [referenceCurves, setReferenceCurves] = useState<ReferenceKMCurve[] | undefined>()
     const [timeUnit, setTimeUnit] = useState('days')
+    // Last-scored expression/clinical, kept alongside `prediction` so the
+    // "Treatments to consider" panel can score the patient against each
+    // treatment-specific cohort model too (never persisted server-side).
+    const [lastExpression, setLastExpression] = useState<Record<string, number>>({})
+    const [lastClinical, setLastClinical] = useState<Record<string, string>>({})
 
     // For a curated/pre-built model, load its covariates + demo capability up front.
     useEffect(() => {
@@ -101,6 +106,8 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
             setResolvedModelId(resp.model_id)
             setModelIsDemo(resp.model_is_demo)
             setCovariates(resp.clinical_covariates)        // reveal clinical fields for refinement
+            setLastExpression(expr)
+            setLastClinical(clin)
             // Fetch full model once for the multi-group reference KM.
             try {
                 const full = await getSignatureModel(resp.model_id)
@@ -250,6 +257,8 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
                             modelIsDemo={modelIsDemo}
                             referenceCurves={referenceCurves}
                             timeUnit={timeUnit}
+                            expression={lastExpression}
+                            clinical={lastClinical}
                         />
                     )}
                 </>

@@ -492,6 +492,13 @@ class TherapyRationaleRequest(BaseModel):
     genes: list[str] = Field(default_factory=list, description="Risk-driving genes; if empty, derived from the model")
     risk_group: Optional[str] = None
     model: str = "mistral"
+    # Patient tumour profile (never persisted — see TreatmentContextService
+    # docstring) — lets each suggested drug's Tier-2 cohort-reference curve be
+    # picked by scoring the patient against THAT treatment-specific model,
+    # instead of reusing this patient's baseline risk_group as a label match
+    # against an unrelated model's tertiles.
+    expression: dict[str, float] = Field(default_factory=dict)
+    clinical: Optional[dict[str, float | str]] = None
 
 
 class TherapyEvidenceRecord(BaseModel):
@@ -651,7 +658,9 @@ def _select_top_drugs(evidence: list[dict], max_n: int = _MAX_COHORT_KM_DRUGS) -
 
 
 async def _resolve_cohort_km(
-    model, drug: str, cohort_cache: dict
+    model, drug: str, cohort_cache: dict,
+    expression: Optional[dict[str, float]] = None,
+    clinical: Optional[dict[str, float | str]] = None,
 ) -> TreatmentKMEvidence:
     """Resolve tiered real-GEO-cohort KM evidence for one suggested drug:
     Tier 1 — true treated-vs-untreated arms within the model's training
@@ -665,6 +674,11 @@ async def _resolve_cohort_km(
     Also widens the drug-name match with PubChem synonyms (brand names,
     research codes) so a differently-named arm in the same cohort — real
     data we'd otherwise miss on a naming technicality — is still attributed.
+
+    `expression`/`clinical`, when supplied, let Tier 2 score the patient
+    against the treatment-specific model directly (see
+    `TreatmentContextService.get_or_build_km_for_drug`) rather than leaving
+    curve selection to a cross-model risk-group label match.
     """
     try:
         synonyms = await get_drug_synonym_service().get_synonyms(drug)
@@ -697,6 +711,7 @@ async def _resolve_cohort_km(
             return await get_treatment_service().get_or_build_km_for_drug(
                 model.cancer_type, drug, synonyms=synonyms,
                 cancer_genes_only=model.cancer_genes_only,
+                expression=expression, clinical=clinical,
             )
         except RuntimeError as e:
             logger.warning("Tier-2 cohort lookup unavailable for %s: %s", drug, e)
@@ -771,7 +786,9 @@ async def therapy_rationale(request: TherapyRationaleRequest):
     km_by_drug: dict[str, TreatmentKMEvidence] = {}
     for drug in top_drugs:
         try:
-            km_by_drug[drug] = await _resolve_cohort_km(model, drug, cohort_cache)
+            km_by_drug[drug] = await _resolve_cohort_km(
+                model, drug, cohort_cache, request.expression, request.clinical
+            )
         except (ValueError, KeyError, OSError, RuntimeError) as e:
             logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)
     for record in records:
@@ -790,6 +807,11 @@ class CohortKMRequest(BaseModel):
     the frontend while a Tier-2 build is still in progress."""
     model_id: str
     drugs: list[str] = Field(default_factory=list)
+    # Same rationale as TherapyRationaleRequest.expression — needed so a
+    # Tier-2 model that finishes building mid-poll still gets scored against
+    # the patient rather than falling back to a cross-model label match.
+    expression: dict[str, float] = Field(default_factory=dict)
+    clinical: Optional[dict[str, float | str]] = None
 
 
 class CohortKMResponse(BaseModel):
@@ -813,7 +835,9 @@ async def therapy_rationale_cohort_km(request: CohortKMRequest):
     results = []
     for drug in drugs:
         try:
-            results.append(await _resolve_cohort_km(model, drug, cohort_cache))
+            results.append(await _resolve_cohort_km(
+                model, drug, cohort_cache, request.expression, request.clinical
+            ))
         except (ValueError, KeyError, OSError, RuntimeError) as e:
             logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)
             results.append(TreatmentKMEvidence(

@@ -299,7 +299,7 @@ def test_therapy_rationale_marks_unbudgeted_drugs_not_checked(monkeypatch):
         async def generate_response(self, messages, model, conversation_id):
             return "Advisory hypothesis-only text.", 0, 40
 
-    async def fake_resolve(model_arg, drug, cache):
+    async def fake_resolve(model_arg, drug, cache, expression=None, clinical=None):
         return TreatmentKMEvidence(drug=drug, tier="unavailable", build_error="no data")
 
     chat_routes.set_therapy_services(svc, _FixedTherapy())

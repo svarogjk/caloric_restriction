@@ -65,7 +65,7 @@ export function classifyDrugCurve(
         return arm.n_events < MIN_CURVE_EVENTS || arm.n_samples < MIN_CURVE_SAMPLES ? 'insufficient' : 'plottable'
     }
     if (km.tier === 'cohort_reference' && km.reference_km && km.reference_km.length > 0) {
-        const group = (patientRiskGroup ?? 'low').toLowerCase()
+        const group = (km.matched_risk_group ?? patientRiskGroup ?? 'low').toLowerCase()
         const curve = km.reference_km.find((c) => c.group === group) ?? km.reference_km[0]
         return curve.n_events < MIN_CURVE_EVENTS || curve.n_samples < MIN_CURVE_SAMPLES ? 'insufficient' : 'plottable'
     }
@@ -117,7 +117,11 @@ export function topTreatmentCurves(
             continue
         }
         if (km.tier === 'cohort_reference' && km.reference_km && km.reference_km.length > 0) {
-            const group = (patientRiskGroup ?? 'low').toLowerCase()
+            // Prefer the group this patient actually scores into under THIS
+            // treatment cohort's own model (see TreatmentKMEvidence doc) —
+            // only fall back to the baseline's risk-group label (a different
+            // model's tertile boundaries) if per-cohort scoring didn't run.
+            const group = (km.matched_risk_group ?? patientRiskGroup ?? 'low').toLowerCase()
             const curve = km.reference_km.find((c) => c.group === group) ?? km.reference_km[0]
             if (curve.n_events < MIN_CURVE_EVENTS || curve.n_samples < MIN_CURVE_SAMPLES) {
                 insufficientN.push({ drug, nSamples: curve.n_samples, nEvents: curve.n_events })

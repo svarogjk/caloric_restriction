@@ -15,6 +15,16 @@ interface TherapyDirectionsProps {
      *  outcome is directly comparable against the patient's current predicted
      *  trajectory. */
     baselineCurve?: ReferenceKMCurve | null
+    /** The patient's scored tumour profile — sent so each drug's cohort-reference
+     *  curve is picked by scoring the patient against THAT treatment-specific
+     *  model, instead of reusing `riskGroup` (a different model's tertile
+     *  label) as a match key. Never persisted server-side. */
+    expression?: Record<string, number>
+    clinical?: Record<string, string>
+    /** Baseline model's survival-time unit, so the comparison chart's axis
+     *  matches the (numerically dominant) baseline curve instead of always
+     *  defaulting to days. */
+    timeUnit?: string
 }
 
 const POLL_INTERVAL_MS = 15_000
@@ -45,7 +55,7 @@ const COHORT_KM_BATCH = 8
  * resistance/adverse evidence is still disclosed separately, unplotted.
  */
 const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
-    modelId, riskGroup, genes, baselineCurve,
+    modelId, riskGroup, genes, baselineCurve, expression, clinical, timeUnit = 'days',
 }) => {
     const [data, setData] = useState<TherapyRationaleResponse | null>(null)
     const [loading, setLoading] = useState(false)
@@ -73,7 +83,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
     const pollCohortKm = async (drugs: string[]) => {
         if (drugs.length === 0) return
         try {
-            const results = await getCohortKM({ modelId, drugs })
+            const results = await getCohortKM({ modelId, drugs, expression, clinical })
             const stillBuilding = mergeCohortKm(results)
             if (stillBuilding.length === 0) {
                 pollStartRef.current = null
@@ -101,7 +111,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
         }
 
         try {
-            const r = await getTherapyRationale({ modelId, riskGroup, genes })
+            const r = await getTherapyRationale({ modelId, riskGroup, genes, expression, clinical })
             setData(r)
 
             const initial: Record<string, TreatmentKMEvidence> = {}
@@ -177,7 +187,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
         setCheckingMore(true)
         setPollTimedOut(false)
         try {
-            const results = await getCohortKM({ modelId, drugs: batch })
+            const results = await getCohortKM({ modelId, drugs: batch, expression, clinical })
             const stillBuilding = mergeCohortKm(results)
             if (stillBuilding.length > 0) {
                 pollStartRef.current = Date.now()
@@ -292,7 +302,13 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                                 </div>
                             )}
 
-                            {curves.length > 0 && <KaplanMeierChart curves={curves} height={260} />}
+                            {curves.length > 0 && (
+                                <KaplanMeierChart
+                                    curves={curves}
+                                    height={260}
+                                    timeUnit={timeUnit.toLowerCase().startsWith('month') ? 'months' : 'days'}
+                                />
+                            )}
 
                             {curves.length === 0 && buildingDrugs.length === 0 && (
                                 <p className="text-[11px] text-gray-400">

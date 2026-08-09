@@ -245,6 +245,8 @@ class TreatmentContextService:
     async def get_or_build_km_for_drug(
         self, cancer_type: str, drug_name: str, synonyms: Optional[list[str]] = None,
         cancer_genes_only: bool = False,
+        expression: Optional[dict[str, float]] = None,
+        clinical: Optional[dict[str, float | str]] = None,
     ) -> TreatmentKMEvidence:
         """Tier-2 cohort-reference KM evidence for a drug suggested in the
         "Treatments to consider" panel (F24b). Reuses a curated
@@ -259,6 +261,12 @@ class TreatmentContextService:
         originating analysis (`PrognosticModel.cancer_genes_only`) — it changes
         the model_id (a `_cgo` suffix), so builds with and without the filter
         never collide or reuse each other's cache.
+
+        When `expression` is supplied, the patient is scored against THIS
+        treatment-specific model (its own genes/cutoffs — never a risk-group
+        label carried over from an unrelated model) so the returned
+        `matched_risk_group` tells the caller which of the 3 `reference_km`
+        curves actually corresponds to this patient under this cohort.
         """
         cancer_key = cancer_type.lower()
         entry = self._match_curated_entry(cancer_key, drug_name, synonyms) or {
@@ -274,10 +282,18 @@ class TreatmentContextService:
 
         model = self._sig.get_model(mid)
         if model is not None:
+            matched_group: Optional[str] = None
+            if expression:
+                try:
+                    matched_group = self._sig.score_single_sample(model, expression, clinical).risk_group
+                except (ValueError, KeyError, RuntimeError) as exc:
+                    logger.warning("Per-cohort scoring failed for %s (%s): %s", drug_name, mid, exc)
             return TreatmentKMEvidence(
                 drug=drug_name,
                 tier="cohort_reference",
                 reference_km=model.reference_km,
+                matched_risk_group=matched_group,
+                time_unit=model.time_unit,
                 n_total=model.n_training_samples,
                 caveat=COHORT_REFERENCE_CAVEAT,
             )
@@ -370,6 +386,7 @@ class TreatmentContextService:
                     n_cohorts=len(model.cohort_validations) + 1,
                     n_patients=model.n_training_samples,
                     pooled_c_index=model.pooled_c_index,
+                    time_unit=model.time_unit,
                     is_building=False,
                 )
             except (ValueError, KeyError, RuntimeError) as exc:
