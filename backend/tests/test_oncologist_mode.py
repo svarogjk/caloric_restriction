@@ -506,3 +506,59 @@ def test_build_from_result_time_unit_follows_training_cohort():
     )
     assert built.training_accession == "GSE_BIG"
     assert built.time_unit == "months"
+
+
+def test_cohort_arm_km_surfaces_a_real_treatment_benefit():
+    """The treated-vs-untreated contrast is the ONLY comparison in this
+    feature that can show a treatment helping, so it must survive intact:
+
+      * both arms are returned (an earlier version plotted only the treated
+        arm, discarding the comparator that makes it a contrast at all)
+      * the cohort's own treatment column is reported, because GEO records
+        exposure at CLASS level ("chemotherapy: Yes/No"), never the agent
+      * a genuine survival advantage in the data is preserved end to end
+    """
+    import numpy as np
+    import pandas as pd
+    from app.services.survival_analysis_service import SurvivalAnalysisService
+
+    rng = np.random.default_rng(11)
+    n = 200
+    treated = np.array([1.0] * (n // 2) + [0.0] * (n // 2))
+    idx = [f"s{i}" for i in range(n)]
+    # Treated patients live materially longer; both arms fully observed.
+    time = np.where(treated == 1, rng.uniform(60, 120, n), rng.uniform(5, 45, n))
+    surv = pd.DataFrame({"time": time, "event": np.ones(n, dtype=int)}, index=idx)
+    treatment_binary = pd.Series(treated, index=idx)
+    arm_names = {0: "Untreated/control", 1: "Treated"}
+
+    class _Orch:
+        survival_service = SurvivalAnalysisService()
+
+    svc = SignatureService(orchestrator=_Orch())
+
+    async def fake_load(accession):
+        return surv, treatment_binary, arm_names, "chemotherapy"
+
+    svc.load_cohort_treatment_arms = fake_load
+
+    result = asyncio.run(svc.cohort_treatment_arm_km("GSE_FAKE"))
+    assert result is not None
+    arms, arm_variable = result
+
+    assert arm_variable == "chemotherapy"
+    assert [a.name for a in arms] == ["Untreated/control", "Treated"]
+
+    def surv_at(curve, t):
+        v = 1.0
+        for ti, p in zip(curve.times, curve.survival_probabilities):
+            if ti <= t:
+                v = p
+            else:
+                break
+        return v
+
+    untreated_arm, treated_arm = arms
+    # At a horizon the control arm has largely passed through, the treated arm
+    # must still be clearly ahead — i.e. the benefit is not lost in transit.
+    assert surv_at(treated_arm.km_curve, 50) > surv_at(untreated_arm.km_curve, 50)

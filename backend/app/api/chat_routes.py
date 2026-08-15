@@ -696,13 +696,15 @@ async def _resolve_cohort_km(
                 cohort_cache[accession] = None
         loaded = cohort_cache[accession]
         if loaded is not None:
-            surv, treatment_binary, arm_names = loaded
+            surv, treatment_binary, arm_names, arm_variable = loaded
             arms = _signature_service.match_treatment_arm_km(
                 surv, treatment_binary, arm_names, drug, synonyms=synonyms
             )
             if arms:
                 return TreatmentKMEvidence(
                     drug=drug, tier="arm_comparison", accession=accession, arms=arms,
+                    arm_variable=arm_variable, same_cohort=True,
+                    time_unit=model.time_unit,
                     n_total=sum(a.n_samples for a in arms), caveat=ARM_COMPARISON_CAVEAT,
                 )
 

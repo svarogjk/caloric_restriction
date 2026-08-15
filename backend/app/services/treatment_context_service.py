@@ -282,6 +282,34 @@ class TreatmentContextService:
 
         model = self._sig.get_model(mid)
         if model is not None:
+            # Prefer a real treated-vs-untreated split inside this cohort. A
+            # per-tertile `reference_km` has NO untreated comparator, so it can
+            # only ever describe prognosis among the treated — it cannot show
+            # that treatment helps, which is the question being asked here.
+            try:
+                arm_result = await self._sig.cohort_treatment_arm_km(model.training_accession)
+            except (ValueError, KeyError, OSError, RuntimeError) as exc:
+                logger.warning("Cohort arm KM failed for %s (%s): %s", drug_name, mid, exc)
+                arm_result = None
+            if arm_result is not None:
+                arms, arm_variable = arm_result
+                return TreatmentKMEvidence(
+                    drug=drug_name,
+                    tier="arm_comparison",
+                    accession=model.training_accession,
+                    arms=arms,
+                    arm_variable=arm_variable,
+                    same_cohort=False,
+                    time_unit=model.time_unit,
+                    n_total=sum(a.n_samples for a in arms),
+                    caveat=(
+                        f"Observational treated-vs-untreated comparison within "
+                        f"{model.training_accession}, split on that cohort's "
+                        f"'{arm_variable}' field — treatment was not randomly assigned, "
+                        "and the cohort does not record which specific agent was given."
+                    ),
+                )
+
             matched_group: Optional[str] = None
             if expression:
                 try:

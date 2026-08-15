@@ -46,6 +46,10 @@ export interface TopTreatmentCurves {
      *  are truncated to it. Disclosed in the caption so a reader knows the
      *  comparison isn't extrapolated past somebody's follow-up. */
     horizonYears: number
+    /** Set when the patient's baseline curve was deliberately NOT overlaid,
+     *  explaining why. Overlaying a curve from a different cohort with
+     *  different follow-up invites reading the gap as a treatment effect. */
+    baselineOmittedReason?: string
 }
 
 /** Put KM times on a common scale (years), from whatever unit the source cohort
@@ -77,8 +81,11 @@ export function classifyDrugCurve(
     if (km.tier === 'not_checked') return 'not_checked'
     if (km.tier === 'unavailable') return 'unavailable'
     if (km.tier === 'arm_comparison' && km.arms && km.arms.length > 0) {
-        const arm = km.arms[km.arms.length - 1]
-        return arm.n_events < MIN_CURVE_EVENTS || arm.n_samples < MIN_CURVE_SAMPLES ? 'insufficient' : 'plottable'
+        // BOTH arms must be stable — a treated-vs-untreated contrast built on a
+        // solid treated arm and a 3-patient control arm is not interpretable.
+        return km.arms.some((a) => a.n_events < MIN_CURVE_EVENTS || a.n_samples < MIN_CURVE_SAMPLES)
+            ? 'insufficient'
+            : 'plottable'
     }
     if (km.tier === 'cohort_reference' && km.reference_km && km.reference_km.length > 0) {
         const group = (km.matched_risk_group ?? patientRiskGroup ?? 'low').toLowerCase()
@@ -116,26 +123,68 @@ export function topTreatmentCurves(
     // bar must never consume a palette slot, or real curves get pushed further
     // apart in the palette (or wrap and repeat) than necessary.
     let colorIdx = 0
+    // Several drugs routinely resolve to the SAME GEO series (the drug-name
+    // query returns a generic cancer dataset regardless of the drug named).
+    // Their curves are then identical by construction, so drawing one per drug
+    // paints N lines on top of each other and implies replication that isn't
+    // there. Emit one entry per cohort and name the drugs that share it.
+    const drugsByAccession: Record<string, string[]> = {}
+    for (const d of drugs) {
+        const k = cohortKm[d.toLowerCase()]
+        if (k && !k.is_building && k.accession && !k.same_cohort) {
+            ;(drugsByAccession[k.accession] ??= []).push(d)
+        }
+    }
+    const emittedAccessions = new Set<string>()
+    let hasSameCohortCurve = false
+
     for (const drug of drugs) {
         const km = cohortKm[drug.toLowerCase()]
         if (!km || km.is_building) continue
+
+        const shared = km.accession && !km.same_cohort ? drugsByAccession[km.accession] ?? [drug] : [drug]
+        if (km.accession && !km.same_cohort) {
+            if (emittedAccessions.has(km.accession)) continue
+            emittedAccessions.add(km.accession)
+        }
+        // When a cohort is shared, the curve describes the cohort, not any one
+        // drug — label it that way instead of picking a drug name arbitrarily.
+        const subject = shared.length > 1
+            ? `${km.arm_variable ?? 'Treatment'} cohort (${shared.slice(0, 3).join(', ')}${shared.length > 3 ? `, +${shared.length - 3}` : ''})`
+            : drug
+
         if (km.tier === 'arm_comparison' && km.arms && km.arms.length > 0) {
-            const arm = km.arms[km.arms.length - 1]
-            if (arm.n_events < MIN_CURVE_EVENTS || arm.n_samples < MIN_CURVE_SAMPLES) {
-                insufficientN.push({ drug, nSamples: arm.n_samples, nEvents: arm.n_events })
+            const bad = km.arms.find(
+                (a) => a.n_events < MIN_CURVE_EVENTS || a.n_samples < MIN_CURVE_SAMPLES,
+            )
+            if (bad) {
+                insufficientN.push({ drug, nSamples: bad.n_samples, nEvents: bad.n_events })
                 continue
             }
-            pending.push({
-                key: drug,
-                label: `${drug} (n=${arm.n_samples}, ${arm.n_events} events, same-cohort)`,
-                times: arm.km_curve.times,
-                survival_probabilities: arm.km_curve.survival_probabilities,
-                ci_lower: arm.km_curve.ci_lower,
-                ci_upper: arm.km_curve.ci_upper,
-                color: TREATMENT_COLORS[colorIdx++ % TREATMENT_COLORS.length],
+            const color = TREATMENT_COLORS[colorIdx++ % TREATMENT_COLORS.length]
+            const where = km.same_cohort ? 'same-cohort' : km.accession ?? 'different cohort'
+            if (km.same_cohort) hasSameCohortCurve = true
+            // Plot EVERY arm. Previously only the last (treated) arm was drawn,
+            // which silently discarded the untreated comparator — the one thing
+            // that makes this a treatment contrast rather than a lone curve.
+            km.arms.forEach((arm, i) => {
+                const isTreated = i === km.arms!.length - 1
+                pending.push({
+                    key: `${km.accession ?? drug}__arm${i}`,
+                    label: `${subject} — ${arm.name} (n=${arm.n_samples}, ${arm.n_events} events, ${where})`,
+                    times: arm.km_curve.times,
+                    survival_probabilities: arm.km_curve.survival_probabilities,
+                    ci_lower: arm.km_curve.ci_lower,
+                    ci_upper: arm.km_curve.ci_upper,
+                    color,
+                    // Treated solid, its own control dashed + faded: one visual
+                    // pair, so the gap between them reads as the contrast.
+                    strokeWidth: isTreated ? 2.5 : 1.5,
+                    strokeOpacity: isTreated ? 1 : 0.55,
+                    strokeDasharray: isTreated ? undefined : '4 3',
+                })
+                units.push(km.time_unit ?? baselineTimeUnit ?? 'days')
             })
-            // Tier 1 arms are drawn from the patient's OWN training cohort.
-            units.push(km.time_unit ?? baselineTimeUnit ?? 'days')
             continue
         }
         if (km.tier === 'cohort_reference' && km.reference_km && km.reference_km.length > 0) {
@@ -150,8 +199,8 @@ export function topTreatmentCurves(
                 continue
             }
             pending.push({
-                key: drug,
-                label: `${drug} (n=${curve.n_samples}, ${curve.n_events} events, different cohort)`,
+                key: km.accession ?? drug,
+                label: `${subject} (n=${curve.n_samples}, ${curve.n_events} events, different cohort — treated only, no control arm)`,
                 times: curve.times,
                 survival_probabilities: curve.survival_probabilities,
                 color: TREATMENT_COLORS[colorIdx++ % TREATMENT_COLORS.length],
@@ -161,20 +210,39 @@ export function topTreatmentCurves(
         }
     }
 
+    // The patient's baseline curve is only overlaid when it comes from the same
+    // cohort as the treatment arms. Across cohorts it is NOT a counterfactual:
+    // the two populations differ in stage mix, era, assay and — decisively —
+    // follow-up length, so the gap between them measures study design, not
+    // treatment. Overlaying it anyway is what makes "no treatment" look best.
+    let baselineOmittedReason: string | undefined
     if (baseline && baseline.times.length > 0) {
-        pending.unshift({
-            key: '__baseline',
-            label: 'Your predicted survival (current)',
-            times: baseline.times,
-            survival_probabilities: baseline.survival_probabilities,
-            color: '#374151',
-            strokeWidth: 3,
-            strokeDasharray: '8 4',
-        })
-        units.unshift(baselineTimeUnit ?? 'days')
+        const comparable = pending.length === 0 || hasSameCohortCurve
+        if (comparable) {
+            pending.unshift({
+                key: '__baseline',
+                label: 'Your predicted survival (current)',
+                times: baseline.times,
+                survival_probabilities: baseline.survival_probabilities,
+                color: '#374151',
+                strokeWidth: 3,
+                strokeDasharray: '8 4',
+            })
+            units.unshift(baselineTimeUnit ?? 'days')
+        } else {
+            baselineOmittedReason =
+                'Your own predicted curve is not drawn here: these cohorts are different ' +
+                'patient populations with different follow-up, so the distance between your ' +
+                'curve and theirs would reflect study design rather than any treatment effect. ' +
+                'Your curve is shown in "Reference survival by risk group" above. The comparison ' +
+                'below is treated vs untreated within the same cohort, which is the contrast ' +
+                'that speaks to whether treatment is associated with better survival.'
+        }
     }
 
-    if (pending.length === 0) return { curves: [], insufficientN, horizonYears: 0 }
+    if (pending.length === 0) {
+        return { curves: [], insufficientN, horizonYears: 0, baselineOmittedReason }
+    }
 
     // 1. Put every curve on one scale. 2. Restrict to the window that EVERY
     //    plotted cohort actually observed. Without (2), a cohort followed for
@@ -197,7 +265,7 @@ export function topTreatmentCurves(
         })
         .filter((c) => c.times.length > 0)
 
-    return { curves, insufficientN, horizonYears }
+    return { curves, insufficientN, horizonYears, baselineOmittedReason }
 }
 
 /** Parse pasted "GENE value" lines (space/comma/colon/tab separated) into a map. */

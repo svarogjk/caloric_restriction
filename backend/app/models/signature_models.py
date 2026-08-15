@@ -307,8 +307,16 @@ class TreatmentKMEvidence(BaseModel):
     """
     drug: str
     tier: str                                     # "arm_comparison" | "cohort_reference" | "unavailable" | "not_checked"
-    accession: Optional[str] = None                # GSE backing an arm_comparison tier
+    accession: Optional[str] = None                # GSE backing the curve(s)
     arms: Optional[List[TreatmentArmKM]] = None
+    # The metadata column the arms were split on (e.g. "chemotherapy"). GEO
+    # series almost never record WHICH agent was given, so this is usually
+    # CLASS-level exposure — naming it stops a generic "chemotherapy: Yes/No"
+    # split from being read as drug-specific evidence.
+    arm_variable: Optional[str] = None
+    # True only when the arms come from the patient's OWN training cohort;
+    # False when they come from a treatment-matched but different series.
+    same_cohort: bool = False
     reference_km: Optional[List[ReferenceKMCurve]] = None
     matched_risk_group: Optional[str] = None       # patient's group under THIS model (cohort_reference only)
     time_unit: Optional[str] = None                # this model's survival-time unit ("days"/"months")

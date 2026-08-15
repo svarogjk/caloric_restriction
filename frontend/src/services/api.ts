@@ -479,6 +479,11 @@ export interface TreatmentKMEvidence {
     tier: 'arm_comparison' | 'cohort_reference' | 'unavailable' | 'not_checked'
     accession: string | null
     arms: TreatmentArmKM[] | null
+    /** Metadata column the arms were split on (e.g. "chemotherapy"). Usually
+     *  CLASS-level exposure — GEO rarely records which agent was given. */
+    arm_variable: string | null
+    /** True only when arms come from the patient's own training cohort. */
+    same_cohort: boolean
     reference_km: ReferenceKMCurve[] | null
     /** For `cohort_reference`: the risk tertile the patient's own expression
      *  falls into under THIS treatment-specific model (its own genes/cutoffs)

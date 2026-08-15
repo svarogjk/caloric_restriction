@@ -159,7 +159,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
     }
     const displayedDrugKeys = new Set(displayedDrugs.map((d) => d.toLowerCase()))
 
-    const { curves, insufficientN, horizonYears } = topTreatmentCurves(
+    const { curves, insufficientN, horizonYears, baselineOmittedReason } = topTreatmentCurves(
         displayedDrugs, cohortKm, riskGroup ?? null, baselineCurve, timeUnit,
     )
     const chartedDrugKeys = new Set(curves.filter((c) => c.key !== '__baseline').map((c) => c.key.toLowerCase()))
@@ -298,12 +298,18 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                                 </div>
                             </div>
                             <p className="text-[11px] text-gray-500 mb-2">
-                                Real GEO cohort survival for the top {displayedDrugs.length} matched drug(s) —
-                                solid line: same cohort as the patient's baseline (observational, not
-                                randomized); dotted line: a different, treatment-matched GEO cohort — plotted
-                                alongside your currently predicted survival (bold dashed). Advisory, not a
-                                prescription or a prediction that you will respond.
+                                Real GEO cohort survival for the top {displayedDrugs.length} matched drug(s).
+                                Where a cohort documents who was and wasn't treated, both arms are drawn as a
+                                pair (solid = treated, dashed = its own untreated control) — that within-cohort
+                                gap is the only comparison here that speaks to treatment benefit, and it is
+                                observational, not randomized. Advisory, not a prescription or a prediction
+                                that you will respond.
                             </p>
+                            {baselineOmittedReason && (
+                                <p className="text-[11px] text-gray-600 bg-gray-50 border border-gray-200 rounded p-2 mb-2">
+                                    {baselineOmittedReason}
+                                </p>
+                            )}
                             {horizonYears > 0 && (
                                 <p className="text-[11px] text-gray-500 mb-2">
                                     <strong>Reading this chart:</strong> all cohorts are shown on a common

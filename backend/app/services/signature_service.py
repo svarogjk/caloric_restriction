@@ -1142,7 +1142,7 @@ class SignatureService:
 
     async def load_cohort_treatment_arms(
         self, accession: str
-    ) -> Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str]]]:
+    ) -> Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str], str]]:
         """Load `accession`'s cached survival data and detect a treatment/arm
         assignment, once — reused across multiple drug-name match attempts
         (`match_treatment_arm_km`) so checking several candidate drugs against
@@ -1151,9 +1151,11 @@ class SignatureService:
         changes) so repeated "Treatments to consider" polls don't redo the
         disk reload + LLM detection every ~15s while a Tier-2 build is running.
 
-        Returns (survival_df[time, event], treatment_binary, arm_names) or
-        None when the cohort isn't cached locally or has no usable
-        survival/treatment columns.
+        Returns (survival_df[time, event], treatment_binary, arm_names,
+        treatment_column) or None when the cohort isn't cached locally or has
+        no usable survival/treatment columns. The column name travels with the
+        arms so callers can say WHAT the split actually is (e.g. "chemotherapy"
+        — which is class-level, not drug-level, information).
         """
         if accession in self._cohort_arms_cache:
             self._cohort_arms_cache.move_to_end(accession)
@@ -1169,7 +1171,7 @@ class SignatureService:
 
     async def _load_cohort_treatment_arms_uncached(
         self, accession: str
-    ) -> Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str]]]:
+    ) -> Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str], str]]:
         if self.orchestrator is None:
             return None
         survival_service = self.orchestrator.survival_service
@@ -1206,7 +1208,7 @@ class SignatureService:
         common = [s for s in surv.index if s in treatment_binary.index]
         if len(common) < 20:
             return None
-        return surv.loc[common], treatment_binary.loc[common], arm_names
+        return surv.loc[common], treatment_binary.loc[common], arm_names, treat_col
 
     def match_treatment_arm_km(
         self,
@@ -1241,3 +1243,35 @@ class SignatureService:
         if arms is None:
             return None
         return [TreatmentArmKM(**arm) for arm in arms]
+
+    async def cohort_treatment_arm_km(
+        self, accession: str
+    ) -> Optional[Tuple[List[TreatmentArmKM], str]]:
+        """Treated-vs-untreated KM for a cohort's OWN documented treatment
+        variable, with no drug-name gating.
+
+        This is the contrast that can actually speak to whether treatment
+        helps: both arms come from the same patients, same era, same assay, so
+        the only systematic difference is exposure (still observational — not
+        randomised). Contrast with a per-risk-tertile `reference_km`, which
+        describes prognosis *within* a treated cohort and has no untreated
+        comparator at all, so it can never show a treatment effect.
+
+        Deliberately NOT drug-specific: most GEO series record only a coarse
+        flag such as "chemotherapy: Yes/No", never which agent was given.
+        The column name is returned alongside so callers can label the split
+        for what it is instead of attributing it to one drug.
+
+        Returns (arms, treatment_column) or None when the cohort has no usable
+        arm split (see `_fit_treatment_arm_km`'s sample/event floors).
+        """
+        loaded = await self.load_cohort_treatment_arms(accession)
+        if loaded is None or self.orchestrator is None:
+            return None
+        survival_df, treatment_binary, arm_names, treat_col = loaded
+        arms = self.orchestrator.survival_service._fit_treatment_arm_km(
+            survival_df["time"], survival_df["event"], treatment_binary, arm_names
+        )
+        if arms is None:
+            return None
+        return [TreatmentArmKM(**arm) for arm in arms], treat_col
