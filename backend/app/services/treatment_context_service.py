@@ -291,6 +291,11 @@ class TreatmentContextService:
             return TreatmentKMEvidence(
                 drug=drug_name,
                 tier="cohort_reference",
+                # Exposed so the UI can tell when several drugs resolved to the
+                # SAME GEO series — the drug-name GEO query often returns the
+                # same generic cancer dataset regardless of drug, which makes
+                # those curves identical and NOT independent evidence.
+                accession=model.training_accession,
                 reference_km=model.reference_km,
                 matched_risk_group=matched_group,
                 time_unit=model.time_unit,

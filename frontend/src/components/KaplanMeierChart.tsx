@@ -21,7 +21,10 @@ export interface KMChartCurve {
 
 interface KaplanMeierChartProps {
     curves: KMChartCurve[]
-    timeUnit?: 'days' | 'months'
+    /** Unit the supplied `times` are already expressed in. Use 'years' when the
+     *  caller has normalized heterogeneous cohorts onto one scale itself (see
+     *  `timesToYears` in utils/signatureViz). */
+    timeUnit?: 'days' | 'months' | 'years'
     height?: number
 }
 
@@ -68,7 +71,7 @@ function buildChartData(curves: KMChartCurve[]): ChartRow[] {
  */
 const KaplanMeierChart: React.FC<KaplanMeierChartProps> = ({ curves, timeUnit = 'days', height = 240 }) => {
     const data = useMemo(() => buildChartData(curves), [curves])
-    const perYear = timeUnit === 'months' ? 12 : 365
+    const perYear = timeUnit === 'years' ? 1 : timeUnit === 'months' ? 12 : 365
 
     if (data.length === 0) return null
 
@@ -79,7 +82,15 @@ const KaplanMeierChart: React.FC<KaplanMeierChartProps> = ({ curves, timeUnit = 
                     <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
                     <XAxis
                         dataKey="time"
-                        tickFormatter={(t: number) => (t / perYear).toFixed(0)}
+                        // Numeric (not categorical) so Recharts picks a handful of
+                        // evenly spaced ticks instead of one per event time, and
+                        // so short follow-ups don't collapse to a row of "0"s.
+                        type="number"
+                        domain={[0, 'dataMax']}
+                        tickFormatter={(t: number) => {
+                            const yrs = t / perYear
+                            return yrs < 3 ? yrs.toFixed(1) : yrs.toFixed(0)
+                        }}
                         tick={{ fontSize: 10, fill: '#6b7280' }}
                         label={{ value: 'Years', position: 'insideBottom', offset: -10, fontSize: 10, fill: '#9ca3af' }}
                     />

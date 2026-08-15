@@ -424,3 +424,85 @@ def test_therapy_evidence_lookup_if_bundled():
     assert all(r["gene"] == "ERBB2" for r in recs)
     assert all(r["source"] in {"CIViC", "DGIdb"} for r in recs)
     assert all(r.get("drug") for r in recs)
+
+
+# ---------- treatment cohort KM evidence (F24b) ----------
+
+def test_cohort_reference_km_carries_patient_scored_group_and_units():
+    """A Tier-2 cohort-reference result must describe ITS OWN cohort, not
+    borrow the patient's baseline framing:
+
+      * `matched_risk_group` comes from scoring the patient against THIS
+        treatment model (its own coefficients/tertiles) — reusing the
+        baseline model's risk-group label to index another model's tertile
+        curves is a category error, since cutoffs differ per model.
+      * `time_unit` + `accession` travel with the curve. Without the unit a
+        cohort reported in years gets plotted on the same raw axis as one
+        reported in days, and the resulting follow-up-length gap reads as a
+        treatment effect. Without the accession the UI can't tell that
+        several drugs resolved to the SAME GEO series.
+    """
+    from app.services.treatment_context_service import (
+        TreatmentContextService, _model_id, _slugify_drug_name,
+    )
+
+    svc = SignatureService(orchestrator=None)
+    model = svc.build_demo_signature(max_genes=8, cancer_type="breast")
+    model.time_unit = "years"
+    # Must match the id the service derives for this drug name, or the lookup
+    # falls through to a background build and returns tier="unavailable".
+    mid = _model_id("breast", _slugify_drug_name("FauxDrug"), False)
+    model.model_id = mid
+    svc._models[mid] = model
+
+    ctx = TreatmentContextService(svc)
+    patient = svc.build_demo_patient(model)
+
+    evidence = asyncio.run(
+        ctx.get_or_build_km_for_drug("breast", "FauxDrug", synonyms=["faux drug"])
+    )
+    # Without expression there is nothing to score against -> stays None
+    # rather than silently inheriting some other model's label.
+    assert evidence.tier == "cohort_reference"
+    assert evidence.matched_risk_group is None
+    assert evidence.time_unit == "years"
+    assert evidence.accession == model.training_accession
+
+    scored = asyncio.run(
+        ctx.get_or_build_km_for_drug(
+            "breast", "FauxDrug", synonyms=["faux drug"], expression=patient
+        )
+    )
+    assert scored.matched_risk_group in {"low", "intermediate", "high"}
+    assert scored.matched_risk_group == svc.score_single_sample(model, patient).risk_group
+
+
+def test_build_from_result_time_unit_follows_training_cohort():
+    """`_build_from_cohorts` trains on the LARGEST cohort, so the model's
+    declared time_unit must come from that cohort — not from whichever
+    accession happened to be iterated last. A mismatch here mislabels the
+    curve's axis and corrupts every downstream comparison."""
+    import pandas as pd
+
+    svc = SignatureService(orchestrator=None)
+    rng = __import__("numpy").random.default_rng(3)
+
+    def cohort(acc, n):
+        genes = [f"G{i}" for i in range(6)]
+        cols = [f"{acc}_s{i}" for i in range(n)]
+        expr = pd.DataFrame(rng.normal(0, 1, size=(len(genes), n)), index=genes, columns=cols)
+        surv = pd.DataFrame(
+            {"time": rng.uniform(1, 900, size=n), "event": rng.integers(0, 2, size=n)},
+            index=cols,
+        )
+        return acc, expr, surv, None
+
+    # Largest cohort is the SECOND one; its unit ("months") must win.
+    built = svc._build_from_cohorts(
+        query="unit test",
+        cohorts=[cohort("GSE_SMALL", 40), cohort("GSE_BIG", 120)],
+        time_unit="months",
+        is_demo=False,
+    )
+    assert built.training_accession == "GSE_BIG"
+    assert built.time_unit == "months"

@@ -42,6 +42,22 @@ export interface TopTreatmentCurves {
     /** Drugs whose cohort data resolved but didn't clear the minimum n/events
      *  bar to plot responsibly — surfaced as a footnote, never silently dropped. */
     insufficientN: InsufficientCurve[]
+    /** The window (in years) every plotted cohort actually observed — all curves
+     *  are truncated to it. Disclosed in the caption so a reader knows the
+     *  comparison isn't extrapolated past somebody's follow-up. */
+    horizonYears: number
+}
+
+/** Put KM times on a common scale (years), from whatever unit the source cohort
+ *  reported. Curves here are merged from INDEPENDENTLY built models whose GEO
+ *  metadata may report days, months or years (e.g. a baseline cohort in days
+ *  alongside a treatment cohort in years). Merging them unconverted makes a
+ *  difference in FOLLOW-UP LENGTH look like a difference in outcome — which is
+ *  exactly how a treated cohort ends up drawn below an untreated baseline. */
+export function timesToYears(times: number[], unit?: string | null): number[] {
+    const u = (unit ?? 'days').toLowerCase()
+    const per = u.startsWith('year') ? 1 : u.startsWith('month') ? 12 : 365.25
+    return times.map((t) => t / per)
 }
 
 export type DrugCurveOutcome = 'plottable' | 'insufficient' | 'unavailable' | 'not_checked' | 'building'
@@ -88,9 +104,13 @@ export function topTreatmentCurves(
     cohortKm: Record<string, TreatmentKMEvidence>,
     patientRiskGroup: string | null,
     baseline?: ReferenceKMCurve | null,
+    baselineTimeUnit?: string | null,
 ): TopTreatmentCurves {
     const insufficientN: InsufficientCurve[] = []
-    const curves: KMChartCurve[] = []
+    const pending: KMChartCurve[] = []
+    // Each pending curve's source time unit, tracked in parallel: these come
+    // from independently built models and are NOT guaranteed to agree.
+    const units: string[] = []
     // Color index only advances when a curve is actually pushed below — drugs
     // with no data, still building, not yet checked, or below the min n/events
     // bar must never consume a palette slot, or real curves get pushed further
@@ -105,7 +125,7 @@ export function topTreatmentCurves(
                 insufficientN.push({ drug, nSamples: arm.n_samples, nEvents: arm.n_events })
                 continue
             }
-            curves.push({
+            pending.push({
                 key: drug,
                 label: `${drug} (n=${arm.n_samples}, ${arm.n_events} events, same-cohort)`,
                 times: arm.km_curve.times,
@@ -114,6 +134,8 @@ export function topTreatmentCurves(
                 ci_upper: arm.km_curve.ci_upper,
                 color: TREATMENT_COLORS[colorIdx++ % TREATMENT_COLORS.length],
             })
+            // Tier 1 arms are drawn from the patient's OWN training cohort.
+            units.push(km.time_unit ?? baselineTimeUnit ?? 'days')
             continue
         }
         if (km.tier === 'cohort_reference' && km.reference_km && km.reference_km.length > 0) {
@@ -127,7 +149,7 @@ export function topTreatmentCurves(
                 insufficientN.push({ drug, nSamples: curve.n_samples, nEvents: curve.n_events })
                 continue
             }
-            curves.push({
+            pending.push({
                 key: drug,
                 label: `${drug} (n=${curve.n_samples}, ${curve.n_events} events, different cohort)`,
                 times: curve.times,
@@ -135,11 +157,12 @@ export function topTreatmentCurves(
                 color: TREATMENT_COLORS[colorIdx++ % TREATMENT_COLORS.length],
                 strokeDasharray: '2 3',
             })
+            units.push(km.time_unit ?? 'days')
         }
     }
 
     if (baseline && baseline.times.length > 0) {
-        curves.unshift({
+        pending.unshift({
             key: '__baseline',
             label: 'Your predicted survival (current)',
             times: baseline.times,
@@ -148,9 +171,33 @@ export function topTreatmentCurves(
             strokeWidth: 3,
             strokeDasharray: '8 4',
         })
+        units.unshift(baselineTimeUnit ?? 'days')
     }
 
-    return { curves, insufficientN }
+    if (pending.length === 0) return { curves: [], insufficientN, horizonYears: 0 }
+
+    // 1. Put every curve on one scale. 2. Restrict to the window that EVERY
+    //    plotted cohort actually observed. Without (2), a cohort followed for
+    //    17 years is compared against one followed for 11 months and looks far
+    //    worse purely because it had time to accrue deaths — an artefact of
+    //    follow-up length, not of treatment.
+    const inYears = pending.map((c, i) => ({ ...c, times: timesToYears(c.times, units[i]) }))
+    const horizonYears = Math.min(...inYears.map((c) => Math.max(...c.times)))
+
+    const curves = inYears
+        .map((c) => {
+            const keep = c.times.filter((t) => t <= horizonYears).length
+            return {
+                ...c,
+                times: c.times.slice(0, keep),
+                survival_probabilities: c.survival_probabilities.slice(0, keep),
+                ci_lower: c.ci_lower ? c.ci_lower.slice(0, keep) : c.ci_lower,
+                ci_upper: c.ci_upper ? c.ci_upper.slice(0, keep) : c.ci_upper,
+            }
+        })
+        .filter((c) => c.times.length > 0)
+
+    return { curves, insufficientN, horizonYears }
 }
 
 /** Parse pasted "GENE value" lines (space/comma/colon/tab separated) into a map. */

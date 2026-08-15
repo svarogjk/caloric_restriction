@@ -159,12 +159,30 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
     }
     const displayedDrugKeys = new Set(displayedDrugs.map((d) => d.toLowerCase()))
 
-    const { curves, insufficientN } = topTreatmentCurves(displayedDrugs, cohortKm, riskGroup ?? null, baselineCurve)
+    const { curves, insufficientN, horizonYears } = topTreatmentCurves(
+        displayedDrugs, cohortKm, riskGroup ?? null, baselineCurve, timeUnit,
+    )
     const chartedDrugKeys = new Set(curves.filter((c) => c.key !== '__baseline').map((c) => c.key.toLowerCase()))
     // Sourced straight from `curves` (not a second index pass) so a table dot
     // can never disagree with its chart line color.
     const drugColor: Record<string, string> = {}
     curves.forEach((c) => { if (c.key !== '__baseline') drugColor[c.key.toLowerCase()] = c.color })
+
+    // A drug-name GEO query frequently returns the same generic cancer dataset
+    // no matter which drug was named, so several "different cohort" curves can
+    // be the SAME patients — identical lines that look like corroborating
+    // evidence but are one cohort counted N times. Disclose it rather than
+    // letting the chart imply independent replication.
+    const sharedCohorts = (() => {
+        const byAccession: Record<string, string[]> = {}
+        for (const d of displayedDrugs) {
+            const km = cohortKm[d.toLowerCase()]
+            if (km?.tier === 'cohort_reference' && km.accession) {
+                ;(byAccession[km.accession] ??= []).push(d)
+            }
+        }
+        return Object.entries(byAccession).filter(([, ds]) => ds.length > 1)
+    })()
 
     const buildingDrugs = displayedDrugs.filter((d) => cohortKm[d.toLowerCase()]?.is_building)
     const notCheckedDrugs = displayedDrugs.filter((d) => cohortKm[d.toLowerCase()]?.tier === 'not_checked')
@@ -286,6 +304,17 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                                 alongside your currently predicted survival (bold dashed). Advisory, not a
                                 prescription or a prediction that you will respond.
                             </p>
+                            {horizonYears > 0 && (
+                                <p className="text-[11px] text-gray-500 mb-2">
+                                    <strong>Reading this chart:</strong> all cohorts are shown on a common
+                                    scale and truncated to {horizonYears < 3 ? horizonYears.toFixed(1) : horizonYears.toFixed(0)} years
+                                    — the longest window every plotted cohort actually observed — so a cohort
+                                    with longer follow-up doesn't look worse simply for having had more time to
+                                    accrue events. Dotted curves come from different patient populations than
+                                    your baseline (different stage mix, era and assay), so a gap between them is
+                                    <em> not</em> an estimate of what this treatment would do for you.
+                                </p>
+                            )}
 
                             {buildingDrugs.length > 0 && !pollTimedOut && (
                                 <div className="text-[11px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded p-2 mb-2 flex items-center gap-2">
@@ -303,17 +332,29 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                             )}
 
                             {curves.length > 0 && (
-                                <KaplanMeierChart
-                                    curves={curves}
-                                    height={260}
-                                    timeUnit={timeUnit.toLowerCase().startsWith('month') ? 'months' : 'days'}
-                                />
+                                // `topTreatmentCurves` already normalized every cohort
+                                // onto a shared years scale, so the chart renders years
+                                // directly rather than re-deriving from a source unit.
+                                <KaplanMeierChart curves={curves} height={260} timeUnit="years" />
                             )}
 
                             {curves.length === 0 && buildingDrugs.length === 0 && (
                                 <p className="text-[11px] text-gray-400">
                                     No plottable GEO cohort outcome data yet for the selected drugs.
                                 </p>
+                            )}
+
+                            {sharedCohorts.length > 0 && (
+                                <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 mt-1">
+                                    {sharedCohorts.map(([acc, ds]) => (
+                                        <div key={acc}>
+                                            ⚠ {ds.join(', ')} all resolved to the <strong>same</strong> GEO
+                                            series ({acc}) — the same patients, not {ds.length} independent
+                                            cohorts. Their curves are identical by construction and say nothing
+                                            about how these drugs differ from one another.
+                                        </div>
+                                    ))}
+                                </div>
                             )}
 
                             {insufficientN.length > 0 && (
