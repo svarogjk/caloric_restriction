@@ -57,7 +57,7 @@ NCBI GEO: https://www.ncbi.nlm.nih.gov/geo/
             "Gene Symbol", "Gene ID", "N Datasets", "Avg Hazard Ratio",
             "Avg Cox P-value", "Avg Log-Rank P-value", "Risk Direction Consistency %",
             "Predominant Risk", "Dataset IDs",
-            "I² (%)", "Q Statistic", "p Heterogeneity",
+            "Min FDR-adjusted P-value", "I² (%)", "Q Statistic", "p Heterogeneity",
         ])
         for gene in r.get("common_genes", []):
             het = gene.get("heterogeneity_stats") or {}
@@ -71,6 +71,7 @@ NCBI GEO: https://www.ncbi.nlm.nih.gov/geo/
                 f"{gene.get('risk_direction_consistency', 0) * 100:.1f}",
                 gene.get("predominant_risk", ""),
                 ", ".join(gene.get("datasets", [])),
+                f"{gene.get('min_fdr_adjusted_p_value', ''):.4e}" if gene.get("min_fdr_adjusted_p_value") is not None else "",
                 f"{het.get('i_squared', ''):.1f}" if het.get("i_squared") is not None else "",
                 f"{het.get('q_statistic', ''):.3f}" if het.get("q_statistic") is not None else "",
                 f"{het.get('p_heterogeneity', ''):.4f}" if het.get("p_heterogeneity") is not None else "",
@@ -83,7 +84,8 @@ NCBI GEO: https://www.ncbi.nlm.nih.gov/geo/
         writer.writerow([
             "Gene Symbol", "Gene ID", "Dataset ID", "Dataset Title",
             "Hazard Ratio", "HR CI Lower", "HR CI Upper", "Cox P-value",
-            "Log-Rank P-value", "Risk Direction", "N Samples",
+            "Log-Rank P-value", "FDR-adjusted P-value", "Risk Direction", "N Samples",
+            "Survival Time Unit",
             "Adjusted HR", "Multivariate Cox P-value", "Covariates Used",
         ])
         for gene in r.get("common_genes", []):
@@ -98,8 +100,10 @@ NCBI GEO: https://www.ncbi.nlm.nih.gov/geo/
                     f"{ds.get('hazard_ratio_ci_upper', ''):.4f}" if ds.get("hazard_ratio_ci_upper") else "",
                     f"{ds.get('cox_p_value', ''):.4e}" if ds.get("cox_p_value") else "",
                     f"{ds.get('log_rank_p_value', ''):.4e}" if ds.get("log_rank_p_value") else "",
+                    f"{ds.get('fdr_adjusted_p_value', ''):.4e}" if ds.get("fdr_adjusted_p_value") is not None else "",
                     ds.get("risk_direction", ""),
                     ds.get("n_samples", ""),
+                    ds.get("survival_time_unit", ""),
                     f"{ds.get('adjusted_hazard_ratio', ''):.4f}" if ds.get("adjusted_hazard_ratio") else "",
                     f"{ds.get('multivariate_cox_p', ''):.4e}" if ds.get("multivariate_cox_p") else "",
                     "; ".join(ds.get("covariates_used") or []),

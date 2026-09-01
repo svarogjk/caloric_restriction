@@ -60,6 +60,15 @@ export interface GeneDatasetResult {
     median_survival_low: number | null
     km_curve_high: KMCurveData | null
     km_curve_low: KMCurveData | null
+    /** Unit the raw `times` in km_curve_* are expressed in — detected per cohort
+     *  and never rescaled server-side. Absent on results saved before this field
+     *  existed; fall back to 'days', which is what timesToYears() assumes. */
+    survival_time_unit?: 'days' | 'months' | 'years' | null
+    /** Benjamini-Hochberg adjusted p across the genes tested IN THIS RUN. When
+     *  `AnalysisDiagnostics.gene_filter_applied` is true the tested set was
+     *  restricted, so this is NOT a multiple-testing correction — see
+     *  pValueLabel() in utils/analysisSummary.ts. */
+    fdr_adjusted_p_value?: number | null
     // Multivariate (clinically-adjusted) Cox results (F16)
     adjusted_hazard_ratio?: number | null
     multivariate_cox_p?: number | null
@@ -79,6 +88,13 @@ export interface TreatmentArmResult {
     n_events: number
 }
 
+export interface HeterogeneityStats {
+    q_statistic?: number | null
+    i_squared?: number | null
+    p_heterogeneity?: number | null
+    tau_squared?: number | null
+}
+
 export interface GeneSurvivalResponse {
     gene_id: string
     gene_symbol: string | null
@@ -90,10 +106,31 @@ export interface GeneSurvivalResponse {
     risk_direction_consistency: number
     datasets: string[]
     per_dataset_results: GeneDatasetResult[] | null
+    /** Cochran Q / I² / tau² across this gene's cohorts (F16). Uninterpretable
+     *  below ~3 datasets — gate display on n_datasets >= 3. */
+    heterogeneity_stats?: HeterogeneityStats | null
+    /** Smallest FDR-adjusted p across this gene's cohorts. Same labelling caveat
+     *  as GeneDatasetResult.fdr_adjusted_p_value. */
+    min_fdr_adjusted_p_value?: number | null
     // Predictive (treatment-effect-modifying) cross-cohort summary (F16b)
     is_predictive?: boolean
     n_predictive_datasets?: number
     min_interaction_p_value?: number | null
+}
+
+export interface AnalysisDiagnostics {
+    datasets_analyzed: number
+    datasets_with_genes: number
+    cancer_filter_enabled?: boolean
+    min_occurrence_threshold?: number
+    reason?: string | null
+    /** How many genes were actually tested. With a gene filter this can be 1,
+     *  in which case Benjamini-Hochberg is a no-op and the "FDR" value equals
+     *  the nominal p. */
+    n_genes_tested?: number | null
+    /** True when a candidate-gene list restricted the tested set. Drives whether
+     *  a p-value may be called FDR-adjusted. */
+    gene_filter_applied?: boolean
 }
 
 export interface SurvivalAnalysisResponse {
@@ -104,6 +141,10 @@ export interface SurvivalAnalysisResponse {
     processing_time: number
     timestamp: string
     result_id?: string | null
+    ranking_quality_score?: number
+    ranking_recommendations?: string
+    diagnostics?: AnalysisDiagnostics | null
+    cancer_genes_only?: boolean
 }
 
 export interface AnalysisProgressEvent {
@@ -303,9 +344,19 @@ export interface GalleryCancer {
     cached_at: string | null
 }
 
-export async function getGallery(): Promise<GalleryCancer[]> {
-    const response = await axios.get<{ cancers: GalleryCancer[] }>('/api/gallery')
-    return response.data.cancers
+export interface ScoringThresholds {
+    qn_min_genes: number
+    low_coverage_frac: number
+}
+
+export interface GalleryResponse {
+    cancers: GalleryCancer[]
+    scoring_thresholds: ScoringThresholds
+}
+
+export async function getGallery(): Promise<GalleryResponse> {
+    const response = await axios.get<GalleryResponse>('/api/gallery')
+    return response.data
 }
 
 // ==================== Prognostic Signature (F17/F18/F19/F23) ====================

@@ -10,7 +10,7 @@ import re
 import uuid
 from collections import OrderedDict
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -110,6 +110,62 @@ class UserSettings(BaseModel):
     num_datasets: int = 10
     ranking_multiplier: float = 3.0
     candidate_genes: Optional[list[str]] = None
+    # Hazard-ratio gates. A gene must clear one of these to count as significant,
+    # ON TOP of the p-value threshold — so the agent must know them, or it will
+    # promise "every gene with p<0.05" while the run returns far fewer.
+    hazard_ratio_upper: Optional[float] = Field(default=None, ge=1.0, le=20.0)
+    hazard_ratio_lower: Optional[float] = Field(default=None, ge=0.01, le=1.0)
+
+
+class ResearchContext(BaseModel):
+    """Session state that is NOT about a patient: whether an analysis is running,
+    what the last one produced, and how far along the research workflow is.
+
+    Deliberately a sibling of PatientContext rather than more fields on it —
+    PatientContext is a privacy contract with its own validation tests, and its
+    MISSING ladder assumes a patient exists. This one applies with no data
+    loaded at all, which is the whole point."""
+
+    has_patient_chart: bool = False
+    expression_genes_pasted: Optional[int] = Field(default=None, ge=0)
+    analysis_running: bool = False
+    analysis_result_id: Optional[str] = Field(default=None, max_length=64)
+    analysis_query: Optional[str] = Field(default=None, max_length=200)
+    analysis_model_id: Optional[str] = Field(default=None, max_length=64)
+    analysis_n_genes: Optional[int] = Field(default=None, ge=0)
+    analysis_n_datasets: Optional[int] = Field(default=None, ge=0)
+    analysis_n_predictive_genes: Optional[int] = Field(default=None, ge=0)
+    analysis_gene_filter_applied: bool = False
+    analysis_top_genes: list[str] = Field(default_factory=list, max_length=8)
+    treatment_evidence_shown: bool = False
+
+
+class PatientContext(BaseModel):
+    """De-identified snapshot of the clinical console's current chart, forwarded
+    per-request into the agent's system prompt so it can orchestrate the workflow.
+
+    Contains NO identifiers: no name, MRN, DOB, free text, raw expression values,
+    or clinical covariate values — gene SYMBOLS and covariate NAMES only. Never
+    persisted; the agent tools in console_actions.py read it via ctx.deps."""
+
+    cancer_type: Optional[str] = Field(default=None, max_length=64)
+    model_id: Optional[str] = Field(default=None, max_length=64)
+    model_is_demo: bool = False
+    # Genes currently parsed from the pasted tumour profile, whether or not the
+    # patient has been scored yet — lets score_patient refuse a call with no data.
+    genes_provided: Optional[int] = Field(default=None, ge=0)
+    risk_group: Optional[Literal["low", "intermediate", "high"]] = None
+    risk_percentile: Optional[float] = Field(default=None, ge=0, le=100)
+    genes_used: Optional[int] = Field(default=None, ge=0)
+    genes_total: Optional[int] = Field(default=None, ge=0)
+    pooled_c_index: Optional[float] = Field(default=None, ge=0, le=1)
+    c_index_combined: Optional[float] = Field(default=None, ge=0, le=1)
+    delta_c_index: Optional[float] = None
+    scored_on: Optional[str] = Field(default=None, max_length=64)
+    top_risk_genes: list[str] = Field(default_factory=list, max_length=8)
+    top_protective_genes: list[str] = Field(default_factory=list, max_length=8)
+    clinical_covariate_names: list[str] = Field(default_factory=list, max_length=12)
+    warnings: list[str] = Field(default_factory=list, max_length=6)
 
 
 class SendMessageRequest(BaseModel):
@@ -119,6 +175,8 @@ class SendMessageRequest(BaseModel):
     model: str = Field(default="mistral-large", pattern="^(mistral|mistral-large|anthropic|claude)$")
     stream: bool = False
     user_settings: Optional[UserSettings] = None
+    patient_context: Optional[PatientContext] = None
+    research_context: Optional[ResearchContext] = None
 
 
 class MessageResponse(BaseModel):
@@ -132,6 +190,7 @@ class MessageResponse(BaseModel):
     estimation: Optional[dict] = None
     suggested_actions: list[str] = []
     domain_score: Optional[int] = None
+    actions: list[dict] = []
 
 
 class ConversationResponse(BaseModel):
@@ -317,6 +376,8 @@ async def send_message(
         model = "anthropic"
 
     user_settings_dict = request.user_settings.model_dump() if request.user_settings else None
+    patient_context_dict = request.patient_context.model_dump(exclude_none=True) if request.patient_context else None
+    research_context_dict = request.research_context.model_dump(exclude_none=True) if request.research_context else None
     user_id = current_user.id if current_user else None
 
     if request.stream:
@@ -330,6 +391,8 @@ async def send_message(
                 model=model,
                 user_settings=user_settings_dict,
                 user_id=user_id,
+                patient_context=patient_context_dict,
+                research_context=research_context_dict,
                 result_sink=stream_sink,
             ):
                 full_content += chunk
@@ -338,6 +401,15 @@ async def send_message(
             estimation_for_actions = stream_sink.get("estimation")
             suggested_actions = chat_service._extract_actions(full_content, estimation=estimation_for_actions)
             domain_score = stream_sink.get("domain_score", 0)
+
+            # Console action intents recorded by console_actions.py tools this
+            # turn (e.g. "score the patient", "load the TNBC case"). The client
+            # re-validates and executes each one — the agent never touches
+            # patient data directly. Emitted before message_complete so the
+            # intake card / readout appears alongside the assistant's text.
+            actions = stream_sink.get("actions", [])
+            if actions:
+                yield f"data: {json.dumps({'type': 'actions', 'actions': actions})}\n\n"
 
             yield f"data: {json.dumps({'type': 'message_complete', 'message': {'message_id': str(uuid.uuid4()), 'role': 'assistant', 'content': full_content, 'created_at': datetime.utcnow().isoformat(), 'model_used': model, 'suggested_actions': suggested_actions, 'domain_score': domain_score}})}\n\n"
             yield "data: [DONE]\n\n"
@@ -354,6 +426,8 @@ async def send_message(
         model=model,
         user_settings=user_settings_dict,
         user_id=user_id,
+        patient_context=patient_context_dict,
+        research_context=research_context_dict,
     )
 
     return MessageResponse(
@@ -365,6 +439,7 @@ async def send_message(
         estimation=response.estimation,
         suggested_actions=response.suggested_actions,
         domain_score=response.domain_score,
+        actions=response.actions,
     )
 
 

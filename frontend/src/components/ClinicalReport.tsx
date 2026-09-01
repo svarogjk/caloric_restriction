@@ -18,7 +18,7 @@ const ClinicalReport: React.FC<ClinicalReportProps> = ({ results }) => {
     const generated = new Date().toLocaleString()
 
     return (
-        <div className="print-report">
+        <div className="print-report" data-theme="light">
             <div style={{ borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 12 }}>
                 <h1 style={{ fontSize: '18pt', fontWeight: 700, margin: 0 }}>
                     Predictive Evidence Report

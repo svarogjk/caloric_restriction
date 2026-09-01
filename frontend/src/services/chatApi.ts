@@ -74,6 +74,65 @@ export interface UserSettings {
     num_datasets: number
     ranking_multiplier: number
     candidate_genes: string[] | null
+    /** A gene must clear one of these to be reported, on top of the p-value
+     *  threshold. Sent so the agent stops promising results the gates exclude. */
+    hazard_ratio_upper?: number
+    hazard_ratio_lower?: number
+}
+
+/**
+ * Session state that is NOT about a patient — mirrors ResearchContext in
+ * backend/app/api/chat_routes.py. Kept separate from PatientContextPayload so
+ * that model's privacy contract stays exactly what it claims to be. Always sent,
+ * including when nothing is loaded: "no data yet" is itself what the agent needs
+ * to know to drive the next step.
+ */
+export interface ResearchContextPayload {
+    has_patient_chart: boolean
+    expression_genes_pasted?: number | null
+    analysis_running: boolean
+    analysis_result_id?: string | null
+    analysis_query?: string | null
+    analysis_model_id?: string | null
+    analysis_n_genes?: number | null
+    analysis_n_datasets?: number | null
+    analysis_n_predictive_genes?: number | null
+    analysis_gene_filter_applied?: boolean
+    analysis_top_genes?: string[]
+    treatment_evidence_shown?: boolean
+}
+
+/**
+ * De-identified snapshot of the clinical console's current chart, mirroring
+ * PatientContext in backend/app/api/chat_routes.py. Gene SYMBOLS and covariate
+ * NAMES only — never an expression value, never a covariate value, never an
+ * identifier. Forwarded per-request so the agent can orchestrate the workflow;
+ * never persisted.
+ */
+export interface PatientContextPayload {
+    cancer_type?: string | null
+    model_id?: string | null
+    model_is_demo?: boolean
+    genes_provided?: number | null
+    risk_group?: 'low' | 'intermediate' | 'high' | null
+    risk_percentile?: number | null
+    genes_used?: number | null
+    genes_total?: number | null
+    pooled_c_index?: number | null
+    c_index_combined?: number | null
+    delta_c_index?: number | null
+    scored_on?: string | null
+    top_risk_genes?: string[]
+    top_protective_genes?: string[]
+    clinical_covariate_names?: string[]
+    warnings?: string[]
+}
+
+/** A workflow intent recorded by a console_actions.py tool. The browser
+ *  re-validates preconditions and executes it — see hooks/useConsoleActions.ts. */
+export interface ConsoleAction {
+    action: string
+    [key: string]: unknown
 }
 
 export interface MessageResponse {
@@ -93,6 +152,8 @@ export interface MessageResponse {
     }
     suggestedActions?: string[]
     domainScore?: number
+    /** Console workflow intents — present only when a patientContext was sent. */
+    actions?: ConsoleAction[]
 }
 
 export interface ConversationResponse {
@@ -182,6 +243,7 @@ export const chatApi = {
         conversationId: string,
         content: string,
         model: string = 'mistral-large',
+        patientContext: PatientContextPayload | null = null,
     ): Promise<MessageResponse> {
         const response = await chatClient.post(
             `/conversations/${conversationId}/messages`,
@@ -189,6 +251,7 @@ export const chatApi = {
                 content,
                 model,
                 stream: false,
+                patient_context: patientContext,
             }
         )
 
@@ -225,6 +288,7 @@ export const chatApi = {
                 } : undefined,
             } : undefined,
             suggestedActions: data.suggested_actions,
+            actions: data.actions,
         }
     },
 
@@ -291,6 +355,9 @@ export async function sendMessageStream(
     onToken: (token: string) => void,
     onComplete: (message: MessageResponse) => void,
     onError: (error: string) => void,
+    patientContext: PatientContextPayload | null = null,
+    onActions?: (actions: ConsoleAction[]) => void,
+    researchContext: ResearchContextPayload | null = null,
 ): Promise<void> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (token) headers['Authorization'] = `Bearer ${token}`
@@ -298,7 +365,12 @@ export async function sendMessageStream(
     const response = await fetch(`/api/chat/conversations/${conversationId}/messages?stream=true`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ content, model, stream: true, user_settings: userSettings }),
+        body: JSON.stringify({
+            content, model, stream: true,
+            user_settings: userSettings,
+            patient_context: patientContext,
+            research_context: researchContext,
+        }),
     })
 
     if (!response.ok) {
@@ -333,6 +405,8 @@ export async function sendMessageStream(
 
                 if (parsed['type'] === 'token' && parsed['content']) {
                     onToken(parsed['content'] as string)
+                } else if (parsed['type'] === 'actions' && parsed['actions']) {
+                    onActions?.(parsed['actions'] as ConsoleAction[])
                 } else if (parsed['type'] === 'message_complete' && parsed['message']) {
                     const msg = parsed['message'] as {
                         message_id: string

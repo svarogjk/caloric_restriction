@@ -35,8 +35,8 @@ const AnalysisProgress: React.FC<AnalysisProgressProps> = ({ progress }) => {
             : 0
 
     return (
-        <div className="mx-4 mt-2 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
-            <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide mb-3">
+        <div className="mx-4 mt-2 p-4 bg-accent-soft border border-border-accent rounded-lg">
+            <p className="text-xs font-semibold text-accent-fg uppercase tracking-wide mb-3">
                 Analysis Progress
             </p>
 
@@ -50,10 +50,10 @@ const AnalysisProgress: React.FC<AnalysisProgressProps> = ({ progress }) => {
                             <span
                                 className={`flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
                                     done
-                                        ? 'bg-green-500 text-white'
+                                        ? 'bg-ok text-on-accent'
                                         : active
-                                        ? 'bg-indigo-600 text-white animate-pulse'
-                                        : 'bg-gray-200 text-gray-400'
+                                        ? 'bg-accent text-on-accent animate-pulse'
+                                        : 'bg-surface-hover text-fg-faint'
                                 }`}
                             >
                                 {done ? (
@@ -69,10 +69,10 @@ const AnalysisProgress: React.FC<AnalysisProgressProps> = ({ progress }) => {
                             <span
                                 className={`text-sm ${
                                     done
-                                        ? 'text-green-700 line-through'
+                                        ? 'text-ok line-through'
                                         : active
-                                        ? 'text-indigo-800 font-medium'
-                                        : 'text-gray-400'
+                                        ? 'text-accent-fg font-medium'
+                                        : 'text-fg-faint'
                                 }`}
                             >
                                 {s.label}
@@ -83,18 +83,18 @@ const AnalysisProgress: React.FC<AnalysisProgressProps> = ({ progress }) => {
             </ol>
 
             {/* Current message */}
-            <p className="mt-3 text-sm text-indigo-700">{progress.message}</p>
+            <p className="mt-3 text-sm text-accent-fg">{progress.message}</p>
 
             {/* Progress bar for dataset loading */}
             {showProgressBar && (
                 <div className="mt-2">
-                    <div className="flex justify-between text-xs text-indigo-600 mb-1">
+                    <div className="flex justify-between text-xs text-accent-fg mb-1">
                         <span>{progress.current ?? 0} / {progress.total} datasets loaded</span>
                         <span>{pct}%</span>
                     </div>
-                    <div className="w-full bg-indigo-100 rounded-full h-2">
+                    <div className="w-full bg-accent-soft rounded-full h-2">
                         <div
-                            className="bg-indigo-500 h-2 rounded-full transition-all duration-300"
+                            className="bg-accent h-2 rounded-full transition-all duration-300"
                             style={{ width: `${pct}%` }}
                         />
                     </div>

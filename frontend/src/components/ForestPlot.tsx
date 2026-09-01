@@ -1,5 +1,5 @@
 import React from 'react'
-import { HeterogeneityStats } from '../store/chatSlice'
+import { HeterogeneityStats } from '../services/api'
 
 interface DatasetPoint {
   dataset_id: string
@@ -52,18 +52,24 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
   const xTicks = [0.25, 0.5, 1.0, 2.0, 4.0]
 
   return (
-    <div className="overflow-x-auto">
-      <h3 className="text-sm font-semibold text-gray-700 mb-2">
+    <div className="overflow-x-auto max-w-[680px] mx-auto">
+      <h3 className="text-sm font-semibold text-fg mb-2">
         {geneName} — Per-Dataset Hazard Ratios
       </h3>
-      <svg width={svgWidth} height={svgHeight} className="font-mono text-xs">
+      <svg
+        width="100%"
+        height={svgHeight}
+        viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+        preserveAspectRatio="xMidYMid meet"
+        className="font-mono text-xs"
+      >
         {/* Column headers */}
         <text
           x={plotLeft + plotWidth / 2}
           y={18}
           textAnchor="middle"
           fontSize={11}
-          fill="#6b7280"
+          fill="var(--color-chart-axis)"
           fontFamily="sans-serif"
         >
           Hazard Ratio (95% CI)
@@ -73,7 +79,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
           y={18}
           textAnchor="middle"
           fontSize={11}
-          fill="#6b7280"
+          fill="var(--color-chart-axis)"
           fontFamily="sans-serif"
         >
           HR [95% CI]
@@ -85,7 +91,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
           y1={headerHeight}
           x2={nullX}
           y2={headerHeight + (datasets.length + 1) * rowHeight}
-          stroke="#9ca3af"
+          stroke="var(--color-chart-label)"
           strokeWidth={1}
           strokeDasharray="4 3"
         />
@@ -98,7 +104,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
               y1={headerHeight + (datasets.length + 1) * rowHeight}
               x2={hrToX(tick)}
               y2={headerHeight + (datasets.length + 1) * rowHeight + 5}
-              stroke="#9ca3af"
+              stroke="var(--color-chart-label)"
               strokeWidth={1}
             />
             <text
@@ -106,7 +112,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
               y={headerHeight + (datasets.length + 1) * rowHeight + 16}
               textAnchor="middle"
               fontSize={10}
-              fill="#6b7280"
+              fill="var(--color-chart-axis)"
               fontFamily="sans-serif"
             >
               {tick}
@@ -120,7 +126,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
           y1={headerHeight + (datasets.length + 1) * rowHeight}
           x2={plotRight}
           y2={headerHeight + (datasets.length + 1) * rowHeight}
-          stroke="#9ca3af"
+          stroke="var(--color-chart-label)"
           strokeWidth={1}
         />
 
@@ -141,7 +147,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
                 y={y + 4}
                 textAnchor="end"
                 fontSize={10}
-                fill="#374151"
+                fill="var(--color-fg)"
                 fontFamily="sans-serif"
               >
                 {ds.dataset_id.length > 22
@@ -192,7 +198,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
                 y={y + 4}
                 textAnchor="end"
                 fontSize={10}
-                fill="#374151"
+                fill="var(--color-fg)"
                 fontFamily="monospace"
               >
                 {ds.hazard_ratio.toFixed(2)} [{ds.hazard_ratio_ci_lower.toFixed(2)}
@@ -217,7 +223,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
                 y1={pooledY - 1}
                 x2={plotRight}
                 y2={pooledY - 1}
-                stroke="#e5e7eb"
+                stroke="var(--color-chart-grid)"
                 strokeWidth={1}
               />
               <text
@@ -225,7 +231,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
                 y={pooledY + 4}
                 textAnchor="end"
                 fontSize={10}
-                fill="#374151"
+                fill="var(--color-fg)"
                 fontWeight="bold"
                 fontFamily="sans-serif"
               >
@@ -233,14 +239,14 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
               </text>
               <polygon
                 points={`${pooledX},${pooledY - diamondH} ${pooledX + diamondW},${pooledY} ${pooledX},${pooledY + diamondH} ${pooledX - diamondW},${pooledY}`}
-                fill="#7c3aed"
+                fill="var(--color-alt)"
               />
               <text
                 x={svgWidth - 10}
                 y={pooledY + 4}
                 textAnchor="end"
                 fontSize={10}
-                fill="#374151"
+                fill="var(--color-fg)"
                 fontWeight="bold"
                 fontFamily="monospace"
               >
@@ -256,7 +262,7 @@ export const ForestPlot: React.FC<ForestPlotProps> = ({
             x={plotLeft}
             y={headerHeight + (datasets.length + 1) * rowHeight + 38}
             fontSize={10}
-            fill="#6b7280"
+            fill="var(--color-chart-axis)"
             fontFamily="sans-serif"
           >
             {`Heterogeneity: I\u00B2 = ${heterogeneityStats.i_squared != null ? heterogeneityStats.i_squared.toFixed(1) : '\u2014'}%,  Q = ${heterogeneityStats.q_statistic != null ? heterogeneityStats.q_statistic.toFixed(2) : '\u2014'},  p = ${heterogeneityStats.p_heterogeneity != null ? heterogeneityStats.p_heterogeneity.toFixed(3) : '\u2014'}`}

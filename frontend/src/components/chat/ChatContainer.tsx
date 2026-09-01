@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { RootState, AppDispatch } from '../../store/store'
 import {
@@ -55,6 +55,14 @@ const ChatContainer: React.FC = () => {
 
     const [settingsOpen, setSettingsOpen] = useState(false)
     const [inputValue, setInputValue] = useState('')
+    const chatInputRef = useRef<HTMLTextAreaElement>(null)
+
+    const handleFocusInput = () => {
+        setTimeout(() => {
+            const input = chatInputRef.current
+            if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length) }
+        }, 50)
+    }
 
     // Fetch conversations on mount
     useEffect(() => {
@@ -126,7 +134,7 @@ const ChatContainer: React.FC = () => {
     }
 
     return (
-        <div className="flex h-full bg-gray-100">
+        <div className="flex h-full bg-surface-sunken">
             {/* Sidebar */}
             {sidebarOpen && (
                 <ConversationList
@@ -139,10 +147,10 @@ const ChatContainer: React.FC = () => {
             )}
 
             {/* Main Chat Area */}
-            <div className="flex-1 flex flex-col bg-white">
+            <div className="flex-1 flex flex-col bg-surface">
                 {/* Header */}
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-                    <h2 className="text-lg font-semibold text-gray-800">
+                <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+                    <h2 className="text-lg font-semibold text-fg-strong">
                         GEO Survival Analysis
                     </h2>
                     <div className="flex items-center gap-3">
@@ -151,8 +159,8 @@ const ChatContainer: React.FC = () => {
                             onClick={() => setSettingsOpen(!settingsOpen)}
                             className={`p-2 rounded-md transition-colors ${
                                 settingsOpen
-                                    ? 'bg-indigo-100 text-indigo-600'
-                                    : 'text-gray-500 hover:bg-gray-100'
+                                    ? 'bg-accent-soft text-accent-fg'
+                                    : 'text-fg-muted hover:bg-surface-sunken'
                             }`}
                             title="Analysis Settings"
                         >
@@ -166,7 +174,7 @@ const ChatContainer: React.FC = () => {
                         <select
                             value={selectedModel}
                             onChange={(e) => handleModelChange(e.target.value as 'mistral' | 'mistral-large' | 'anthropic')}
-                            className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                            className="px-3 py-1.5 text-sm border border-border-strong rounded-md focus:outline-none focus:ring-2 focus:ring-accent-ring"
                         >
                             <option value="mistral-large">mistral-large-latest</option>
                             <option value="mistral">mistral-small-latest</option>
@@ -177,17 +185,17 @@ const ChatContainer: React.FC = () => {
 
                 {/* Settings Panel */}
                 {settingsOpen && (
-                    <div className="px-4 py-3 bg-gray-50 border-b border-gray-200">
+                    <div className="px-4 py-3 bg-surface-sunken border-b border-border">
                         <div className="flex flex-wrap items-center gap-4">
                             {/* Dataset Count */}
                             <div className="flex items-center gap-2">
-                                <label className="text-sm font-medium text-gray-700">
+                                <label className="text-sm font-medium text-fg">
                                     Datasets:
                                 </label>
                                 <select
                                     value={datasetCount}
                                     onChange={(e) => dispatch(setDatasetCount(Number(e.target.value)))}
-                                    className="px-2 py-1 text-sm border border-gray-300 rounded-md bg-white"
+                                    className="px-2 py-1 text-sm border border-border-strong rounded-md bg-surface"
                                 >
                                     <option value={10}>10</option>
                                     <option value={20}>20</option>
@@ -200,7 +208,7 @@ const ChatContainer: React.FC = () => {
 
                             {/* Ranking Multiplier */}
                             <div className="flex items-center gap-2">
-                                <label className="text-sm font-medium text-gray-700">
+                                <label className="text-sm font-medium text-fg">
                                     Ranking:
                                 </label>
                                 <input
@@ -211,18 +219,18 @@ const ChatContainer: React.FC = () => {
                                     onChange={(e) => dispatch(setRankingMultiplier(Number(e.target.value)))}
                                     className="w-20"
                                 />
-                                <span className="text-sm text-gray-600 w-8">{rankingMultiplier}x</span>
+                                <span className="text-sm text-fg-muted w-8">{rankingMultiplier}x</span>
                             </div>
 
                             {/* Organism */}
                             <div className="flex items-center gap-2">
-                                <label className="text-sm font-medium text-gray-700">
+                                <label className="text-sm font-medium text-fg">
                                     Organism:
                                 </label>
                                 <select
                                     value={organism || ''}
                                     onChange={(e) => dispatch(setOrganism(e.target.value || null))}
-                                    className="px-2 py-1 text-sm border border-gray-300 rounded-md bg-white"
+                                    className="px-2 py-1 text-sm border border-border-strong rounded-md bg-surface"
                                 >
                                     <option value="">Any</option>
                                     <option value="Homo sapiens">Human</option>
@@ -237,19 +245,19 @@ const ChatContainer: React.FC = () => {
                                     id="chat-cancer-genes-only"
                                     checked={cancerGenesOnly}
                                     onChange={(e) => dispatch(setCancerGenesOnly(e.target.checked))}
-                                    className="w-4 h-4 text-purple-600 border-gray-300 rounded cursor-pointer"
+                                    className="w-4 h-4 text-alt border-border-strong rounded cursor-pointer"
                                 />
-                                <label htmlFor="chat-cancer-genes-only" className="text-sm font-medium text-gray-700 cursor-pointer">
+                                <label htmlFor="chat-cancer-genes-only" className="text-sm font-medium text-fg cursor-pointer">
                                     Cancer genes only (~600)
                                 </label>
                             </div>
                         </div>
 
                         {/* Significance Thresholds */}
-                        <div className="mt-3 p-3 rounded-lg border border-gray-200 bg-white">
+                        <div className="mt-3 p-3 rounded-lg border border-border bg-surface">
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-sm font-medium text-gray-700">Significance thresholds</span>
-                                <span className="text-xs font-mono text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-0.5">
+                                <span className="text-sm font-medium text-fg">Significance thresholds</span>
+                                <span className="text-xs font-mono text-fg-muted bg-surface-sunken border border-border rounded px-2 py-0.5">
                                     HR ≥ {hazardRatioUpper.toFixed(2)} or HR ≤ {hazardRatioLower.toFixed(2)}
                                 </span>
                             </div>
@@ -257,10 +265,10 @@ const ChatContainer: React.FC = () => {
                                 {/* Risk threshold (upper) */}
                                 <div>
                                     <div className="flex items-center justify-between mb-1">
-                                        <label htmlFor="chat-hr-upper" className="text-xs font-medium text-rose-700">
+                                        <label htmlFor="chat-hr-upper" className="text-xs font-medium text-danger">
                                             Risk gate (HR ≥)
                                         </label>
-                                        <span className="text-xs font-mono text-rose-700 bg-rose-50 border border-rose-100 rounded px-1.5 py-0.5">
+                                        <span className="text-xs font-mono text-danger bg-danger-soft border border-danger-border rounded px-1.5 py-0.5">
                                             {hazardRatioUpper.toFixed(2)}
                                         </span>
                                     </div>
@@ -274,7 +282,7 @@ const ChatContainer: React.FC = () => {
                                         onChange={(e) => dispatch(setHazardRatioUpper(Number(e.target.value)))}
                                         className="w-full accent-rose-600 cursor-pointer"
                                     />
-                                    <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+                                    <div className="flex justify-between text-[10px] text-fg-faint mt-0.5">
                                         <span>1.05 (loose)</span>
                                         <span>3.00 (strict)</span>
                                     </div>
@@ -283,10 +291,10 @@ const ChatContainer: React.FC = () => {
                                 {/* Protective threshold (lower) */}
                                 <div>
                                     <div className="flex items-center justify-between mb-1">
-                                        <label htmlFor="chat-hr-lower" className="text-xs font-medium text-emerald-700">
+                                        <label htmlFor="chat-hr-lower" className="text-xs font-medium text-ok">
                                             Protective gate (HR ≤)
                                         </label>
-                                        <span className="text-xs font-mono text-emerald-700 bg-emerald-50 border border-emerald-100 rounded px-1.5 py-0.5">
+                                        <span className="text-xs font-mono text-ok bg-ok-soft border border-ok-border rounded px-1.5 py-0.5">
                                             {hazardRatioLower.toFixed(2)}
                                         </span>
                                     </div>
@@ -300,13 +308,13 @@ const ChatContainer: React.FC = () => {
                                         onChange={(e) => dispatch(setHazardRatioLower(Number(e.target.value)))}
                                         className="w-full accent-emerald-600 cursor-pointer"
                                     />
-                                    <div className="flex justify-between text-[10px] text-gray-400 mt-0.5">
+                                    <div className="flex justify-between text-[10px] text-fg-faint mt-0.5">
                                         <span>0.30 (strict)</span>
                                         <span>0.95 (loose)</span>
                                     </div>
                                 </div>
                             </div>
-                            <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                            <p className="text-[11px] text-fg-faint mt-2 leading-relaxed">
                                 A gene counts as significant when its hazard ratio clears one of these gates
                                 (and p &lt; 0.05). Looser gates surface more candidates — including more
                                 treatment-effect-modifying (predictive) genes — but take longer to compute
@@ -316,7 +324,7 @@ const ChatContainer: React.FC = () => {
 
                         {/* Candidate Genes Batch Mode */}
                         <div className="mt-3">
-                            <label htmlFor="chat-gene-filter" className="text-sm font-medium text-gray-700 block mb-1">
+                            <label htmlFor="chat-gene-filter" className="text-sm font-medium text-fg block mb-1">
                                 Candidate Genes (optional batch mode)
                             </label>
                             <textarea
@@ -325,16 +333,16 @@ const ChatContainer: React.FC = () => {
                                 onChange={(e) => dispatch(setGeneFilterInput(e.target.value))}
                                 placeholder={"TP53\nBRCA1\nMYC\nEGFR\nPIK3CA\n(one per line or comma-separated)"}
                                 rows={4}
-                                className="w-full px-2 py-1 text-sm border border-gray-300 rounded-md bg-white resize-y font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                className="w-full px-2 py-1 text-sm border border-border-strong rounded-md bg-surface resize-y font-mono focus:outline-none focus:ring-2 focus:ring-accent-ring"
                             />
                             {geneFilterInput.trim() && (
-                                <p className="text-xs text-indigo-600 mt-1">
+                                <p className="text-xs text-accent-fg mt-1">
                                     {geneFilterInput.split(/[\n,]+/).map((g) => g.trim()).filter((g) => g.length > 0).length} genes selected — analysis restricted to these candidates
                                 </p>
                             )}
                         </div>
 
-                        <p className="text-xs text-gray-500 mt-2">
+                        <p className="text-xs text-fg-muted mt-2">
                             These settings affect survival analysis when running queries.
                         </p>
                     </div>
@@ -352,8 +360,8 @@ const ChatContainer: React.FC = () => {
 
                 {/* Error Banner */}
                 {(error || analysisError) && (
-                    <div className="mx-4 mt-2 p-3 bg-red-50 border border-red-200 rounded-lg">
-                        <p className="text-sm text-red-700">{error || analysisError}</p>
+                    <div className="mx-4 mt-2 p-3 bg-danger-soft border border-danger-border rounded-lg">
+                        <p className="text-sm text-danger">{error || analysisError}</p>
                     </div>
                 )}
 
@@ -362,15 +370,15 @@ const ChatContainer: React.FC = () => {
                     analysisProgress ? (
                         <AnalysisProgress progress={analysisProgress} />
                     ) : (
-                        <div className="mx-4 mt-2 p-4 bg-indigo-50 border border-indigo-200 rounded-lg">
+                        <div className="mx-4 mt-2 p-4 bg-accent-soft border border-border-accent rounded-lg">
                             <div className="flex items-center gap-3">
-                                <svg className="animate-spin h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24">
+                                <svg className="animate-spin h-5 w-5 text-accent-fg" fill="none" viewBox="0 0 24 24">
                                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                                 </svg>
                                 <div>
-                                    <p className="text-sm font-medium text-indigo-800">Starting analysis...</p>
-                                    <p className="text-xs text-indigo-600">Connecting to analysis stream.</p>
+                                    <p className="text-sm font-medium text-accent-fg">Starting analysis...</p>
+                                    <p className="text-xs text-accent-fg">Connecting to analysis stream.</p>
                                 </div>
                             </div>
                         </div>
@@ -396,11 +404,14 @@ const ChatContainer: React.FC = () => {
                     onRunAnalysis={handleRunAnalysis}
                     onModifyQuery={handleModifyQuery}
                     onExampleClick={handleSendMessage}
+                    onFocusInput={handleFocusInput}
+                    inputValue={inputValue}
                     className="flex-1 overflow-y-auto"
                 />
 
                 {/* Input */}
                 <ChatInput
+                    ref={chatInputRef}
                     onSend={handleSendMessage}
                     disabled={isLoading || isStreaming || analysisLoading}
                     placeholder="Ask about survival analysis, genes, or GEO datasets..."

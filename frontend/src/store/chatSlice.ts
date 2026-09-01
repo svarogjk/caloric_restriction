@@ -1,88 +1,22 @@
 import { createSlice, createAsyncThunk, PayloadAction } from '@reduxjs/toolkit'
-import { chatApi, sendMessageStream, ConversationListItem, UserSettings } from '../services/chatApi'
+import { chatApi, sendMessageStream, ConversationListItem, UserSettings, PatientContextPayload, ResearchContextPayload, ConsoleAction } from '../services/chatApi'
 import { getStoredToken } from '../services/authApi'
-import { streamAnalysis, SurvivalAnalysisResponse, listAnalysisResults, AnalysisHistoryItem } from '../services/api'
+import {
+    streamAnalysis, listAnalysisResults,
+    type SurvivalAnalysisResponse, type SurvivalAnalysisResponse as AnalysisResult,
+    type AnalysisHistoryItem,
+} from '../services/api'
 
 // ==================== Types ====================
 
-export interface KMCurveData {
-    times: number[]
-    survival_probabilities: number[]
-    ci_lower: number[] | null
-    ci_upper: number[] | null
-    n_samples: number
-    n_events: number
-}
-
-export interface GeneDatasetResult {
-    dataset_id: string
-    dataset_title: string
-    hazard_ratio: number
-    hazard_ratio_ci_lower: number
-    hazard_ratio_ci_upper: number
-    cox_p_value: number
-    log_rank_p_value: number
-    risk_direction: 'high_risk' | 'low_risk'
-    n_samples: number
-    median_survival_high: number | null
-    median_survival_low: number | null
-    km_curve_high: KMCurveData | null
-    km_curve_low: KMCurveData | null
-    // Multivariate (clinically-adjusted) Cox results (F16)
-    adjusted_hazard_ratio?: number | null
-    multivariate_cox_p?: number | null
-    covariates_used?: string[] | null
-    // Predictive (treatment-effect-modifying) results (F16b)
-    interaction_p_value?: number | null
-    treatment_arms?: TreatmentArmResult[] | null
-    is_predictive?: boolean
-}
-
-export interface TreatmentArmResult {
-    name: string
-    hazard_ratio: number
-    ci_lower: number
-    ci_upper: number
-    n_samples: number
-    n_events: number
-}
-
-export interface HeterogeneityStats {
-    q_statistic?: number | null
-    i_squared?: number | null
-    p_heterogeneity?: number | null
-    tau_squared?: number | null
-}
-
-export interface GeneSurvival {
-    gene_id: string
-    gene_symbol: string | null
-    n_datasets: number
-    avg_hazard_ratio: number
-    avg_cox_p_value: number
-    avg_log_rank_p_value: number
-    predominant_risk: 'high_risk' | 'low_risk'
-    risk_direction_consistency: number
-    datasets: string[]
-    per_dataset_results: GeneDatasetResult[] | null
-    heterogeneity_stats?: HeterogeneityStats | null
-    // Predictive (treatment-effect-modifying) cross-cohort summary (F16b)
-    is_predictive?: boolean
-    n_predictive_datasets?: number
-    min_interaction_p_value?: number | null
-}
-
-export interface AnalysisResult {
-    query: string
-    n_datasets_analyzed: number
-    n_datasets_with_survival: number
-    common_genes: GeneSurvival[]
-    processing_time: number
-    timestamp: string
-    ranking_quality_score?: number
-    ranking_recommendations?: string
-    result_id?: string | null
-}
+// Analysis result types live in services/api.ts — the shape comes off the wire,
+// so there is one definition and these are aliases for the names the UI uses.
+export type {
+    KMCurveData, GeneDatasetResult, TreatmentArmResult, HeterogeneityStats,
+    AnalysisDiagnostics,
+    GeneSurvivalResponse as GeneSurvival,
+    SurvivalAnalysisResponse as AnalysisResult,
+} from '../services/api'
 
 export interface Message {
     id: string
@@ -268,17 +202,24 @@ export const loadConversation = createAsyncThunk(
 export const sendMessage = createAsyncThunk(
     'chat/sendMessage',
     async (
-        { conversationId, content, model }: {
+        { conversationId, content, model, patientContext, researchContext }: {
             conversationId: string
             content: string
             model: string
+            /** De-identified clinical console chart snapshot — omit outside the console. */
+            patientContext?: PatientContextPayload | null
+            /** Session state with no patient involved — analysis in flight, last result. */
+            researchContext?: ResearchContextPayload | null
         },
         { dispatch, getState, rejectWithValue }
     ) => {
         try {
             // Read current user settings from Redux state
             const state = (getState() as { chat: ChatState }).chat
-            const { organism, cancerGenesOnly, datasetCount, rankingMultiplier, geneFilterInput } = state
+            const {
+                organism, cancerGenesOnly, datasetCount, rankingMultiplier, geneFilterInput,
+                hazardRatioUpper, hazardRatioLower,
+            } = state
             const candidateGenes: string[] | null = geneFilterInput.trim()
                 ? geneFilterInput.split(/[\n,]+/).map((g) => g.trim().toUpperCase()).filter((g) => g.length > 0)
                 : null
@@ -288,6 +229,8 @@ export const sendMessage = createAsyncThunk(
                 num_datasets: datasetCount,
                 ranking_multiplier: rankingMultiplier,
                 candidate_genes: candidateGenes,
+                hazard_ratio_upper: hazardRatioUpper,
+                hazard_ratio_lower: hazardRatioLower,
             }
 
             // Add user message immediately (optimistic update)
@@ -306,6 +249,11 @@ export const sendMessage = createAsyncThunk(
             // Start streaming
             dispatch(startStreaming(tempId))
 
+            // Console action intents arrive via a separate SSE event, ahead of
+            // message_complete — captured here and merged into the resolved
+            // MessageResponse so callers can read them off the thunk's payload.
+            let capturedActions: ConsoleAction[] = []
+
             return await new Promise<import('../services/chatApi').MessageResponse>((resolve, reject) => {
                 sendMessageStream(
                     conversationId,
@@ -318,12 +266,15 @@ export const sendMessage = createAsyncThunk(
                     },
                     (message) => {
                         dispatch(finalizeStreaming())
-                        resolve(message)
+                        resolve({ ...message, actions: capturedActions })
                     },
                     (errorMsg) => {
                         dispatch(finalizeStreaming())
                         reject(new Error(errorMsg))
                     },
+                    patientContext ?? null,
+                    (actions) => { capturedActions = actions },
+                    researchContext ?? null,
                 )
             }).catch((error: unknown) => {
                 return rejectWithValue(error instanceof Error ? error.message : 'Failed to send message')
@@ -358,10 +309,33 @@ export const deleteConversation = createAsyncThunk(
     }
 )
 
+/**
+ * The EventSource behind the in-flight analysis, if any.
+ *
+ * `streamAnalysis` closes itself on result/error, but nothing closed it when the
+ * component that started it went away — so navigating off the console mid-run
+ * left an open SSE connection and a thunk resolving into nothing.
+ */
+let activeAnalysisStream: EventSource | null = null
+
+/** Close an in-flight analysis stream. The server-side run continues; this only
+ *  stops the browser listening. Safe to call when nothing is running. */
+export function abortActiveAnalysis(): void {
+    activeAnalysisStream?.close()
+    activeAnalysisStream = null
+}
+
 export const runAnalysis = createAsyncThunk(
     'chat/runAnalysis',
     async (
-        { query }: { query: string },
+        { query, geneFilter: geneFilterOverride }: {
+            query: string
+            /** Restrict the run to these genes. The agent passes them for a
+             *  question about specific genes; this also flips the response's
+             *  diagnostics.gene_filter_applied, which is what decides whether a
+             *  p-value may be presented as FDR-adjusted. */
+            geneFilter?: string[]
+        },
         { getState, dispatch, rejectWithValue }
     ) => {
         const state = getState() as { chat: ChatState }
@@ -370,13 +344,15 @@ export const runAnalysis = createAsyncThunk(
             hazardRatioUpper, hazardRatioLower,
         } = state.chat
 
-        // Parse gene filter input: split by newlines and commas, trim, filter empty, uppercase
-        const geneFilter: string[] | null = geneFilterInput.trim()
-            ? geneFilterInput
-                .split(/[\n,]+/)
-                .map((g) => g.trim().toUpperCase())
-                .filter((g) => g.length > 0)
-            : null
+        // An explicit override (from the agent) wins over the settings-panel list.
+        const geneFilter: string[] | null = geneFilterOverride?.length
+            ? geneFilterOverride.map((g) => g.trim().toUpperCase()).filter((g) => g.length > 0)
+            : geneFilterInput.trim()
+                ? geneFilterInput
+                    .split(/[\n,]+/)
+                    .map((g) => g.trim().toUpperCase())
+                    .filter((g) => g.length > 0)
+                : null
 
         // Add a system message indicating analysis is starting
         const systemMessage: Message = {
@@ -388,7 +364,8 @@ export const runAnalysis = createAsyncThunk(
         dispatch(addMessage(systemMessage))
 
         return new Promise<SurvivalAnalysisResponse>((resolve, reject) => {
-            streamAnalysis(
+            activeAnalysisStream?.close()
+            activeAnalysisStream = streamAnalysis(
                 query,
                 selectedModel,
                 datasetCount,
@@ -408,9 +385,11 @@ export const runAnalysis = createAsyncThunk(
                     }))
                 },
                 (result) => {
+                    activeAnalysisStream = null
                     resolve(result)
                 },
                 (errorMessage) => {
+                    activeAnalysisStream = null
                     reject(new Error(errorMessage))
                 },
             )
@@ -692,7 +671,7 @@ const chatSlice = createSlice({
             })
             .addCase(runAnalysis.fulfilled, (state, action) => {
                 state.analysisLoading = false
-                state.analysisResults = action.payload as AnalysisResult
+                state.analysisResults = action.payload
                 state.analysisProgress = null
                 state.currentEstimation = null
             })

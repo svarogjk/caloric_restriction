@@ -18,7 +18,7 @@ const PatientReport: React.FC<PatientReportProps> = ({ cancerLabel, modelId, mod
     const cell: React.CSSProperties = { border: '1px solid #999', padding: '3px 6px', fontSize: '9pt' }
 
     return (
-        <div className="print-report">
+        <div className="print-report" data-theme="light">
             <div style={{ borderBottom: '2px solid #000', paddingBottom: 8, marginBottom: 12 }}>
                 <h1 style={{ fontSize: '18pt', fontWeight: 700, margin: 0 }}>
                     Patient Predictive Report — {cancerLabel}

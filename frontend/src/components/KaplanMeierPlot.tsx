@@ -122,8 +122,8 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
   const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
       return (
-        <div className="bg-white p-3 border border-gray-300 rounded shadow-lg max-w-xs">
-          <p className="font-semibold text-gray-800 mb-1">Time: {label} months</p>
+        <div className="bg-surface p-3 border border-border-strong rounded shadow-lg max-w-xs">
+          <p className="font-semibold text-fg-strong mb-1">Time: {label} months</p>
           {payload.map((entry: any, index: number) => (
             <p key={index} style={{ color: entry.color }} className="text-xs">
               {entry.name}: {entry.value.toFixed(1)}%
@@ -138,17 +138,17 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
   const getRiskInterpretation = () => {
     const hr = gene.avg_hazard_ratio
     if (hr > 2) {
-      return { text: 'Strong association with poor survival', color: 'text-red-600', bgColor: 'bg-red-50' }
+      return { text: 'Strong association with poor survival', color: 'text-danger', bgColor: 'bg-danger-soft' }
     } else if (hr > 1.5) {
-      return { text: 'Moderate association with poor survival', color: 'text-orange-600', bgColor: 'bg-orange-50' }
+      return { text: 'Moderate association with poor survival', color: 'text-warn', bgColor: 'bg-warn-soft' }
     } else if (hr > 1) {
-      return { text: 'Slight association with poor survival', color: 'text-yellow-600', bgColor: 'bg-yellow-50' }
+      return { text: 'Slight association with poor survival', color: 'text-warn', bgColor: 'bg-warn-soft' }
     } else if (hr > 0.67) {
-      return { text: 'Slight association with better survival', color: 'text-green-600', bgColor: 'bg-green-50' }
+      return { text: 'Slight association with better survival', color: 'text-ok', bgColor: 'bg-ok-soft' }
     } else if (hr > 0.5) {
-      return { text: 'Moderate association with better survival', color: 'text-green-600', bgColor: 'bg-green-50' }
+      return { text: 'Moderate association with better survival', color: 'text-ok', bgColor: 'bg-ok-soft' }
     } else {
-      return { text: 'Strong association with better survival', color: 'text-green-700', bgColor: 'bg-green-100' }
+      return { text: 'Strong association with better survival', color: 'text-ok', bgColor: 'bg-ok-soft' }
     }
   }
 
@@ -178,17 +178,17 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-auto">
+      <div className="bg-surface rounded-xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-auto">
         {/* Header */}
-        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+        <div className="flex items-center justify-between p-6 border-b border-border">
           <div>
-            <h2 className="text-2xl font-bold text-gray-800">
+            <h2 className="text-2xl font-bold text-fg-strong">
               Kaplan-Meier Survival Curves
             </h2>
-            <p className="text-gray-600 mt-1">
+            <p className="text-fg-muted mt-1">
               {gene.gene_symbol || gene.gene_id}
               {gene.gene_symbol && gene.gene_symbol !== gene.gene_id && (
-                <span className="text-gray-400 ml-2">({gene.gene_id})</span>
+                <span className="text-fg-faint ml-2">({gene.gene_id})</span>
               )}
             </p>
           </div>
@@ -196,14 +196,14 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
             {allKmChartData && allKmChartData.length > 0 && (
               <button
                 onClick={exportKMCSV}
-                className="text-xs px-3 py-1.5 border border-gray-300 rounded hover:bg-gray-50 text-gray-600"
+                className="text-xs px-3 py-1.5 border border-border-strong rounded hover:bg-surface-sunken text-fg-muted"
               >
                 Export CSV
               </button>
             )}
             <button
               onClick={onClose}
-              className="text-gray-400 hover:text-gray-600 transition p-2 hover:bg-gray-100 rounded-full"
+              className="text-fg-faint hover:text-fg-muted transition p-2 hover:bg-surface-sunken rounded-full"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -216,27 +216,27 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
         <div className="p-6">
           {/* Stats summary */}
           <div className="grid grid-cols-4 gap-4 mb-6">
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <p className="text-gray-600 text-sm font-medium">Avg Hazard Ratio</p>
-              <p className={`text-2xl font-bold ${gene.avg_hazard_ratio > 1 ? 'text-red-600' : 'text-blue-600'}`}>
+            <div className="bg-surface-sunken p-4 rounded-lg">
+              <p className="text-fg-muted text-sm font-medium">Avg Hazard Ratio</p>
+              <p className={`text-2xl font-bold ${gene.avg_hazard_ratio > 1 ? 'text-danger' : 'text-accent-fg'}`}>
                 {gene.avg_hazard_ratio.toFixed(2)}
               </p>
             </div>
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <p className="text-gray-600 text-sm font-medium">Avg P-value</p>
-              <p className="text-2xl font-bold text-gray-800">
+            <div className="bg-surface-sunken p-4 rounded-lg">
+              <p className="text-fg-muted text-sm font-medium">Avg P-value</p>
+              <p className="text-2xl font-bold text-fg-strong">
                 {gene.avg_log_rank_p_value < 0.001
                   ? gene.avg_log_rank_p_value.toExponential(2)
                   : gene.avg_log_rank_p_value.toFixed(4)}
               </p>
             </div>
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <p className="text-gray-600 text-sm font-medium">Datasets</p>
-              <p className="text-2xl font-bold text-purple-600">{gene.n_datasets}</p>
+            <div className="bg-surface-sunken p-4 rounded-lg">
+              <p className="text-fg-muted text-sm font-medium">Datasets</p>
+              <p className="text-2xl font-bold text-alt">{gene.n_datasets}</p>
             </div>
-            <div className="bg-gray-50 p-4 rounded-lg">
-              <p className="text-gray-600 text-sm font-medium">Direction Consistency</p>
-              <p className="text-2xl font-bold text-green-600">
+            <div className="bg-surface-sunken p-4 rounded-lg">
+              <p className="text-fg-muted text-sm font-medium">Direction Consistency</p>
+              <p className="text-2xl font-bold text-ok">
                 {(gene.risk_direction_consistency * 100).toFixed(0)}%
               </p>
             </div>
@@ -245,7 +245,7 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
           {/* Interpretation */}
           <div className={`${interpretation.bgColor} border rounded-lg p-4 mb-6`}>
             <p className={`${interpretation.color} font-medium`}>{interpretation.text}</p>
-            <p className="text-gray-600 text-sm mt-1">
+            <p className="text-fg-muted text-sm mt-1">
               {gene.predominant_risk === 'high_risk'
                 ? 'Higher expression of this gene is associated with worse survival outcomes.'
                 : 'Higher expression of this gene is associated with better survival outcomes.'}
@@ -254,13 +254,13 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
 
           {/* Tab toggle: KM Curves | Forest Plot */}
           {showForestTab && (
-            <div className="flex border-b border-gray-200 mb-4">
+            <div className="flex border-b border-border mb-4">
               <button
                 onClick={() => setActiveTab('km')}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
                   activeTab === 'km'
-                    ? 'border-indigo-500 text-indigo-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'border-accent text-accent-fg'
+                    : 'border-transparent text-fg-muted hover:text-fg hover:border-border-strong'
                 }`}
               >
                 KM Curves
@@ -269,8 +269,8 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
                 onClick={() => setActiveTab('forest')}
                 className={`px-4 py-2 text-sm font-medium border-b-2 transition ${
                   activeTab === 'forest'
-                    ? 'border-indigo-500 text-indigo-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                    ? 'border-accent text-accent-fg'
+                    : 'border-transparent text-fg-muted hover:text-fg hover:border-border-strong'
                 }`}
               >
                 Forest Plot
@@ -299,7 +299,7 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
               {/* Dataset visibility toggles (KM tab only) */}
               {displayDatasets.length > 0 && (
                 <div className="mb-4">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label className="block text-sm font-medium text-fg mb-2">
                     Toggle datasets (solid = high expression, dashed = low expression):
                   </label>
                   <div className="flex flex-wrap gap-2">
@@ -342,7 +342,7 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
                         />
                         <Tooltip content={<CustomTooltip />} />
                         <Legend />
-                        <ReferenceLine y={50} stroke="#9ca3af" strokeDasharray="5 5" />
+                        <ReferenceLine y={50} stroke="var(--color-chart-label)" strokeDasharray="5 5" />
                         {visibleList.map((ds, idx) => {
                           const color = DATASET_COLORS[idx % DATASET_COLORS.length]
                           const hasHighCI = !!(ds.km_curve_high?.ci_lower?.length && ds.km_curve_high?.ci_upper?.length)
@@ -426,17 +426,17 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
                       </LineChart>
                     </ResponsiveContainer>
                   </div>
-                  <p className="text-gray-500 text-sm mt-4 text-center italic">
+                  <p className="text-fg-muted text-sm mt-4 text-center italic">
                     Showing {visibleList.length} of {displayDatasets.length} dataset(s). Click toggles above to show/hide individual datasets.
                   </p>
                 </>
               ) : (
-                <div className="h-48 w-full flex flex-col items-center justify-center bg-gray-50 rounded-lg border border-gray-200">
-                  <svg className="w-10 h-10 text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <div className="h-48 w-full flex flex-col items-center justify-center bg-surface-sunken rounded-lg border border-border">
+                  <svg className="w-10 h-10 text-fg-faint mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
                   </svg>
-                  <p className="text-gray-500 font-medium">No survival curve data available for this gene</p>
-                  <p className="text-gray-400 text-sm mt-1">The per-study statistics below are still valid.</p>
+                  <p className="text-fg-muted font-medium">No survival curve data available for this gene</p>
+                  <p className="text-fg-faint text-sm mt-1">The per-study statistics below are still valid.</p>
                 </div>
               )}
             </>
@@ -444,20 +444,20 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
 
           {/* Per-dataset results table */}
           {gene.per_dataset_results && gene.per_dataset_results.length > 0 && (
-            <div className="mt-6 pt-4 border-t border-gray-200">
-              <h3 className="font-semibold text-gray-800 mb-3">Meta-Analysis: Per-Study Results</h3>
+            <div className="mt-6 pt-4 border-t border-border">
+              <h3 className="font-semibold text-fg-strong mb-3">Meta-Analysis: Per-Study Results</h3>
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
+                <table className="min-w-full divide-y divide-border">
+                  <thead className="bg-surface-sunken">
                     <tr>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Dataset</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">HR (95% CI)</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">P-value</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">N</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Risk</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-fg-muted uppercase">Dataset</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-fg-muted uppercase">HR (95% CI)</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-fg-muted uppercase">P-value</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-fg-muted uppercase">N</th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-fg-muted uppercase">Risk</th>
                     </tr>
                   </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
+                  <tbody className="bg-surface divide-y divide-border">
                     {gene.per_dataset_results.map((ds) => {
                       const hasKm = !!(ds.km_curve_high && ds.km_curve_low)
                       const color = hasKm ? DATASET_COLORS[displayDatasets.findIndex(d => d.dataset_id === ds.dataset_id) % DATASET_COLORS.length] : undefined
@@ -465,7 +465,7 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
                       return (
                         <tr
                           key={ds.dataset_id}
-                          className={`transition ${hasKm ? 'cursor-pointer hover:bg-gray-50' : ''} ${hasKm && !isVisible ? 'opacity-40' : ''}`}
+                          className={`transition ${hasKm ? 'cursor-pointer hover:bg-surface-sunken' : ''} ${hasKm && !isVisible ? 'opacity-40' : ''}`}
                           onClick={() => hasKm && toggleDataset(ds.dataset_id)}
                         >
                           <td className="px-4 py-2">
@@ -477,30 +477,30 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
                                 />
                               )}
                               <div>
-                                <div className="text-sm font-medium text-gray-900">{ds.dataset_id}</div>
-                                <div className="text-xs text-gray-500 truncate max-w-xs">{ds.dataset_title}</div>
+                                <div className="text-sm font-medium text-fg-strong">{ds.dataset_id}</div>
+                                <div className="text-xs text-fg-muted truncate max-w-xs">{ds.dataset_title}</div>
                               </div>
                             </div>
                           </td>
                           <td className="px-4 py-2 text-sm">
-                            <span className={ds.hazard_ratio > 1 ? 'text-red-600' : 'text-blue-600'}>
+                            <span className={ds.hazard_ratio > 1 ? 'text-danger' : 'text-accent-fg'}>
                               {ds.hazard_ratio.toFixed(2)}
                             </span>
-                            <span className="text-gray-400 text-xs ml-1">
+                            <span className="text-fg-faint text-xs ml-1">
                               [{ds.hazard_ratio_ci_lower.toFixed(2)}-{ds.hazard_ratio_ci_upper.toFixed(2)}]
                             </span>
                           </td>
-                          <td className="px-4 py-2 text-sm text-gray-700">
+                          <td className="px-4 py-2 text-sm text-fg">
                             {ds.log_rank_p_value < 0.001
                               ? ds.log_rank_p_value.toExponential(2)
                               : ds.log_rank_p_value.toFixed(4)}
                           </td>
-                          <td className="px-4 py-2 text-sm text-gray-700">{ds.n_samples}</td>
+                          <td className="px-4 py-2 text-sm text-fg">{ds.n_samples}</td>
                           <td className="px-4 py-2">
                             <span className={`inline-flex px-2 py-1 text-xs rounded-full ${
                               ds.risk_direction === 'high_risk'
-                                ? 'bg-red-100 text-red-800'
-                                : 'bg-blue-100 text-blue-800'
+                                ? 'bg-danger-soft text-danger'
+                                : 'bg-accent-soft text-accent-fg'
                             }`}>
                               {ds.risk_direction === 'high_risk' ? '↑ Risk' : '↓ Protective'}
                             </span>
@@ -511,7 +511,7 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
                   </tbody>
                 </table>
               </div>
-              <p className="text-xs text-gray-400 mt-2">
+              <p className="text-xs text-fg-faint mt-2">
                 Click a row to toggle its curves on/off (rows without KM data are not clickable)
               </p>
             </div>
@@ -519,11 +519,11 @@ const KaplanMeierPlot: React.FC<KaplanMeierPlotProps> = ({ gene, onClose }) => {
 
           {/* Datasets list (fallback when no per-dataset results) */}
           {(!gene.per_dataset_results || gene.per_dataset_results.length === 0) && (
-            <div className="mt-6 pt-4 border-t border-gray-200">
-              <h3 className="font-semibold text-gray-800 mb-3">Found in Datasets</h3>
+            <div className="mt-6 pt-4 border-t border-border">
+              <h3 className="font-semibold text-fg-strong mb-3">Found in Datasets</h3>
               <div className="flex flex-wrap gap-2">
                 {gene.datasets.map((dataset) => (
-                  <span key={dataset} className="bg-indigo-100 text-indigo-800 text-sm px-3 py-1 rounded-full">
+                  <span key={dataset} className="bg-accent-soft text-accent-fg text-sm px-3 py-1 rounded-full">
                     {dataset}
                   </span>
                 ))}

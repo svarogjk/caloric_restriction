@@ -1,5 +1,6 @@
 import React from 'react'
 import { PrognosticModel } from '../../services/api'
+import { RuoNotice } from '../ui'
 
 interface NomogramProps {
     model: PrognosticModel
@@ -40,21 +41,21 @@ const NomogramSVG: React.FC<NomogramProps> = ({ model }) => {
         <div className="overflow-x-auto">
             <svg width={width} height={height} role="img" aria-label="Predictive risk nomogram">
                 {/* Points header axis */}
-                <text x={left - 8} y={top - 22} textAnchor="end" fontSize={11} fill="#374151" fontWeight={600}>
+                <text x={left - 8} y={top - 22} textAnchor="end" fontSize={11} fill="var(--color-fg)" fontWeight={600}>
                     Points
                 </text>
                 {ticks.map((t) => {
                     const x = left + (t / 100) * axisWidth
                     return (
                         <g key={`tick-${t}`}>
-                            <line x1={x} y1={top - 16} x2={x} y2={top - 10} stroke="#9ca3af" />
-                            <text x={x} y={top - 20} textAnchor="middle" fontSize={9} fill="#6b7280">
+                            <line x1={x} y1={top - 16} x2={x} y2={top - 10} stroke="var(--color-chart-label)" />
+                            <text x={x} y={top - 20} textAnchor="middle" fontSize={9} fill="var(--color-chart-axis)">
                                 {t}
                             </text>
                         </g>
                     )
                 })}
-                <line x1={left} y1={top - 10} x2={left + axisWidth} y2={top - 10} stroke="#d1d5db" />
+                <line x1={left} y1={top - 10} x2={left + axisWidth} y2={top - 10} stroke="var(--color-border-strong)" />
 
                 {/* One row per gene */}
                 {rows.map((r, i) => {
@@ -63,13 +64,13 @@ const NomogramSVG: React.FC<NomogramProps> = ({ model }) => {
                     const color = r.direction === 'risk' ? '#ef4444' : '#3b82f6'
                     return (
                         <g key={r.symbol}>
-                            <text x={left - 10} y={y + 4} textAnchor="end" fontSize={11} fill="#111827" fontWeight={500}>
+                            <text x={left - 10} y={y + 4} textAnchor="end" fontSize={11} fill="var(--color-fg-strong)" fontWeight={500}>
                                 {r.symbol}
                             </text>
-                            <line x1={left} y1={y} x2={left + axisWidth} y2={y} stroke="#f3f4f6" />
+                            <line x1={left} y1={y} x2={left + axisWidth} y2={y} stroke="var(--color-chart-grid)" />
                             <line x1={left} y1={y} x2={left + barW} y2={y} stroke={color} strokeWidth={3} />
                             <circle cx={left + barW} cy={y} r={4} fill={color} />
-                            <text x={left + axisWidth + 6} y={y + 4} fontSize={9} fill="#6b7280">
+                            <text x={left + axisWidth + 6} y={y + 4} fontSize={9} fill="var(--color-chart-axis)">
                                 HR {r.hr.toFixed(2)}
                             </text>
                         </g>
@@ -78,16 +79,17 @@ const NomogramSVG: React.FC<NomogramProps> = ({ model }) => {
             </svg>
             <div className="flex gap-4 text-xs mt-1 ml-2">
                 <span className="flex items-center gap-1">
-                    <span className="inline-block w-3 h-0.5 bg-red-500" /> Higher expression → higher risk
+                    <span className="inline-block w-3 h-0.5 bg-danger" /> Higher expression → higher risk
                 </span>
                 <span className="flex items-center gap-1">
-                    <span className="inline-block w-3 h-0.5 bg-blue-500" /> Higher expression → protective
+                    <span className="inline-block w-3 h-0.5 bg-accent" /> Higher expression → protective
                 </span>
             </div>
-            <p className="text-[11px] text-gray-400 mt-1 ml-2">
+            <p className="text-[11px] text-fg-faint mt-1 ml-2">
                 Points ∝ |Cox coefficient| per +1 SD of expression. Add the points for a patient's genes to gauge
-                relative predicted risk burden. Advisory, research use only — not a prescription.
+                relative predicted risk burden.
             </p>
+            <RuoNotice variant="footnote" className="ml-2" />
         </div>
     )
 }

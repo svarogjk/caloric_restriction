@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { interpretResults } from '../services/api'
 import { AnalysisResult } from '../store/chatSlice'
+import { RuoNotice } from './ui'
 
 interface ClinicianSummaryProps {
     results: AnalysisResult
@@ -49,17 +50,17 @@ const ClinicianSummary: React.FC<ClinicianSummaryProps> = ({ results, model }) =
     }
 
     return (
-        <div className="border border-indigo-100 bg-indigo-50/40 rounded-lg p-3">
+        <div className="border border-accent-soft bg-accent-soft/40 rounded-lg p-3">
             <div className="flex items-center justify-between">
-                <h4 className="text-sm font-medium text-indigo-900">Clinician summary</h4>
+                <h4 className="text-sm font-medium text-accent-fg">Clinician summary</h4>
                 {domainScore !== null && (
                     <span
                         className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                             domainScore >= 70
-                                ? 'bg-green-100 text-green-700'
+                                ? 'bg-ok-soft text-ok'
                                 : domainScore >= 40
-                                  ? 'bg-amber-100 text-amber-700'
-                                  : 'bg-gray-100 text-gray-600'
+                                  ? 'bg-warn-soft text-warn'
+                                  : 'bg-surface-sunken text-fg-muted'
                         }`}
                         title="Domain Score — how grounded this answer is in real GEO data"
                     >
@@ -70,29 +71,30 @@ const ClinicianSummary: React.FC<ClinicianSummaryProps> = ({ results, model }) =
 
             {!summary && (
                 <div className="mt-2">
-                    <p className="text-xs text-gray-500 mb-2">
+                    <p className="text-xs text-fg-muted mb-2">
                         Generate a plain-language interpretation grounded in these genes, hazard ratios,
-                        and cohorts. Advisory predictive, research use only.
+                        and cohorts.
                     </p>
+                    <RuoNotice variant="inline" className="mb-2" />
                     <button
                         onClick={handleGenerate}
                         disabled={loading || results.common_genes.length === 0}
-                        className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                        className="px-3 py-1.5 text-sm bg-accent text-on-accent rounded hover:bg-accent-hover disabled:opacity-50"
                     >
                         {loading ? 'Generating…' : 'Generate summary'}
                     </button>
                 </div>
             )}
 
-            {error && <p className="text-sm text-red-600 mt-2">{error}</p>}
+            {error && <p className="text-sm text-danger mt-2">{error}</p>}
 
             {summary && (
                 <div className="mt-2">
-                    <p className="text-sm text-gray-700 whitespace-pre-line leading-relaxed">{summary}</p>
+                    <p className="text-sm text-fg whitespace-pre-line leading-relaxed">{summary}</p>
                     <button
                         onClick={handleGenerate}
                         disabled={loading}
-                        className="mt-2 text-xs text-indigo-600 hover:underline disabled:opacity-50"
+                        className="mt-2 text-xs text-accent-fg hover:underline disabled:opacity-50"
                     >
                         {loading ? 'Regenerating…' : '↺ Regenerate'}
                     </button>

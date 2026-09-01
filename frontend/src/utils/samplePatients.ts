@@ -1,11 +1,13 @@
-// Example data for the chat welcome screen.
+// Example data for the clinical console's case library and the chat welcome screen.
 //
 // Two complementary entry points, co-located here so they can't drift apart:
-//   - SAMPLE_PATIENTS  → the Clinical column. Each entry is a complete patient case:
-//                        a tumour-board vignette + the matching analysis query +
-//                        a realistic tumour expression profile the user can edit/replace.
-//   - RESEARCH_EXAMPLES → the Research column. Pure cross-cohort discovery/validation
-//                        queries — no patient involved.
+//   - SAMPLE_PATIENTS  → tumour-board case cards. Each entry is a complete patient
+//                        case: a vignette + the matching analysis query + a realistic
+//                        tumour expression profile the user can edit/replace, plus
+//                        (where a curated model exists) a `cancerKey` linking it to
+//                        GET /api/gallery so one click can score it in seconds.
+//   - RESEARCH_EXAMPLES → pure cross-cohort discovery/validation queries — no patient
+//                        involved.
 
 export interface SamplePatient {
     id: string
@@ -17,6 +19,15 @@ export interface SamplePatient {
     direction: string
     color: string
     expression: string
+    /** GET /api/gallery key for the curated model this case scores against — seconds,
+     *  not a 2-5 min GEO analysis. null when no curated model exists yet for this
+     *  cancer type (e.g. prostate): the case still loads, but scoring routes through
+     *  the "build a cohort model" path instead. */
+    cancerKey: string | null
+    /** 2-3 short chips summarizing what stands out in this profile, e.g. "MKI67 high". */
+    keyFindings: string[]
+    /** Optional clinical covariate prefill matching the curated model's covariate names. */
+    clinical?: Record<string, string>
 }
 
 export interface ResearchExample {
@@ -37,6 +48,9 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         explanation: 'ER-positive luminal-A type tumour. ESR1 and PGR are elevated (hormone-receptor driven). Low MKI67 indicates a low proliferative index — this is typically the lower-risk breast cancer subtype.',
         direction: 'Expect ESR1/PGR to rank as protective (low-risk) markers. Good baseline for comparing against hormone-receptor-negative profiles.',
         color: '#ec4899',
+        cancerKey: 'breast',
+        keyFindings: ['ESR1 high', 'PGR high', 'MKI67 low'],
+        clinical: { age: '64', grade: '2' },
         expression: genes([
             ['ESR1', 12.1], ['PGR', 11.4], ['MKI67', 5.8], ['ERBB2', 7.2], ['TP53', 7.4],
             ['GATA3', 11.8], ['FOXA1', 11.6], ['TFF1', 12.0], ['AGR2', 11.9], ['BCAS1', 10.4],
@@ -59,6 +73,9 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         explanation: 'ER-/PR-/HER2-negative breast cancer. High MKI67 and TOP2A indicate aggressive proliferation. CDH1 loss suggests epithelial-mesenchymal transition. Typically higher-risk and less responsive to hormone therapy.',
         direction: 'Expect proliferation markers (TOP2A, MKI67, CCNB1, AURKA) to rank as high-risk. Compare with ER+ profile to see the hormone-receptor axis.',
         color: '#ef4444',
+        cancerKey: 'breast',
+        keyFindings: ['MKI67 high', 'TOP2A high', 'ESR1 low'],
+        clinical: { age: '47', grade: '3' },
         expression: genes([
             ['ESR1', 5.2], ['PGR', 4.8], ['ERBB2', 6.1], ['GATA3', 5.0], ['FOXA1', 4.9],
             ['MKI67', 12.4], ['TOP2A', 11.8], ['AURKA', 11.5], ['BIRC5', 11.2], ['CDK1', 11.7],
@@ -81,6 +98,9 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         explanation: 'EGFR-amplified lung profile with high proliferative index (MKI67) and reduced CDH1 — consistent with an EMT-prone, EGFR-driven adenocarcinoma. RB1 loss further suggests aggressive cell-cycle dysregulation.',
         direction: 'Expect EGFR and downstream RAS/MAPK/PI3K pathway genes to appear as top prognostic markers. EGFR-TKI cohorts are the natural treatment context.',
         color: '#3b82f6',
+        cancerKey: 'lung',
+        keyFindings: ['EGFR high', 'MKI67 high', 'CDH1 low'],
+        clinical: { age: '59' },
         expression: genes([
             ['EGFR', 11.2], ['MKI67', 11.0], ['CDH1', 5.8], ['RB1', 5.9], ['KRAS', 7.1],
             ['ERBB2', 7.8], ['MET', 9.4], ['ALK', 6.2], ['ROS1', 6.0], ['BRAF', 7.5],
@@ -103,6 +123,9 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         explanation: 'Wnt/β-catenin activated colorectal profile. High CTNNB1 and MYC with reduced APC expression indicate pathway hyperactivation. CDX2 confirms colonic epithelial origin. KRAS activation amplifies proliferative signalling.',
         direction: 'Expect Wnt pathway genes (CTNNB1, MYC, CDX2, AXIN2) and mismatch repair markers to dominate the prognostic signature for colorectal OS.',
         color: '#10b981',
+        cancerKey: 'colorectal',
+        keyFindings: ['CTNNB1 high', 'APC low', 'MYC high'],
+        clinical: { age: '68' },
         expression: genes([
             ['CTNNB1', 10.8], ['MYC', 11.3], ['APC', 5.4], ['CDX2', 10.5], ['KRAS', 9.8],
             ['AXIN2', 10.2], ['TCF4', 9.8], ['LEF1', 9.5], ['LGR5', 10.6], ['ASCL2', 9.9],
@@ -125,6 +148,9 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         explanation: 'High-grade serous ovarian carcinoma. Near-universal TP53 dysregulation with elevated WT1 and PAX8 (Müllerian lineage). CCNE1 amplification and high proliferation mark an aggressive, platinum-treated phenotype; CA125 (MUC16) and HE4 (WFDC2) are clinically tracked.',
         direction: 'Expect proliferation (MKI67, TOP2A, CCNB1, AURKA) and the TP53/CCNE1 axis to dominate. Homologous-recombination genes (BRCA1/2) contextualise platinum response in treated cohorts.',
         color: '#a855f7',
+        cancerKey: 'ovarian',
+        keyFindings: ['TP53 high', 'CCNE1 high', 'MUC16 high'],
+        clinical: { age: '61' },
         expression: genes([
             ['TP53', 11.4], ['WT1', 11.0], ['PAX8', 11.2], ['MUC16', 11.6], ['WFDC2', 11.3],
             ['FOLR1', 10.8], ['CCNE1', 10.9], ['MYC', 10.6], ['MECOM', 9.8], ['SOX17', 10.2],
@@ -147,6 +173,9 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         explanation: 'Diffuse-type gastric adenocarcinoma with CDH1 (E-cadherin) loss driving an epithelial-mesenchymal phenotype (high VIM, SNAI1, ZEB1). Receptor tyrosine kinases (ERBB2, MET, FGFR2) and an angiogenic/stromal programme reflect an aggressive, poorly cohesive tumour.',
         direction: 'Expect CDH1 loss and EMT/stromal genes (VIM, FN1, MMP9) to rank as high-risk. RTK markers (ERBB2, MET, FGFR2) flag the natural targeted-therapy treatment context.',
         color: '#f59e0b',
+        cancerKey: 'gastric',
+        keyFindings: ['CDH1 low', 'VIM high', 'ERBB2 elevated'],
+        clinical: { age: '57' },
         expression: genes([
             ['CDH1', 5.4], ['VIM', 11.4], ['SNAI1', 10.8], ['ZEB1', 10.6], ['ZEB2', 10.2],
             ['FN1', 11.2], ['TWIST1', 10.0], ['CDH2', 9.8], ['SPARC', 10.4], ['THBS1', 9.6],
@@ -161,6 +190,31 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         ]),
     },
     {
+        id: 'glioma_idh_wt',
+        name: 'Glioblastoma (IDH-wildtype)',
+        vignette: '58M, IDH-wildtype glioblastoma, MGMT unmethylated, post gross-total resection',
+        cancerHint: 'Run: glioma overall survival',
+        query: 'glioma overall survival',
+        explanation: 'IDH-wildtype glioblastoma — the most aggressive and most common adult glioma subtype. High EGFR with PTEN and CDKN2A loss reflects classic receptor-tyrosine-kinase-driven signalling. MGMT is expressed (unmethylated promoter), predicting reduced benefit from alkylating chemotherapy. High GFAP and OLIG2 confirm glial lineage.',
+        direction: 'Expect EGFR, proliferation markers (MKI67, TOP2A), and the PTEN/CDKN2A loss axis to dominate the prognostic signature. MGMT status is the natural treatment-response context.',
+        color: '#6366f1',
+        cancerKey: 'glioma',
+        keyFindings: ['EGFR high', 'PTEN low', 'MGMT unmethylated'],
+        clinical: { age: '58' },
+        expression: genes([
+            ['EGFR', 11.4], ['PTEN', 5.6], ['CDKN2A', 5.4], ['MGMT', 9.8], ['IDH1', 7.6],
+            ['GFAP', 11.2], ['OLIG2', 10.8], ['SOX2', 10.6], ['NES', 10.4], ['CHI3L1', 10.9],
+            ['VEGFA', 10.6], ['HIF1A', 10.2], ['MKI67', 10.8], ['TOP2A', 10.6], ['TP53', 8.2],
+            ['NF1', 6.8], ['PDGFRA', 9.6], ['RB1', 6.4], ['ATRX', 7.0], ['TERT', 9.2],
+            ['CD44', 10.0], ['MET', 8.8], ['CDK4', 9.4], ['MDM2', 9.0], ['AKT1', 8.6],
+            ['PIK3CA', 8.4], ['STAT3', 9.2], ['TNC', 10.0], ['MMP9', 9.8], ['SPP1', 9.6],
+            ['CD68', 8.4], ['AIF1', 8.0], ['CD8A', 6.2], ['PDCD1', 5.8], ['CD274', 6.6],
+            ['BCL2', 7.4], ['BAX', 7.8], ['CASP3', 7.6], ['CCND1', 8.6], ['CCNB1', 9.6],
+            ['AURKA', 9.4], ['BIRC5', 9.2], ['PCNA', 9.0], ['FOXM1', 9.4], ['VIM', 9.8],
+            ['FN1', 9.2], ['SNAI1', 8.4], ['ZEB1', 8.2], ['TIMP1', 8.8], ['JUN', 8.0],
+        ]),
+    },
+    {
         id: 'prostate_ar',
         name: 'Prostate Adenocarcinoma (AR-driven)',
         vignette: '70M, prostate adenocarcinoma, Gleason 4+3=7, pT3a, PSA 14 — AR-driven',
@@ -169,6 +223,11 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         explanation: 'Androgen-receptor-driven prostate adenocarcinoma. High AR, KLK3 (PSA) and FOLH1 (PSMA) with elevated ERG (TMPRSS2-ERG fusion proxy). PTEN loss marks a higher-risk luminal tumour; proliferation is modest, typical of localised disease.',
         direction: 'Expect the AR axis (AR, KLK3, FOLH1, NKX3-1) and PTEN loss to drive the prognostic signature. Contrast with neuroendocrine markers (RB1/TP53 loss) for aggressive variants.',
         color: '#0ea5e9',
+        // No curated model yet — this case demonstrates the "build a cohort model
+        // from GEO" path (§7 of the console plan) instead of scoring in seconds.
+        cancerKey: null,
+        keyFindings: ['AR high', 'KLK3 high', 'PTEN low'],
+        clinical: { age: '70' },
         expression: genes([
             ['AR', 11.6], ['KLK3', 12.0], ['FOLH1', 11.2], ['ERG', 10.8], ['NKX3-1', 11.0],
             ['HOXB13', 10.6], ['AMACR', 11.4], ['KLK2', 10.9], ['TMPRSS2', 11.1], ['SPINK1', 7.4],
@@ -183,6 +242,20 @@ export const SAMPLE_PATIENTS: SamplePatient[] = [
         ]),
     },
 ]
+
+/** SAMPLE_PATIENTS indexed by cancerKey, for the console's "load an example for
+ *  this cancer type" affordance. Cases with cancerKey: null (no curated model
+ *  yet) are excluded — they're reachable only from the full case library. */
+export const SAMPLE_PATIENTS_BY_CANCER_KEY: Record<string, SamplePatient[]> = SAMPLE_PATIENTS.reduce(
+    (acc, p) => {
+        if (p.cancerKey) {
+            acc[p.cancerKey] = acc[p.cancerKey] ?? []
+            acc[p.cancerKey].push(p)
+        }
+        return acc
+    },
+    {} as Record<string, SamplePatient[]>,
+)
 
 export const RESEARCH_EXAMPLES: ResearchExample[] = [
     {

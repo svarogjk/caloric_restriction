@@ -29,6 +29,7 @@ from pydantic_ai.messages import (
 )
 
 from app.services.chat.agent_tools import AgentDeps, AGENT_TOOLS
+from app.services.chat.console_actions import ACTION_TOOLS, ACTION_TOOL_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +54,28 @@ _BASE_SYSTEM_PROMPT = """You are a domain-specific bioinformatics assistant for 
 - **search_geo_datasets**: live NCBI GEO search to show available cohorts
 - **get_gene_info**: NCBI Entrez gene summary for function and disease associations
 - **get_user_recent_results**: user's analysis history — call when asked "what have I analyzed before?"
+- **get_signature_model_evidence**: real cohort provenance (GSE accessions, per-cohort C-index) for a prognostic model — call when asked what a risk score is based on
+
+## Console workflow tools
+These orchestrate the UI — they never see or touch patient data. Use them to drive
+the workflow instead of asking the user to click through the app by hand:
+**run_survival_analysis, reuse_previous_analysis, set_cancer_type,
+request_tumour_profile, load_example_case, score_patient, explain_for_clinician,
+show_model_quality, show_treatment_evidence, show_treatment_context,
+show_driver_biology**.
+
+Some need a patient chart and some do not — run_survival_analysis,
+reuse_previous_analysis, show_model_quality and show_treatment_evidence all work
+with no patient data at all. The "Research session" and "Active patient chart"
+blocks below say what is already set and what MISSING step to drive next.
 
 ## Response Standards
 - Every dataset reference must include its GSE accession (e.g. GSE12345, GSE67890)
 - Every hazard ratio claim must name the dataset it came from
 - Generic advice without data citations is unacceptable
-- NEVER run the analysis yourself — the user clicks "Run Analysis" explicitly
+- To run an analysis, call **run_survival_analysis**. It PROPOSES the run and the user confirms with one click — never tell someone to click a button you can call yourself
+- For a question about specific named genes, pass them as `candidate_genes`. Those results are then NOT multiple-testing corrected, so call the p-value "nominal", never an FDR q-value
+- NEVER describe results from a run that has not completed. Wait for the analysis to appear
 
 ## Key Statistics
 - HR > 1: high expression = worse survival (oncogenic marker)
@@ -69,6 +86,73 @@ _BASE_SYSTEM_PROMPT = """You are a domain-specific bioinformatics assistant for 
 
 ## Positioning
 - Treatment guidance is ADVISORY and hypothesis-generating — "treatments to consider/discuss", grounded in documented evidence; never a prescription or a guarantee of response. Research use only."""
+
+
+def _build_research_block(research: dict) -> str:
+    """Session state with no patient involved: is a run in flight, what did the
+    last one produce, and what is the next step. This is what makes the console
+    usable with nothing loaded — without it the agent has no idea whether an
+    analysis exists."""
+    lines = ["\n## Research session"]
+
+    if research.get("analysis_running"):
+        lines.append("- An analysis is IN FLIGHT right now")
+
+    result_id = research.get("analysis_result_id")
+    if result_id:
+        lines.append(f"- Last analysis: '{research.get('analysis_query')}' (result {result_id})")
+        n_genes = research.get("analysis_n_genes")
+        n_datasets = research.get("analysis_n_datasets")
+        if n_genes is not None and n_datasets is not None:
+            lines.append(f"  - {n_genes} genes across {n_datasets} cohorts")
+        top = research.get("analysis_top_genes") or []
+        if top:
+            lines.append(f"  - Top genes: {', '.join(top)}")
+        n_pred = research.get("analysis_n_predictive_genes")
+        if n_pred:
+            lines.append(f"  - {n_pred} are treatment-effect-modifying (predictive)")
+        if research.get("analysis_gene_filter_applied"):
+            lines.append(
+                "  - RESTRICTED to named candidate genes, so its p-values are NOT "
+                "multiple-testing corrected. Call them nominal p-values, never FDR q-values"
+            )
+        if research.get("analysis_model_id"):
+            lines.append(f"  - Signature model ready: {research['analysis_model_id']}")
+    else:
+        lines.append("- No analysis has been run in this session yet")
+
+    if research.get("has_patient_chart"):
+        pasted = research.get("expression_genes_pasted")
+        lines.append(f"- A patient chart is open ({pasted or 0} genes pasted)")
+    else:
+        lines.append("- No patient data loaded — this is fine, most questions do not need any")
+
+    # MISSING ladder — same idiom as _build_chart_block.
+    if research.get("analysis_running"):
+        missing = (
+            "an analysis is already in flight. Do NOT propose another — answer from indexed "
+            "data or from the previous result, and say the run is still going"
+        )
+    elif not result_id:
+        missing = (
+            "no analysis yet. Call run_survival_analysis with a concrete query. If the question "
+            "names specific genes, pass them as candidate_genes. If the topic is vague, call "
+            "search_known_datasets or search_geo_datasets first"
+        )
+    elif not research.get("treatment_evidence_shown"):
+        missing = (
+            "treatment evidence. Call show_treatment_evidence — it works with no tumour profile "
+            "(cohort-level treated-vs-untreated arms from the model's own GEO cohort)"
+        )
+    else:
+        missing = "nothing — answer from what is already on screen"
+    lines.append(f"- MISSING: {missing}")
+
+    lines.append(
+        "\nObservational treated-vs-untreated curves are NOT randomised evidence. Treatment "
+        "assignment reasons are unknown and may fully explain any difference. Always say so."
+    )
+    return "\n".join(lines)
 
 
 def _build_settings_block(user_settings: dict) -> str:
@@ -102,9 +186,94 @@ def _build_settings_block(user_settings: dict) -> str:
         lines.append("- NEVER say 'test all ~20,000 genes' or 'genome-wide' — the user has restricted to ~600 COSMIC genes")
     if genes:
         lines.append(f"- NEVER suggest a genome-wide run — the user has {len(genes)} candidate genes pre-selected")
+    hr_upper = user_settings.get("hazard_ratio_upper")
+    hr_lower = user_settings.get("hazard_ratio_lower")
+    if hr_upper is not None and hr_lower is not None:
+        lines.append(
+            f"- Hazard-ratio gates: a gene must have HR >= {hr_upper} or HR <= {hr_lower} to be "
+            "reported, ON TOP of the p-value threshold. NEVER promise 'every gene with p<0.05' — "
+            "genes with a significant but small effect are excluded by these gates"
+        )
     lines.append(
         f"- When calling search_geo_datasets or get_gene_info, use organism='{organism}' "
         "unless the user explicitly overrides it in their message"
+    )
+    return "\n".join(lines)
+
+
+def _build_chart_block(patient_context: dict) -> str:
+    """Build the dynamic clinical-console chart-state block appended to the
+    system prompt per-request. Renders only the fields that are set, and always
+    states what's still missing so the agent knows the next workflow step —
+    drive it with an ACTION tool (console_actions.py) rather than asking the
+    clinician to do by hand what an action tool can do."""
+    lines = ["\n## Active patient chart (de-identified — the clinician has this on screen)"]
+    lines.append("You are running the workflow for a clinician with ONE patient's chart open.")
+
+    cancer_type = patient_context.get("cancer_type")
+    model_id = patient_context.get("model_id")
+    genes_provided = patient_context.get("genes_provided") or 0
+    risk_group = patient_context.get("risk_group")
+
+    if cancer_type or model_id:
+        demo_note = " (synthetic demo model)" if patient_context.get("model_is_demo") else ""
+        lines.append(f"- Cancer type: {cancer_type or 'set'}{demo_note}" + (f" (model {model_id})" if model_id else ""))
+    if genes_provided:
+        matched = patient_context.get("genes_used")
+        total = patient_context.get("genes_total")
+        coverage = f" · {matched} of {total} signature genes matched" if matched is not None and total else ""
+        lines.append(f"- Tumour profile: {genes_provided} genes provided{coverage}")
+    if patient_context.get("clinical_covariate_names"):
+        lines.append(
+            "- Clinical covariates supplied: " + ", ".join(patient_context["clinical_covariate_names"])
+            + "   (values NOT transmitted)"
+        )
+    if risk_group:
+        pct = patient_context.get("risk_percentile")
+        scored_on = patient_context.get("scored_on")
+        lines.append(
+            f"- Score: {risk_group.upper()} risk"
+            + (f", {pct:.0f}th percentile" if pct is not None else "")
+            + (f", scored on {scored_on}" if scored_on else "")
+        )
+    if patient_context.get("pooled_c_index") is not None or patient_context.get("c_index_combined") is not None:
+        c_combined = patient_context.get("c_index_combined")
+        delta = patient_context.get("delta_c_index")
+        lines.append(
+            f"- Discrimination: pooled C-index {patient_context.get('pooled_c_index', c_combined):.3f}"
+            + (f" (combined {c_combined:.3f}, Δ {delta:+.3f} over expression)" if c_combined is not None and delta is not None else "")
+        )
+    if patient_context.get("top_risk_genes"):
+        lines.append("- Top risk-increasing genes: " + ", ".join(patient_context["top_risk_genes"]))
+    if patient_context.get("top_protective_genes"):
+        lines.append("- Top protective genes: " + ", ".join(patient_context["top_protective_genes"]))
+    if patient_context.get("warnings"):
+        lines.append("- Model warnings: " + "; ".join(patient_context["warnings"]))
+
+    if not cancer_type and not model_id:
+        missing = "cancer type, tumour profile — call set_cancer_type or run_survival_analysis first"
+    elif not genes_provided and not risk_group:
+        missing = "tumour expression profile — call request_tumour_profile"
+    elif not risk_group:
+        missing = "nothing further to set up — call score_patient to score the patient"
+    else:
+        missing = "nothing — the patient is scored"
+    lines.append(f"- MISSING: {missing}")
+
+    lines.append(
+        "\nWorkflow rules:\n"
+        "- Drive the next step with an action tool. Never ask the clinician to do by hand\n"
+        "  what an action tool can do.\n"
+        "- Ground every claim in real GEO data — call a read tool and cite GSE accessions.\n"
+        "- Before proposing a 2-5 minute cohort build, call estimate_query first and report\n"
+        "  the confidence and dataset count. Check get_user_recent_results and\n"
+        "  search_known_datasets before spending the clinician's time on a new run.\n"
+        "- These figures are already computed and on screen. Never recompute or invent numbers.\n"
+        "- You cannot see the patient's identity, expression values, or clinical values.\n"
+        "  Never claim otherwise and never ask for identifying details.\n"
+        "- Never give a prescription, a dose, or a claim that this patient will respond.\n"
+        "  Treatment talk is advisory: \"worth discussing with the tumour board\".\n"
+        "- A single-sample estimate is uncertain — say so when the answer turns on it."
     )
     return "\n".join(lines)
 
@@ -234,7 +403,16 @@ class PydanticAIService:
             self._models[model_name],
             deps_type=AgentDeps,
             system_prompt=_BASE_SYSTEM_PROMPT,
-            tools=AGENT_TOOLS,
+            tools=AGENT_TOOLS + ACTION_TOOLS,
+            # Mistral (and others) sometimes emit final text AND a tool call in the
+            # same step. pydantic-ai's default 'early' strategy treats the text as
+            # the final result and silently SKIPS the tool call — the function body
+            # never runs (confirmed: ToolReturnPart "Tool not executed - a final
+            # result was already processed"). That's exactly the class of silent
+            # tool-skip .claude/rules/chat_agent.md warns against, and it means a
+            # console action tool's whole point (recording an intent in
+            # action_sink) never happens. 'exhaustive' always runs requested tools.
+            end_strategy='exhaustive',
         )
 
         # Dynamic per-request settings block — reads ctx.deps at run time
@@ -244,9 +422,27 @@ class PydanticAIService:
                 return _build_settings_block(ctx.deps.user_settings)
             return ""
 
+        # Dynamic per-request clinical-console chart state — registered
+        # separately from _settings_prompt since it's independent context
+        # (a clinician chart vs. a researcher's analysis settings).
+        @agent.system_prompt
+        async def _chart_prompt(ctx: RunContext[AgentDeps]) -> str:
+            if ctx.deps.patient_context:
+                return _build_chart_block(ctx.deps.patient_context)
+            return ""
+
+        # Dynamic per-request research-session state. Unlike the chart block this
+        # applies with no patient data at all, which is the case the console has
+        # to support first.
+        @agent.system_prompt
+        async def _research_prompt(ctx: RunContext[AgentDeps]) -> str:
+            if ctx.deps.research_context:
+                return _build_research_block(ctx.deps.research_context)
+            return ""
+
         self._agents[model_name] = agent
         logger.info(
-            f"Created agent for model '{model_name}' with {len(AGENT_TOOLS)} tools"
+            f"Created agent for model '{model_name}' with {len(AGENT_TOOLS) + len(ACTION_TOOLS)} tools"
         )
         return agent
 
@@ -373,7 +569,11 @@ class PydanticAIService:
 
         tools_invoked = self._extract_tool_names(result.new_messages())
         user_settings = deps_override.user_settings if deps_override else None
-        domain_score = _compute_domain_score(tools_invoked, result.output, user_settings)
+        # Action tools (console_actions.py) orchestrate the UI — they query nothing,
+        # so they're excluded from the Domain Score. tools_invoked keeps the full
+        # list for logging/transparency.
+        scoring_tools = [t for t in tools_invoked if t not in ACTION_TOOL_NAMES]
+        domain_score = _compute_domain_score(scoring_tools, result.output, user_settings)
 
         logger.info(
             "chat_metrics conversation_id=%s tools=%s gse_citations=%d domain_score=%d",
@@ -437,7 +637,8 @@ class PydanticAIService:
             # After stream exhausted, compute and log metrics
             tools_invoked = self._extract_tool_names(result.new_messages())
             user_settings = deps_override.user_settings if deps_override else None
-            domain_score = _compute_domain_score(tools_invoked, full_text, user_settings)
+            scoring_tools = [t for t in tools_invoked if t not in ACTION_TOOL_NAMES]
+            domain_score = _compute_domain_score(scoring_tools, full_text, user_settings)
 
             logger.info(
                 "chat_metrics conversation_id=%s tools=%s gse_citations=%d domain_score=%d",

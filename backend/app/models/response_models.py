@@ -50,6 +50,13 @@ class GeneDatasetResult(BaseModel):
     # KM curve data for visualization
     km_curve_high: Optional[KMCurveData] = None
     km_curve_low: Optional[KMCurveData] = None
+    # Unit the raw km_curve_* times are expressed in. Detected per cohort and
+    # never rescaled server-side, so without it a KM x-axis is unlabelled.
+    survival_time_unit: Optional[str] = None
+    # Benjamini-Hochberg adjusted p across the genes tested IN THIS RUN. When a
+    # gene filter restricted the tested set this is NOT a multiple-testing
+    # correction — see AnalysisDiagnostics.gene_filter_applied.
+    fdr_adjusted_p_value: Optional[float] = None
     # Multivariate Cox results (F13)
     adjusted_hazard_ratio: Optional[float] = None
     multivariate_cox_p: Optional[float] = None
@@ -86,13 +93,21 @@ class GeneSurvivalResponse(BaseModel):
 
 
 class AnalysisDiagnostics(BaseModel):
-    """Diagnostic information for empty results"""
+    """How this run was carried out. Always present — `reason` is set only when
+    the run produced no genes, but the rest describes every run."""
 
     datasets_analyzed: int
     datasets_with_genes: int
     cancer_filter_enabled: bool = False
     min_occurrence_threshold: int = 2
     reason: Optional[str] = None
+    # Largest number of genes tested in any single cohort. With a gene filter
+    # this can be 1, in which case Benjamini-Hochberg over one hypothesis is a
+    # no-op and `fdr_adjusted_p_value` equals the nominal Cox p.
+    n_genes_tested: Optional[int] = None
+    # True when a candidate-gene list restricted the tested set. This is what
+    # decides whether a p-value may be presented as FDR-adjusted; never infer it.
+    gene_filter_applied: bool = False
 
 
 class AnalysisResponse(BaseModel):

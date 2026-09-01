@@ -34,9 +34,9 @@ export const UserMenu: React.FC = () => {
         <div className="relative" ref={menuRef}>
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-fg hover:bg-surface-sunken transition-colors"
             >
-                <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-medium">
+                <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center text-on-accent font-medium">
                     {displayName.charAt(0).toUpperCase()}
                 </div>
                 <span className="hidden sm:inline">{displayName}</span>
@@ -51,15 +51,15 @@ export const UserMenu: React.FC = () => {
             </button>
 
             {isOpen && (
-                <div className="absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-50">
+                <div className="absolute right-0 mt-2 w-56 rounded-md shadow-lg bg-surface ring-1 ring-black ring-opacity-5 z-50">
                     <div className="py-1">
-                        <div className="px-4 py-2 border-b border-gray-100">
-                            <p className="text-sm font-medium text-gray-900">{displayName}</p>
-                            {user.email && <p className="text-xs text-gray-500">{user.email}</p>}
+                        <div className="px-4 py-2 border-b border-border">
+                            <p className="text-sm font-medium text-fg-strong">{displayName}</p>
+                            {user.email && <p className="text-xs text-fg-muted">{user.email}</p>}
                         </div>
                         <button
                             onClick={handleLogout}
-                            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors"
+                            className="w-full text-left px-4 py-2 text-sm text-danger hover:bg-danger-soft transition-colors"
                         >
                             Sign out
                         </button>

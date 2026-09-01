@@ -79,7 +79,7 @@ const KaplanMeierChart: React.FC<KaplanMeierChartProps> = ({ curves, timeUnit = 
         <div style={{ width: '100%', height }}>
             <ResponsiveContainer>
                 <LineChart data={data} margin={{ top: 5, right: 20, bottom: 20, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--color-chart-grid)" />
                     <XAxis
                         dataKey="time"
                         // Numeric (not categorical) so Recharts picks a handful of
@@ -91,13 +91,13 @@ const KaplanMeierChart: React.FC<KaplanMeierChartProps> = ({ curves, timeUnit = 
                             const yrs = t / perYear
                             return yrs < 3 ? yrs.toFixed(1) : yrs.toFixed(0)
                         }}
-                        tick={{ fontSize: 10, fill: '#6b7280' }}
-                        label={{ value: 'Years', position: 'insideBottom', offset: -10, fontSize: 10, fill: '#9ca3af' }}
+                        tick={{ fontSize: 10, fill: 'var(--color-chart-axis)' }}
+                        label={{ value: 'Years', position: 'insideBottom', offset: -10, fontSize: 10, fill: 'var(--color-chart-label)' }}
                     />
                     <YAxis
                         domain={[0, 1]}
                         tickFormatter={(v: number) => `${(v * 100).toFixed(0)}%`}
-                        tick={{ fontSize: 10, fill: '#6b7280' }}
+                        tick={{ fontSize: 10, fill: 'var(--color-chart-axis)' }}
                         width={36}
                     />
                     <Tooltip

@@ -112,4 +112,12 @@ async def get_gallery(db: AsyncSession = Depends(get_db)):
                 "cached_at": cached["created_at"] if cached else None,
             }
         )
-    return {"cancers": items}
+
+    # Single source of truth for the frontend's live expression-feedback
+    # thresholds (utils/expressionFeedback.ts), so the UI can never drift
+    # from the actual scoring behaviour in SignatureService.
+    scoring_thresholds = {
+        "qn_min_genes": SignatureService._QN_MIN_GENES,
+        "low_coverage_frac": SignatureService._LOW_COVERAGE_FRAC,
+    }
+    return {"cancers": items, "scoring_thresholds": scoring_thresholds}

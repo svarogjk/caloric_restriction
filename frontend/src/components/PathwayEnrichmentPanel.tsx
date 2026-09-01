@@ -59,31 +59,31 @@ const PathwayEnrichmentPanel: React.FC<PathwayEnrichmentPanelProps> = ({
     return (
         <div className="mt-6 border-t pt-4">
             <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-semibold text-gray-700">Enrichment Analysis</h4>
+                <h4 className="text-sm font-semibold text-fg">Enrichment Analysis</h4>
                 <button
                     onClick={handleRunEnrichment}
                     disabled={loading || geneSymbols.length === 0}
-                    className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    className="px-3 py-1.5 text-xs bg-accent text-on-accent rounded hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 >
                     {loading ? 'Running...' : 'Run Pathway Analysis'}
                 </button>
             </div>
 
-            <p className="text-xs text-gray-500 mb-3">
+            <p className="text-xs text-fg-muted mb-3">
                 {geneSymbols.length} significant gene{geneSymbols.length !== 1 ? 's' : ''} available for enrichment analysis
             </p>
 
             {/* Error */}
             {error && (
-                <div className="p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700 mb-3">
+                <div className="p-3 bg-danger-soft border border-danger-border rounded text-sm text-danger mb-3">
                     {error}
                 </div>
             )}
 
             {/* Loading */}
             {loading && (
-                <div className="flex items-center gap-2 py-4 text-sm text-gray-500">
-                    <svg className="animate-spin h-4 w-4 text-indigo-600" fill="none" viewBox="0 0 24 24">
+                <div className="flex items-center gap-2 py-4 text-sm text-fg-muted">
+                    <svg className="animate-spin h-4 w-4 text-accent-fg" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                     </svg>
@@ -93,7 +93,7 @@ const PathwayEnrichmentPanel: React.FC<PathwayEnrichmentPanelProps> = ({
 
             {/* Results */}
             {!loading && hasRun && terms.length === 0 && !error && (
-                <p className="text-sm text-gray-400 text-center py-4">
+                <p className="text-sm text-fg-faint text-center py-4">
                     No enriched pathways found. Try with more genes.
                 </p>
             )}
@@ -108,48 +108,48 @@ const PathwayEnrichmentPanel: React.FC<PathwayEnrichmentPanelProps> = ({
                                 onClick={() => setActiveSource(src)}
                                 className={`px-2 py-1 text-xs rounded border transition-colors ${
                                     activeSource === src
-                                        ? 'bg-indigo-600 text-white border-indigo-600'
-                                        : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'
+                                        ? 'bg-accent text-on-accent border-accent'
+                                        : 'bg-surface text-fg-muted border-border-strong hover:bg-surface-sunken'
                                 }`}
                             >
                                 {src}
                             </button>
                         ))}
-                        <span className="text-xs text-gray-400 self-center ml-1">
+                        <span className="text-xs text-fg-faint self-center ml-1">
                             {filteredTerms.length} term{filteredTerms.length !== 1 ? 's' : ''}
                             {filteredTerms.length === MAX_TERMS ? ` (top ${MAX_TERMS})` : ''}
                         </span>
                     </div>
 
                     {/* Table */}
-                    <div className="overflow-y-auto max-h-64 border border-gray-200 rounded">
+                    <div className="overflow-y-auto max-h-64 border border-border rounded">
                         <table className="w-full text-xs">
-                            <thead className="bg-gray-50 sticky top-0">
+                            <thead className="bg-surface-sunken sticky top-0">
                                 <tr>
-                                    <th className="px-3 py-2 text-left font-medium text-gray-600 border-b">Source</th>
-                                    <th className="px-3 py-2 text-left font-medium text-gray-600 border-b">Term Name</th>
-                                    <th className="px-3 py-2 text-center font-medium text-gray-600 border-b">Genes</th>
-                                    <th className="px-3 py-2 text-right font-medium text-gray-600 border-b">q-value</th>
+                                    <th className="px-3 py-2 text-left font-medium text-fg-muted border-b">Source</th>
+                                    <th className="px-3 py-2 text-left font-medium text-fg-muted border-b">Term Name</th>
+                                    <th className="px-3 py-2 text-center font-medium text-fg-muted border-b">Genes</th>
+                                    <th className="px-3 py-2 text-right font-medium text-fg-muted border-b">q-value</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {filteredTerms.map((term) => (
-                                    <tr key={term.term_id} className="hover:bg-gray-50 border-b border-gray-100 last:border-0">
+                                    <tr key={term.term_id} className="hover:bg-surface-sunken border-b border-border last:border-0">
                                         <td className="px-3 py-2">
-                                            <span className="px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700 whitespace-nowrap">
+                                            <span className="px-1.5 py-0.5 rounded bg-accent-soft text-accent-fg whitespace-nowrap">
                                                 {term.source}
                                             </span>
                                         </td>
-                                        <td className="px-3 py-2 text-gray-800 max-w-xs">
+                                        <td className="px-3 py-2 text-fg-strong max-w-xs">
                                             <span title={term.term_name} className="block truncate">
                                                 {term.term_name}
                                             </span>
-                                            <span className="text-gray-400">{term.term_id}</span>
+                                            <span className="text-fg-faint">{term.term_id}</span>
                                         </td>
-                                        <td className="px-3 py-2 text-center text-gray-600">
+                                        <td className="px-3 py-2 text-center text-fg-muted">
                                             {term.intersection_size}/{term.query_size}
                                         </td>
-                                        <td className="px-3 py-2 text-right font-mono text-gray-700">
+                                        <td className="px-3 py-2 text-right font-mono text-fg">
                                             {formatQValue(term.p_value)}
                                         </td>
                                     </tr>

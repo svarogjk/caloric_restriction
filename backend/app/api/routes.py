@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.request_models import AnalysisRequest
 from app.models.response_models import (
     AnalysisResponse, AnalysisDiagnostics, HealthResponse,
-    GeneSurvivalResponse, GeneDatasetResult, KMCurveData
+    GeneSurvivalResponse, GeneDatasetResult, KMCurveData, HeterogeneityStats
 )
 from app.services.geo_survival_workflow_orchestrator import CrossDatasetSurvivalAnalysis
 from app.services.analysis_result_service import analysis_result_service
@@ -103,7 +103,8 @@ async def search_datasets(
         response = _build_analysis_response(
             result,
             cancer_genes_only=request.cancer_genes_only,
-            min_occurrence=request.min_occurrence
+            min_occurrence=request.min_occurrence,
+            gene_filter_applied=bool(request.gene_filter),
         )
 
         # Persist result non-blocking (F07) — failure must never break the response
@@ -127,7 +128,8 @@ async def search_datasets(
 def _build_analysis_response(
     result: CrossDatasetSurvivalAnalysis,
     cancer_genes_only: bool = False,
-    min_occurrence: int = 2
+    min_occurrence: int = 2,
+    gene_filter_applied: bool = False,
 ) -> AnalysisResponse:
     """Convert a CrossDatasetSurvivalAnalysis into the API response model."""
     genes_response = []
@@ -175,6 +177,8 @@ def _build_analysis_response(
                     median_survival_low=ds_result.get('median_survival_low'),
                     km_curve_high=km_high,
                     km_curve_low=km_low,
+                    survival_time_unit=ds_result.get('survival_time_unit'),
+                    fdr_adjusted_p_value=ds_result.get('fdr_adjusted_p_value'),
                     # Multivariate Cox results (F13/F16)
                     adjusted_hazard_ratio=ds_result.get('adjusted_hazard_ratio'),
                     multivariate_cox_p=ds_result.get('multivariate_cox_p'),
@@ -196,22 +200,31 @@ def _build_analysis_response(
             risk_direction_consistency=gene.risk_direction_consistency,
             datasets=gene.datasets,
             per_dataset_results=per_dataset_responses,
+            heterogeneity_stats=(
+                HeterogeneityStats(**gene.heterogeneity_stats)
+                if getattr(gene, 'heterogeneity_stats', None) else None
+            ),
+            min_fdr_adjusted_p_value=getattr(gene, 'min_fdr_adjusted_p_value', None),
             # Predictive (treatment-effect-modifying) cross-cohort summary (F16b)
             is_predictive=getattr(gene, 'is_predictive', False),
             n_predictive_datasets=getattr(gene, 'n_predictive_datasets', 0),
             min_interaction_p_value=getattr(gene, 'min_interaction_p_value', None),
         ))
 
-    # Generate diagnostics if no genes found
-    diagnostics = None
-    if len(genes_response) == 0 and result.all_survival_results:
-        # Count how many datasets contributed genes
-        datasets_with_genes = sum(
-            1 for r in result.all_survival_results
-            if r.significant_genes
-        )
+    # Diagnostics describe EVERY run, not just empty ones — n_genes_tested and
+    # gene_filter_applied are what let a client decide whether a p-value may be
+    # called FDR-adjusted. `reason` stays specific to the 0-gene case.
+    datasets_with_genes = sum(
+        1 for r in result.all_survival_results
+        if r.significant_genes
+    )
+    n_genes_tested = max(
+        (r.n_genes_analyzed for r in result.all_survival_results),
+        default=0,
+    )
 
-        reason = None
+    reason = None
+    if len(genes_response) == 0 and result.all_survival_results:
         if datasets_with_genes == 0:
             reason = "No datasets had genes meeting the significance thresholds (p<0.05, HR threshold)"
         elif datasets_with_genes == 1:
@@ -219,13 +232,15 @@ def _build_analysis_response(
         elif cancer_genes_only:
             reason = f"Only {datasets_with_genes} datasets with genes matched the COSMIC cancer gene filter"
 
-        diagnostics = AnalysisDiagnostics(
-            datasets_analyzed=result.n_datasets_analyzed,
-            datasets_with_genes=datasets_with_genes,
-            cancer_filter_enabled=cancer_genes_only,
-            min_occurrence_threshold=min_occurrence,
-            reason=reason
-        )
+    diagnostics = AnalysisDiagnostics(
+        datasets_analyzed=result.n_datasets_analyzed,
+        datasets_with_genes=datasets_with_genes,
+        cancer_filter_enabled=cancer_genes_only,
+        min_occurrence_threshold=min_occurrence,
+        reason=reason,
+        n_genes_tested=n_genes_tested,
+        gene_filter_applied=gene_filter_applied,
+    )
 
     return AnalysisResponse(
         query=result.query,
@@ -298,7 +313,8 @@ async def stream_analysis(
             response_obj = _build_analysis_response(
                 result,
                 cancer_genes_only=cancer_genes_only,
-                min_occurrence=min_occurrence
+                min_occurrence=min_occurrence,
+                gene_filter_applied=bool(parsed_gene_filter),
             )
             result_data = json.dumps({"stage": "result", "result": response_obj.model_dump()})
             await queue.put(f"data: {result_data}\n\n")

@@ -26,10 +26,10 @@ const AuthModal: React.FC<AuthModalProps> = ({ onClose }) => {
             className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
             onClick={(e) => { if (e.target === e.currentTarget) onClose() }}
         >
-            <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 relative">
+            <div className="bg-surface rounded-xl shadow-xl w-full max-w-md mx-4 relative">
                 <button
                     onClick={onClose}
-                    className="absolute top-3 right-3 text-gray-400 hover:text-gray-600 transition-colors"
+                    className="absolute top-3 right-3 text-fg-faint hover:text-fg-muted transition-colors"
                     aria-label="Close"
                 >
                     <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

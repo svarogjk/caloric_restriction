@@ -98,6 +98,7 @@ async def lifespan(app: FastAPI):
         rag_service=rag_service,
         estimation_service=estimation_service,
         geo_preview_service=geo_preview_service,
+        signature_service=signature_service,
     )
     chat_routes.set_deps(deps)
 

@@ -26,13 +26,13 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
     const getDiversityBadge = (diversity: string) => {
         switch (diversity) {
             case 'low':
-                return { text: 'Low diversity', class: 'bg-green-100 text-green-700' }
+                return { text: 'Low diversity', class: 'bg-ok-soft text-ok' }
             case 'medium':
-                return { text: 'Medium diversity', class: 'bg-yellow-100 text-yellow-700' }
+                return { text: 'Medium diversity', class: 'bg-warn-soft text-warn' }
             case 'high':
-                return { text: 'High diversity', class: 'bg-red-100 text-red-700' }
+                return { text: 'High diversity', class: 'bg-danger-soft text-danger' }
             default:
-                return { text: diversity, class: 'bg-gray-100 text-gray-700' }
+                return { text: diversity, class: 'bg-surface-sunken text-fg' }
         }
     }
 
@@ -40,22 +40,22 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
 
     const colorClasses = {
         green: {
-            bg: 'bg-green-50',
-            border: 'border-green-500',
-            text: 'text-green-700',
-            badge: 'bg-green-100 text-green-800',
+            bg: 'bg-ok-soft',
+            border: 'border-ok',
+            text: 'text-ok',
+            badge: 'bg-ok-soft text-ok',
         },
         yellow: {
-            bg: 'bg-yellow-50',
-            border: 'border-yellow-500',
-            text: 'text-yellow-700',
-            badge: 'bg-yellow-100 text-yellow-800',
+            bg: 'bg-warn-soft',
+            border: 'border-warn',
+            text: 'text-warn',
+            badge: 'bg-warn-soft text-warn',
         },
         red: {
-            bg: 'bg-red-50',
-            border: 'border-red-500',
-            text: 'text-red-700',
-            badge: 'bg-red-100 text-red-800',
+            bg: 'bg-danger-soft',
+            border: 'border-danger',
+            text: 'text-danger',
+            badge: 'bg-danger-soft text-danger',
         },
     }
 
@@ -86,15 +86,15 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                     {geoPreview ? (
                         <div className="mb-3">
                             {/* Main stats row */}
-                            <div className="flex flex-wrap gap-3 text-sm text-gray-600 mb-2">
+                            <div className="flex flex-wrap gap-3 text-sm text-fg-muted mb-2">
                                 <span className="font-medium">
                                     {geoPreview.totalDatasets.toLocaleString()} datasets found
                                 </span>
-                                <span className="text-gray-400">|</span>
+                                <span className="text-fg-faint">|</span>
                                 <span>
                                     {geoPreview.datasetsWithSurvivalKeywords} with survival data
                                 </span>
-                                <span className="text-gray-400">|</span>
+                                <span className="text-fg-faint">|</span>
                                 <span>
                                     ~{Math.ceil(estimation.estimatedTimeSeconds / 60)} min
                                 </span>
@@ -103,12 +103,12 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                             {/* Platform breakdown */}
                             {topPlatforms.length > 0 && (
                                 <div className="flex items-center gap-2 text-sm mb-2">
-                                    <span className="text-gray-500">Platforms:</span>
+                                    <span className="text-fg-muted">Platforms:</span>
                                     <div className="flex flex-wrap gap-1">
                                         {topPlatforms.map(([platform, count]) => (
                                             <span
                                                 key={platform}
-                                                className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded text-xs"
+                                                className="px-2 py-0.5 bg-surface-sunken text-fg rounded text-xs"
                                             >
                                                 {platform}: {count}
                                             </span>
@@ -126,7 +126,7 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                             {geoPreview.warnings.length > 0 && (
                                 <div className="mb-2">
                                     {geoPreview.warnings.slice(0, 2).map((warning, i) => (
-                                        <div key={i} className="flex items-start gap-2 text-sm text-amber-700 bg-amber-50 p-2 rounded mb-1">
+                                        <div key={i} className="flex items-start gap-2 text-sm text-warn bg-warn-soft p-2 rounded mb-1">
                                             <svg className="w-4 h-4 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                                             </svg>
@@ -141,7 +141,7 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                                 <div className="mt-2">
                                     <button
                                         onClick={() => setShowDatasets(!showDatasets)}
-                                        className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
+                                        className="flex items-center gap-1 text-sm text-accent-fg hover:text-accent-fg"
                                     >
                                         <svg
                                             className={`w-4 h-4 transition-transform ${showDatasets ? 'rotate-90' : ''}`}
@@ -159,22 +159,22 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                                             {geoPreview.topDatasets.slice(0, 5).map((ds) => (
                                                 <div
                                                     key={ds.accession}
-                                                    className="bg-white p-2 rounded border border-gray-200 text-sm"
+                                                    className="bg-surface p-2 rounded border border-border text-sm"
                                                 >
                                                     <div className="flex items-center justify-between mb-1">
-                                                        <span className="font-mono text-blue-600">{ds.accession}</span>
+                                                        <span className="font-mono text-accent-fg">{ds.accession}</span>
                                                         <div className="flex items-center gap-2">
-                                                            <span className="text-gray-500 text-xs">
+                                                            <span className="text-fg-muted text-xs">
                                                                 n={ds.sampleCount}
                                                             </span>
                                                             {ds.hasSurvivalKeywords && (
-                                                                <span className="px-1.5 py-0.5 bg-green-100 text-green-700 rounded text-xs">
+                                                                <span className="px-1.5 py-0.5 bg-ok-soft text-ok rounded text-xs">
                                                                     survival
                                                                 </span>
                                                             )}
                                                         </div>
                                                     </div>
-                                                    <p className="text-gray-700 text-xs line-clamp-2">
+                                                    <p className="text-fg text-xs line-clamp-2">
                                                         {ds.title}
                                                     </p>
                                                 </div>
@@ -186,7 +186,7 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                         </div>
                     ) : (
                         /* Fallback: Original stats display when no GEO preview */
-                        <div className="flex gap-4 text-sm text-gray-600 mb-3">
+                        <div className="flex gap-4 text-sm text-fg-muted mb-3">
                             <span>
                                 Est. {estimation.estimatedDatasets} datasets
                             </span>
@@ -200,10 +200,10 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                     {/* Suggestions */}
                     {estimation.suggestions.length > 0 && (
                         <div className="mb-3">
-                            <p className="text-sm font-medium text-gray-700 mb-1">
+                            <p className="text-sm font-medium text-fg mb-1">
                                 Suggestions to improve results:
                             </p>
-                            <ul className="text-sm text-gray-600 list-disc list-inside space-y-1">
+                            <ul className="text-sm text-fg-muted list-disc list-inside space-y-1">
                                 {estimation.suggestions.slice(0, 3).map((suggestion, i) => (
                                     <li key={i}>{suggestion}</li>
                                 ))}
@@ -213,16 +213,16 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
 
                     {/* Improved Query */}
                     {estimation.improvedQuery && (
-                        <div className="bg-white p-3 rounded border border-gray-200">
-                            <p className="text-sm font-medium text-gray-700 mb-1">
+                        <div className="bg-surface p-3 rounded border border-border">
+                            <p className="text-sm font-medium text-fg mb-1">
                                 Suggested query:
                             </p>
-                            <p className="text-sm text-blue-600 italic">
+                            <p className="text-sm text-accent-fg italic">
                                 "{estimation.improvedQuery}"
                             </p>
                             <button
                                 onClick={() => onRunAnalysis(estimation.improvedQuery!)}
-                                className="mt-2 text-sm text-blue-600 hover:text-blue-700 font-medium"
+                                className="mt-2 text-sm text-accent-fg hover:text-accent-fg font-medium"
                             >
                                 Use this query
                             </button>
@@ -234,7 +234,7 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                 <div className="flex flex-col gap-2 ml-4">
                     <button
                         onClick={onDismiss}
-                        className="text-gray-400 hover:text-gray-600"
+                        className="text-fg-faint hover:text-fg-muted"
                     >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -244,7 +244,7 @@ const QueryEstimation: React.FC<QueryEstimationProps> = ({
                     {estimation.canProceed && (
                         <button
                             onClick={() => onRunAnalysis(estimation.improvedQuery || originalQuery)}
-                            className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+                            className="px-4 py-2 bg-accent text-on-accent text-sm rounded-lg hover:bg-accent-hover transition-colors"
                         >
                             Run Analysis
                         </button>

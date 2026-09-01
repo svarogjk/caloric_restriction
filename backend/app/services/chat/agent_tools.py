@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from app.services.chat.dataset_rag_service import DatasetRAGService
     from app.services.chat.estimation_service import QueryEstimationService
     from app.services.chat.geo_preview_service import GEOPreviewService
+    from app.services.signature_service import SignatureService
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,16 @@ class AgentDeps:
     user_id: str | None = None         # authenticated user ID (None for guests)
     db_session: Any | None = None      # per-request DB session for history queries
     model: str = "mistral-large"       # active LLM selection, forwarded to sub-services
+    # Clinical console (agent-orchestrated patient workflow):
+    patient_context: dict | None = None
+    # Session state that is NOT about a patient: settings, whether an analysis is
+    # running, what the last one produced. Kept separate from patient_context so
+    # that model's privacy contract stays exactly what it says it is.
+    research_context: dict | None = None    # de-identified chart snapshot (PatientContext.model_dump())
+    signature_service: "SignatureService | None" = None  # for model lookups/evidence
+    action_sink: list | None = None    # console_actions.py tools append intents here;
+                                        # the browser re-validates and executes each one —
+                                        # the agent never touches patient data directly.
 
 
 async def search_known_datasets(ctx: RunContext["AgentDeps"], query: str) -> str:
@@ -242,11 +253,69 @@ async def get_user_recent_results(
         return f"Could not retrieve analysis history: {exc}"
 
 
-# Active tool list — run_survival_analysis intentionally excluded (user triggers via UI)
+async def get_signature_model_evidence(ctx: RunContext["AgentDeps"], model_id: str) -> str:
+    """
+    Retrieve the real cohort provenance of a prognostic risk model: which GEO
+    series it was trained and validated on, per-cohort sample/event counts and
+    C-index, pooled discrimination, gene count, and whether it is a synthetic
+    demo model.
+
+    Call this whenever the clinician asks what a risk score is based on, how
+    trustworthy it is, or which datasets support it — this is the commonest
+    question about a patient's risk model and the answer must cite real GSE
+    accessions, not a restatement of the score itself.
+
+    Args:
+        model_id: The prognostic model id from the active patient chart
+
+    Returns:
+        Training/validation cohort accessions with sample counts and C-index,
+        or a plain-language message if the model can't be found
+    """
+    try:
+        service = ctx.deps.signature_service
+        if service is None:
+            return "Model evidence lookup unavailable — signature service not configured."
+        model = service.get_model(model_id)
+        if model is None:
+            return f"No model found with id '{model_id}'."
+
+        lines = [
+            f"Model {model.model_id} ({model.cancer_type or 'unspecified cancer type'})"
+            f"{' — SYNTHETIC DEMO MODEL, not fitted on real cohorts' if model.is_demo else ''}",
+            f"Trained on {model.training_accession} (n={model.n_training_samples})",
+            f"Signature: {len(model.genes)} genes, pooled C-index {model.pooled_c_index:.3f}",
+        ]
+        if model.cohort_validations:
+            lines.append("Cohort validations:")
+            for cv in model.cohort_validations:
+                lines.append(
+                    f"  - {cv.accession} ({cv.role}): n={cv.n_samples}, "
+                    f"events={cv.n_events}, C-index={cv.c_index:.3f}"
+                )
+        if model.c_index_combined is not None:
+            lines.append(
+                f"Combined (expression + clinical) C-index: {model.c_index_combined:.3f}"
+                + (f" (Δ {model.delta_c_index:+.3f} over expression alone)" if model.delta_c_index is not None else "")
+            )
+        return "\n".join(lines)
+    except (AttributeError, KeyError, ValueError) as exc:
+        logger.warning(f"get_signature_model_evidence failed for {model_id}: {exc}")
+        return f"Model evidence unavailable: {exc}"
+
+
+# Active READ tools. Running an analysis is a console ACTION tool
+# (run_survival_analysis in console_actions.py): it proposes the run and the
+# browser executes it, so a 2-5 minute job never blocks an agent turn.
+# These are READ tools: they query real data and count toward the Domain Score.
+# Console workflow ACTION tools live in console_actions.py and are excluded from
+# scoring (see ACTION_TOOL_NAMES in pydantic_ai_service.py) — they orchestrate
+# the UI, they don't ground anything.
 AGENT_TOOLS = [
     search_known_datasets,
     estimate_query,
     search_geo_datasets,
     get_gene_info,
     get_user_recent_results,
+    get_signature_model_evidence,
 ]

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 
 interface ChatInputProps {
     onSend: (message: string) => void
@@ -8,19 +8,20 @@ interface ChatInputProps {
     onChange?: (value: string) => void
 }
 
-const ChatInput: React.FC<ChatInputProps> = ({
+const ChatInput = forwardRef<HTMLTextAreaElement, ChatInputProps>(({
     onSend,
     disabled = false,
     placeholder = 'Type a message...',
     value,
     onChange,
-}) => {
+}, forwardedRef) => {
     const [internalMessage, setInternalMessage] = useState('')
 
     // Support both controlled and uncontrolled modes
     const message = value !== undefined ? value : internalMessage
     const setMessage = onChange !== undefined ? onChange : setInternalMessage
     const textareaRef = useRef<HTMLTextAreaElement>(null)
+    useImperativeHandle(forwardedRef, () => textareaRef.current as HTMLTextAreaElement)
 
     // Auto-resize textarea
     useEffect(() => {
@@ -46,9 +47,9 @@ const ChatInput: React.FC<ChatInputProps> = ({
     }
 
     return (
-        <form onSubmit={handleSubmit} className="border-t border-gray-200 p-4">
+        <form onSubmit={handleSubmit} className="border-t border-border p-4">
             <div className="max-w-3xl mx-auto">
-                <div className="flex items-end gap-2 bg-gray-100 rounded-lg p-2">
+                <div className="flex items-end gap-2 bg-surface-sunken rounded-lg p-2">
                     <textarea
                         ref={textareaRef}
                         value={message}
@@ -57,15 +58,15 @@ const ChatInput: React.FC<ChatInputProps> = ({
                         placeholder={placeholder}
                         disabled={disabled}
                         rows={1}
-                        className="flex-1 bg-transparent resize-none outline-none text-gray-800 placeholder-gray-400 px-2 py-1 max-h-48"
+                        className="flex-1 bg-transparent resize-none outline-none text-fg-strong placeholder-fg-faint px-2 py-1 max-h-48"
                     />
                     <button
                         type="submit"
                         disabled={!message.trim() || disabled}
                         className={`p-2 rounded-lg transition-colors ${
                             message.trim() && !disabled
-                                ? 'bg-blue-600 text-white hover:bg-blue-700'
-                                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                                ? 'bg-accent text-on-accent hover:bg-accent-hover'
+                                : 'bg-surface-hover text-fg-muted cursor-not-allowed'
                         }`}
                     >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -73,12 +74,14 @@ const ChatInput: React.FC<ChatInputProps> = ({
                         </svg>
                     </button>
                 </div>
-                <p className="text-xs text-gray-400 mt-2 text-center">
+                <p className="text-xs text-fg-faint mt-2 text-center">
                     Press Enter to send, Shift+Enter for new line
                 </p>
             </div>
         </form>
     )
-}
+})
+
+ChatInput.displayName = 'ChatInput'
 
 export default ChatInput

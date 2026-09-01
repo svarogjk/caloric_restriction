@@ -43,6 +43,10 @@ class GeneSurvivalOccurrence:
     predominant_risk: str  # "high_risk" or "low_risk"
     # Per-dataset detailed results
     per_dataset_results: List[Dict[str, Any]] = None
+    # Cross-cohort heterogeneity (Cochran Q / I² / tau², F16)
+    heterogeneity_stats: Optional[Dict[str, Any]] = None
+    # Smallest FDR-adjusted p across this gene's cohorts
+    min_fdr_adjusted_p_value: Optional[float] = None
     # Predictive (treatment-effect-modifying) cross-cohort summary (F16b)
     is_predictive: bool = False
     n_predictive_datasets: int = 0
@@ -841,6 +845,7 @@ class GEOSurvivalWorkflowOrchestrator:
                         'risk_directions': [],
                         'per_dataset_results': [],
                         'interaction_p_values': [],  # predictive (F16b)
+                        'fdr_p_values': [],
                     }
                 
                 # Skip if this dataset has already been processed for this gene (prevents duplicates)
@@ -857,6 +862,8 @@ class GEOSurvivalWorkflowOrchestrator:
                 gene_data[gene_identifier]['risk_directions'].append(gene.expression_direction)
                 if gene.is_predictive and gene.interaction_p_value is not None:
                     gene_data[gene_identifier]['interaction_p_values'].append(gene.interaction_p_value)
+                if gene.fdr_adjusted_p_value is not None:
+                    gene_data[gene_identifier]['fdr_p_values'].append(gene.fdr_adjusted_p_value)
 
                 # Store per-dataset result for meta-analysis
                 per_dataset_entry: Dict[str, Any] = {
@@ -871,6 +878,10 @@ class GEOSurvivalWorkflowOrchestrator:
                     'n_samples': gene.n_samples_high + gene.n_samples_low,
                     'median_survival_high': gene.median_survival_high,
                     'median_survival_low': gene.median_survival_low,
+                    # Unit the raw km_curve_* times are in — detected per cohort and
+                    # never rescaled, so a KM axis is unlabelled without it.
+                    'survival_time_unit': result.survival_time_unit,
+                    'fdr_adjusted_p_value': gene.fdr_adjusted_p_value,
                     # Multivariate Cox results (F13)
                     'adjusted_hazard_ratio': gene.adjusted_hazard_ratio,
                     'multivariate_cox_p': gene.multivariate_cox_p,
@@ -925,6 +936,24 @@ class GEOSurvivalWorkflowOrchestrator:
                 risk_consistency = max_risk_count / n_datasets
                 predominant_risk = risk_counts.most_common(1)[0][0]
 
+                # Cross-cohort heterogeneity. _compute_heterogeneity zips the three
+                # lists POSITIONALLY, so they must be filtered in one pass — dropping
+                # invalid entries from each list independently would silently pair a
+                # gene's log-HR with another cohort's confidence interval.
+                triples = [
+                    (hr, cl, cu)
+                    for hr, cl, cu in zip(data['hazard_ratios'], data['ci_lowers'], data['ci_uppers'])
+                    if hr and hr > 0 and cl and cl > 0 and cu and cu > 0
+                ]
+                heterogeneity = self._compute_heterogeneity(
+                    [math.log(hr) for hr, _, _ in triples],
+                    [cl for _, cl, _ in triples],
+                    [cu for _, _, cu in triples],
+                )
+
+                fdr_ps = data['fdr_p_values']
+                min_fdr_p = min(fdr_ps) if fdr_ps else None
+
                 # Predictive (treatment-effect-modifying) summary (F16b)
                 interaction_ps = data['interaction_p_values']
                 n_predictive = len(interaction_ps)
@@ -941,6 +970,8 @@ class GEOSurvivalWorkflowOrchestrator:
                     risk_direction_consistency=risk_consistency,
                     predominant_risk=predominant_risk,
                     per_dataset_results=data['per_dataset_results'],
+                    heterogeneity_stats=heterogeneity,
+                    min_fdr_adjusted_p_value=min_fdr_p,
                     is_predictive=n_predictive > 0,
                     n_predictive_datasets=n_predictive,
                     min_interaction_p_value=min_interaction_p,

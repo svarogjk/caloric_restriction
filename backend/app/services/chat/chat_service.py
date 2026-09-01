@@ -31,6 +31,9 @@ class ChatResponse:
     estimation: Optional[dict] = None
     suggested_actions: list[str] = field(default_factory=list)
     domain_score: int = 0
+    # Clinical console workflow intents recorded by console_actions.py tools —
+    # the browser re-validates and executes each one.
+    actions: list[dict] = field(default_factory=list)
 
 
 class ChatService:
@@ -136,6 +139,8 @@ class ChatService:
         model: str = "mistral-large",
         user_settings: Optional[dict] = None,
         user_id: Optional[str] = None,
+        patient_context: Optional[dict] = None,
+        research_context: Optional[dict] = None,
     ) -> ChatResponse:
         """
         Send a user message and get AI response.
@@ -198,6 +203,7 @@ class ChatService:
         # 4. Build per-request AgentDeps with user context
         from app.services.chat.agent_tools import AgentDeps
         request_deps: Optional[AgentDeps] = None
+        action_sink: list = []
         if self.langchain_service._deps is not None:
             request_deps = AgentDeps(
                 rag_service=self.langchain_service._deps.rag_service,
@@ -207,6 +213,10 @@ class ChatService:
                 user_id=user_id,
                 db_session=self.db,
                 model=model,
+                patient_context=patient_context,
+                research_context=research_context,
+                signature_service=self.langchain_service._deps.signature_service,
+                action_sink=action_sink,
             )
 
         # 5. Generate AI response
@@ -253,6 +263,7 @@ class ChatService:
             estimation=estimation_dict,
             suggested_actions=suggested_actions,
             domain_score=domain_score,
+            actions=action_sink,
         )
 
     async def stream_message(
@@ -262,6 +273,8 @@ class ChatService:
         model: str = "mistral-large",
         user_settings: Optional[dict] = None,
         user_id: Optional[str] = None,
+        patient_context: Optional[dict] = None,
+        research_context: Optional[dict] = None,
         result_sink: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
         """
@@ -326,6 +339,7 @@ class ChatService:
         # Build per-request AgentDeps with user context
         from app.services.chat.agent_tools import AgentDeps
         request_deps: Optional[AgentDeps] = None
+        action_sink: list = []
         if self.langchain_service._deps is not None:
             request_deps = AgentDeps(
                 rag_service=self.langchain_service._deps.rag_service,
@@ -335,6 +349,10 @@ class ChatService:
                 user_id=user_id,
                 db_session=self.db,
                 model=model,
+                patient_context=patient_context,
+                research_context=research_context,
+                signature_service=self.langchain_service._deps.signature_service,
+                action_sink=action_sink,
             )
 
         # Stream response — inner_sink is populated after generator exhausts
@@ -350,10 +368,13 @@ class ChatService:
             full_response += chunk
             yield chunk
 
-        # Propagate domain_score and estimation to caller's result_sink
+        # Propagate domain_score, estimation, and console action intents to caller's result_sink.
+        # action_sink is populated directly (by reference) by console_actions.py tools during
+        # the run above — no extra plumbing through stream_response needed.
         if result_sink is not None:
             result_sink["domain_score"] = inner_sink.get("domain_score", 0)
             result_sink["tools"] = inner_sink.get("tools", [])
+            result_sink["actions"] = action_sink
             if estimation is not None:
                 result_sink["estimation"] = estimation
 

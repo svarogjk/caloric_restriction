@@ -45,8 +45,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRunAnalysis, o
     if (isSystem) {
         return (
             <div className="flex justify-center my-2">
-                <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-2 max-w-md">
-                    <p className="text-sm text-yellow-700">{message.content}</p>
+                <div className="bg-warn-soft border border-warn-border rounded-lg px-4 py-2 max-w-md">
+                    <p className="text-sm text-warn">{message.content}</p>
                 </div>
             </div>
         )
@@ -56,9 +56,9 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRunAnalysis, o
         <div className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : ''}`}>
             {/* Avatar */}
             <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                isUser ? 'bg-blue-600' : 'bg-blue-100'
+                isUser ? 'bg-accent' : 'bg-accent-soft'
             }`}>
-                <span className={`text-sm font-medium ${isUser ? 'text-white' : 'text-blue-600'}`}>
+                <span className={`text-sm font-medium ${isUser ? 'text-on-accent' : 'text-accent-fg'}`}>
                     {isUser ? 'U' : 'AI'}
                 </span>
             </div>
@@ -67,8 +67,8 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRunAnalysis, o
             <div className={`max-w-[70%] ${isUser ? 'text-right' : ''}`}>
                 <div className={`rounded-lg px-4 py-3 ${
                     isUser
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-800'
+                        ? 'bg-accent text-on-accent'
+                        : 'bg-surface-sunken text-fg-strong'
                 }`}>
                     <div className="text-sm whitespace-pre-wrap">
                         {formatMessage(message.content)}
@@ -76,12 +76,12 @@ const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRunAnalysis, o
                 </div>
 
                 {/* Metadata */}
-                <div className={`mt-1 flex items-center gap-2 text-xs text-gray-400 ${
+                <div className={`mt-1 flex items-center gap-2 text-xs text-fg-faint ${
                     isUser ? 'justify-end' : ''
                 }`}>
                     <span>{formatTime(message.createdAt)}</span>
                     {message.modelUsed && (
-                        <span className="text-gray-300">|</span>
+                        <span className="text-fg-faint">|</span>
                     )}
                     {message.modelUsed && (
                         <span>{message.modelUsed}</span>
@@ -141,8 +141,8 @@ const ActionButton: React.FC<ActionButtonProps> = ({ action, onRunAnalysis, onMo
             disabled={isDisabled}
             className={`px-3 py-1 text-xs rounded-full transition-colors ${
                 isDisabled
-                    ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-                    : 'bg-blue-50 text-blue-600 hover:bg-blue-100'
+                    ? 'bg-surface-sunken text-fg-faint cursor-not-allowed'
+                    : 'bg-accent-soft text-accent-fg hover:bg-accent-soft'
             }`}
         >
             {actionLabels[action] || action}
@@ -156,9 +156,9 @@ interface DomainScoreBadgeProps {
 
 const DomainScoreBadge: React.FC<DomainScoreBadgeProps> = ({ score }) => {
     const colorClass =
-        score >= 70 ? 'bg-green-100 text-green-700' :
-        score >= 40 ? 'bg-amber-100 text-amber-700' :
-                      'bg-gray-100 text-gray-500'
+        score >= 70 ? 'bg-ok-soft text-ok' :
+        score >= 40 ? 'bg-warn-soft text-warn' :
+                      'bg-surface-sunken text-fg-muted'
 
     return (
         <span
@@ -184,7 +184,7 @@ function formatMessage(content: string): React.ReactNode {
         }
         if (part.startsWith('`') && part.endsWith('`')) {
             return (
-                <code key={i} className="px-1 py-0.5 bg-gray-200 rounded text-sm font-mono">
+                <code key={i} className="px-1 py-0.5 bg-surface-hover rounded text-sm font-mono">
                     {part.slice(1, -1)}
                 </code>
             )

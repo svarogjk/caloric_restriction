@@ -4,6 +4,7 @@ import { GROUP_COLORS } from '../../utils/signatureViz'
 import KaplanMeierChart, { KMChartCurve } from '../KaplanMeierChart'
 import TherapyDirections from './TherapyDirections'
 import PatientReport from './PatientReport'
+import { RuoNotice } from '../ui'
 
 interface PatientReadoutProps {
     prediction: PredictResponse
@@ -46,24 +47,24 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
 
     return (
         <div className="mt-6 space-y-4">
-            <h2 className="text-lg font-semibold text-gray-800">Predictive readout</h2>
+            <h2 className="text-lg font-semibold text-fg-strong">Predictive readout</h2>
 
             <div className="flex flex-wrap items-center gap-3">
                 <span
-                    className="px-3 py-1 rounded-full text-sm font-semibold text-white"
+                    className="px-3 py-1 rounded-full text-sm font-semibold text-on-accent"
                     style={{ backgroundColor: GROUP_COLORS[result.risk_group] ?? '#6b7280' }}
                 >
                     {result.risk_group.toUpperCase()} RISK
                 </span>
-                <span className="text-sm text-gray-600">{result.risk_percentile.toFixed(0)}th percentile vs reference</span>
-                <span className="text-xs text-gray-400">scored on {result.scored_on}</span>
-                <span className="text-xs text-gray-400 ml-auto">{result.genes_used}/{result.genes_total} signature genes matched</span>
+                <span className="text-sm text-fg-muted">{result.risk_percentile.toFixed(0)}th percentile vs reference</span>
+                <span className="text-xs text-fg-faint">scored on {result.scored_on}</span>
+                <span className="text-xs text-fg-faint ml-auto">{result.genes_used}/{result.genes_total} signature genes matched</span>
             </div>
 
-            <p className="text-[11px] text-gray-400">Normalization: {result.normalization}</p>
+            <p className="text-[11px] text-fg-faint">Normalization: {result.normalization}</p>
 
             {result.warnings.length > 0 && (
-                <div className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2 space-y-1">
+                <div className="text-xs text-warn bg-warn-soft border border-warn-border rounded p-2 space-y-1">
                     {result.warnings.map((w, i) => (
                         <div key={i}>⚠ {w}</div>
                     ))}
@@ -73,9 +74,9 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
             {result.predicted_survival.length > 0 && (
                 <div className="grid grid-cols-3 gap-2">
                     {result.predicted_survival.map((s) => (
-                        <div key={s.horizon_label} className="text-center bg-gray-50 rounded p-2">
-                            <div className="text-xl font-bold text-gray-800">{(s.survival_probability * 100).toFixed(0)}%</div>
-                            <div className="text-xs text-gray-500">{s.horizon_label} survival</div>
+                        <div key={s.horizon_label} className="text-center bg-surface-sunken rounded p-2">
+                            <div className="text-xl font-bold text-fg-strong">{(s.survival_probability * 100).toFixed(0)}%</div>
+                            <div className="text-xs text-fg-muted">{s.horizon_label} survival</div>
                         </div>
                     ))}
                 </div>
@@ -93,8 +94,8 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
 
             {hasKmData && (
                 <div>
-                    <h3 className="text-sm font-medium text-gray-700 mb-1">
-                        Reference survival by risk group <span className="text-gray-400 font-normal">(patient's group highlighted)</span>
+                    <h3 className="text-sm font-medium text-fg mb-1">
+                        Reference survival by risk group <span className="text-fg-faint font-normal">(patient's group highlighted)</span>
                     </h3>
                     <KaplanMeierChart curves={kmCurves} timeUnit={perYear === 12 ? 'months' : 'days'} height={260} />
                 </div>
@@ -102,51 +103,45 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
 
             {result.contributions.length > 0 && (
                 <div>
-                    <h3 className="text-sm font-medium text-gray-700 mb-1">What drove this score</h3>
+                    <h3 className="text-sm font-medium text-fg mb-1">What drove this score</h3>
                     <div className="space-y-1">
                         {result.contributions.map((c, i) => {
                             const pct = (Math.abs(c.contribution) / maxAbs) * 50
                             const positive = c.contribution >= 0
                             return (
                                 <div key={i} className="flex items-center gap-2 text-xs">
-                                    <span className="w-40 truncate text-gray-600" title={c.label}>{c.label}</span>
+                                    <span className="w-40 truncate text-fg-muted" title={c.label}>{c.label}</span>
                                     <div className="flex-1 flex items-center">
                                         <div className="w-1/2 flex justify-end">
-                                            {!positive && <div className="h-3 rounded-l bg-emerald-400" style={{ width: `${pct}%` }} />}
+                                            {!positive && <div className="h-3 rounded-l bg-ok" style={{ width: `${pct}%` }} />}
                                         </div>
-                                        <div className="w-px h-3 bg-gray-300" />
+                                        <div className="w-px h-3 bg-surface-hover" />
                                         <div className="w-1/2">
-                                            {positive && <div className="h-3 rounded-r bg-red-400" style={{ width: `${pct}%` }} />}
+                                            {positive && <div className="h-3 rounded-r bg-danger" style={{ width: `${pct}%` }} />}
                                         </div>
                                     </div>
-                                    <span className={`w-14 text-right ${positive ? 'text-red-600' : 'text-emerald-600'}`}>
+                                    <span className={`w-14 text-right ${positive ? 'text-danger' : 'text-ok'}`}>
                                         {positive ? '+' : ''}{c.contribution.toFixed(3)}
                                     </span>
                                 </div>
                             )
                         })}
                     </div>
-                    <p className="text-[11px] text-gray-400 mt-1">
+                    <p className="text-[11px] text-fg-faint mt-1">
                         Right (red) = increases estimated risk; left (green) = protective. The combined model adds
                         clinical covariates on top of the expression signature.
                     </p>
                 </div>
             )}
 
-            <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                <strong>Predictive risk estimate — advisory, research use only.</strong> This predicts an
-                outcome risk group from tumour expression{result.scored_on.startsWith('combined') ? ' and clinical covariates' : ''} and,
-                below, surfaces treatments worth discussing — grounded in documented evidence and historical
-                cohort outcomes. It is not a prescription or a guarantee of response. Single-sample estimates
-                are uncertain and cross-platform normalization is approximate. Discuss with the care team.
-            </div>
+            <RuoNotice scope="prediction" text={result.disclaimer} />
 
             {/* Advisory treatment recommendation — promoted to a primary section */}
-            <div className="pt-2 border-t border-gray-100">
-                <h3 className="text-base font-semibold text-gray-800">
-                    Treatments to consider <span className="font-normal text-gray-400 text-sm">(advisory)</span>
+            <div className="pt-2 border-t border-border">
+                <h3 className="text-base font-semibold text-fg-strong">
+                    Treatments to consider <span className="font-normal text-fg-faint text-sm">(advisory)</span>
                 </h3>
-                <p className="text-[11px] text-gray-500 mb-2">
+                <p className="text-[11px] text-fg-muted mb-2">
                     Suggestions to discuss with the tumour board, grounded in documented biomarker–therapy
                     evidence and historical GEO cohort outcomes. Not a prescription or a prediction that this
                     patient will respond.
@@ -164,7 +159,7 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
 
             <button
                 onClick={() => window.print()}
-                className="px-4 py-2 text-sm bg-gray-800 text-white rounded hover:bg-gray-900"
+                className="px-4 py-2 text-sm bg-inverse text-on-inverse rounded hover:bg-inverse-hover"
             >
                 Print patient report
             </button>
@@ -182,11 +177,11 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
 const CIdx: React.FC<{ label: string; value: number | null | undefined; highlight?: boolean; signed?: boolean }> = ({
     label, value, highlight, signed,
 }) => (
-    <div className={`rounded p-2 ${highlight ? 'bg-indigo-50 border border-indigo-200' : 'bg-gray-50'}`}>
-        <div className="text-sm font-bold text-gray-800">
+    <div className={`rounded p-2 ${highlight ? 'bg-accent-soft border border-border-accent' : 'bg-surface-sunken'}`}>
+        <div className="text-sm font-bold text-fg-strong">
             {value == null ? '—' : `${signed && value >= 0 ? '+' : ''}${value.toFixed(3)}`}
         </div>
-        <div className="text-[10px] text-gray-500">{label} C-index</div>
+        <div className="text-[10px] text-fg-muted">{label} C-index</div>
     </div>
 )
 

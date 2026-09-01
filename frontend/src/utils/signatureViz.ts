@@ -1,7 +1,11 @@
-import { ReferenceKMCurve, TreatmentKMEvidence } from '../services/api'
+import { ReferenceKMCurve, TreatmentKMEvidence, SignatureGene } from '../services/api'
 import { KMChartCurve } from '../components/KaplanMeierChart'
 
-/** Risk-group colours shared by the signature panel and Oncologist Mode. */
+/**
+ * Risk-group colours shared by the signature panel and Oncologist Mode.
+ * Recharts fills/strokes can't read Tailwind classes, so this stays the source
+ * of truth for chart colors — MUST stay equal to --color-risk-* in index.css.
+ */
 export const GROUP_COLORS: Record<string, string> = {
     low: '#22c55e',
     intermediate: '#f59e0b',
@@ -42,6 +46,10 @@ export interface TopTreatmentCurves {
     /** Drugs whose cohort data resolved but didn't clear the minimum n/events
      *  bar to plot responsibly — surfaced as a footnote, never silently dropped. */
     insufficientN: InsufficientCurve[]
+    /** Drugs whose only evidence is a different-cohort risk-tertile curve, with
+     *  no tumour profile to say which tertile is comparable. Disclosed rather
+     *  than plotted against an arbitrary tertile. */
+    needsPatientProfile: string[]
     /** The window (in years) every plotted cohort actually observed — all curves
      *  are truncated to it. Disclosed in the caption so a reader knows the
      *  comparison isn't extrapolated past somebody's follow-up. */
@@ -64,7 +72,16 @@ export function timesToYears(times: number[], unit?: string | null): number[] {
     return times.map((t) => t / per)
 }
 
-export type DrugCurveOutcome = 'plottable' | 'insufficient' | 'unavailable' | 'not_checked' | 'building'
+export type DrugCurveOutcome =
+    | 'plottable'
+    | 'insufficient'
+    | 'unavailable'
+    | 'not_checked'
+    | 'building'
+    /** A different-cohort (Tier-2) curve with no patient to pick the comparable
+     *  risk group. See the guard in classifyDrugCurve for why this is not
+     *  silently defaulted. */
+    | 'needs_patient_profile'
 
 /** Classifies whether a drug's cohort KM data (if any) will actually produce a
  *  plotted curve — shared by the color assignment below and by top-N backfill
@@ -88,7 +105,13 @@ export function classifyDrugCurve(
             : 'plottable'
     }
     if (km.tier === 'cohort_reference' && km.reference_km && km.reference_km.length > 0) {
-        const group = (km.matched_risk_group ?? patientRiskGroup ?? 'low').toLowerCase()
+        // With no patient AND no per-cohort scoring there is no basis for
+        // choosing a tertile. Defaulting to 'low' — as this used to — plots the
+        // best-surviving third of a cohort and labels it as the drug's outcome,
+        // which is systematically optimistic. Withhold it instead; the Tier-1
+        // treated-vs-untreated contrast is the honest one without a patient.
+        if (!km.matched_risk_group && !patientRiskGroup) return 'needs_patient_profile'
+        const group = (km.matched_risk_group ?? patientRiskGroup)!.toLowerCase()
         const curve = km.reference_km.find((c) => c.group === group) ?? km.reference_km[0]
         return curve.n_events < MIN_CURVE_EVENTS || curve.n_samples < MIN_CURVE_SAMPLES ? 'insufficient' : 'plottable'
     }
@@ -114,6 +137,7 @@ export function topTreatmentCurves(
     baselineTimeUnit?: string | null,
 ): TopTreatmentCurves {
     const insufficientN: InsufficientCurve[] = []
+    const needsPatientProfile: string[] = []
     const pending: KMChartCurve[] = []
     // Each pending curve's source time unit, tracked in parallel: these come
     // from independently built models and are NOT guaranteed to agree.
@@ -192,7 +216,12 @@ export function topTreatmentCurves(
             // treatment cohort's own model (see TreatmentKMEvidence doc) —
             // only fall back to the baseline's risk-group label (a different
             // model's tertile boundaries) if per-cohort scoring didn't run.
-            const group = (km.matched_risk_group ?? patientRiskGroup ?? 'low').toLowerCase()
+            // With neither, there is no comparable tertile: see classifyDrugCurve.
+            if (!km.matched_risk_group && !patientRiskGroup) {
+                needsPatientProfile.push(drug)
+                continue
+            }
+            const group = (km.matched_risk_group ?? patientRiskGroup)!.toLowerCase()
             const curve = km.reference_km.find((c) => c.group === group) ?? km.reference_km[0]
             if (curve.n_events < MIN_CURVE_EVENTS || curve.n_samples < MIN_CURVE_SAMPLES) {
                 insufficientN.push({ drug, nSamples: curve.n_samples, nEvents: curve.n_events })
@@ -241,7 +270,7 @@ export function topTreatmentCurves(
     }
 
     if (pending.length === 0) {
-        return { curves: [], insufficientN, horizonYears: 0, baselineOmittedReason }
+        return { curves: [], insufficientN, needsPatientProfile, horizonYears: 0, baselineOmittedReason }
     }
 
     // 1. Put every curve on one scale. 2. Restrict to the window that EVERY
@@ -265,7 +294,45 @@ export function topTreatmentCurves(
         })
         .filter((c) => c.times.length > 0)
 
-    return { curves, insufficientN, horizonYears, baselineOmittedReason }
+    return { curves, insufficientN, needsPatientProfile, horizonYears, baselineOmittedReason }
+}
+
+export interface GeneDriverEstimate {
+    gene_symbol: string
+    direction: 'risk' | 'protective'
+    magnitude: number
+}
+
+/**
+ * Approximate, client-side estimate of which signature genes push this
+ * patient's risk up or down — for chip/prompt text only, NOT a reproduction
+ * of the backend's real per-gene scoring.
+ *
+ * PredictResponse.contributions deliberately aggregates the whole expression
+ * signature into ONE "Expression signature" entry (see
+ * SignatureService._score_expression in the backend) — there is no per-gene
+ * breakdown in the API response. The real per-gene term there is
+ * `coefficient * norm.ppf(percentile_of(value, gene.ref_quantiles))`, which
+ * needs the inverse normal CDF and the model's full reference-quantile
+ * normalization pipeline to reproduce exactly.
+ *
+ * This uses a plain z-score proxy instead — `coefficient * (value - ref_mean)
+ * / ref_std` — which has the same SIGN and roughly the same ORDERING as the
+ * real per-gene term, but not the same magnitude (no percentile clipping, no
+ * cross-platform quantile normalization). Good enough to name "genes worth
+ * asking about"; not a substitute for the model's actual scoring.
+ */
+export function estimateGeneDrivers(genes: SignatureGene[], expression: Record<string, number>): GeneDriverEstimate[] {
+    const out: GeneDriverEstimate[] = []
+    for (const g of genes) {
+        const raw = expression[g.gene_symbol]
+        if (raw === undefined) continue
+        const z = (raw - g.ref_mean) / (g.ref_std || 1)
+        const score = g.coefficient * z
+        if (score === 0) continue
+        out.push({ gene_symbol: g.gene_symbol, direction: score > 0 ? 'risk' : 'protective', magnitude: Math.abs(score) })
+    }
+    return out.sort((a, b) => b.magnitude - a.magnitude)
 }
 
 /** Parse pasted "GENE value" lines (space/comma/colon/tab separated) into a map. */

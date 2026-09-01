@@ -1,5 +1,299 @@
 @import "tailwindcss";
 
+/* Theming is driven by an explicit `data-theme` attribute on <html>, never by
+   prefers-color-scheme alone, so a subtree (the print report, the PNG export
+   node) can be locked light regardless of the OS setting. Prefer the SEMANTIC
+   tokens below over `dark:` utilities — a `dark:` class on a component that
+   also renders inside a light-locked subtree is a bug waiting to happen. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *):not(:where([data-theme="light"], [data-theme="light"] *)));
+
+/* Clinical design system tokens — ADDITIVE ONLY.
+   Never redefine a built-in Tailwind token name here (--text-sm, --radius-lg,
+   --color-gray-*, --color-indigo-*, etc.) — @theme entries in Tailwind's own
+   namespaces override the built-in, which would silently restyle every
+   untouched component in the app. Only add new names.
+
+   Layered in three tiers:
+     1. PALETTE  — raw ramps, identical in both themes.
+     2. SEMANTIC — the only tier components should consume. Light values live
+                   here; [data-theme="dark"] below re-points them.
+     3. CHART    — chrome for Recharts/SVG, consumed through var(), never classes.
+
+   TRAP: custom properties are substituted where they are DECLARED, not where
+   they are used. Never write color-mix(… var(--color-surface) …) inside @theme
+   — it would bake in the light value and inherit it into the dark subtree.
+   Every value is spelled out explicitly in both tables. */
+@theme {
+    /* ── 1. PALETTE ─────────────────────────────────────────────────────── */
+
+    /* Clinical neutrals — slightly warm; easier to read over a long shift than pure gray */
+    --color-clinical-50: #fafafa;
+    --color-clinical-100: #f4f4f5;
+    --color-clinical-200: #e4e4e7;
+    --color-clinical-300: #d4d4d8;
+    --color-clinical-400: #a1a1aa;
+    --color-clinical-500: #71717a;
+    --color-clinical-600: #52525b;
+    --color-clinical-700: #3f3f46;
+    --color-clinical-800: #27272a;
+    --color-clinical-900: #18181b;
+
+    /* Primary — the existing indigo family, named so clinical components don't
+       have to reach for the raw Tailwind indigo scale directly. 200/300/400/800/900
+       were used by five call sites before they existed, so those borders rendered
+       as currentColor; the full ramp is declared here. */
+    --color-primary-50: #eef2ff;
+    --color-primary-100: #e0e7ff;
+    --color-primary-200: #c7d2fe;
+    --color-primary-300: #a5b4fc;
+    --color-primary-400: #818cf8;
+    --color-primary-500: #6366f1;
+    --color-primary-600: #4f46e5;
+    --color-primary-700: #4338ca;
+    --color-primary-800: #3730a3;
+    --color-primary-900: #312e81;
+
+    /* Risk — MUST stay equal to GROUP_COLORS in utils/signatureViz.ts.
+       Tailwind classes can't drive Recharts fills/strokes, so that TS object
+       remains the source of truth for chart colors; these mirror it for
+       badges, chips, and other DOM-rendered risk indicators. Deliberately
+       IDENTICAL in both themes — all three clear 4.8:1 on the dark surface,
+       and series colors are data identity, not chrome. */
+    --color-risk-low: #22c55e;
+    --color-risk-intermediate: #f59e0b;
+    --color-risk-high: #ef4444;
+
+    /* ── 2. SEMANTIC (light values) ─────────────────────────────────────── */
+
+    --color-canvas: #fafafa;
+    --color-surface: #ffffff;
+    --color-surface-raised: #ffffff;
+    --color-surface-sunken: #f4f4f5;
+    --color-surface-accent: #f5f6ff;
+    --color-surface-hover: #f4f4f5;
+
+    --color-border: #e4e4e7;
+    --color-border-strong: #d4d4d8;
+    --color-border-accent: #a5b4fc;
+
+    --color-fg: #27272a;
+    --color-fg-strong: #18181b;
+    --color-fg-muted: #52525b;
+    --color-fg-faint: #71717a;
+    --color-on-accent: #ffffff;
+
+    --color-accent: #4f46e5;
+    --color-accent-hover: #4338ca;
+    --color-accent-fg: #4338ca;
+    --color-accent-soft: #eef2ff;
+    --color-accent-ring: #6366f1;
+
+    --color-ok: #15803d;
+    --color-ok-soft: #f0fdf4;
+    --color-ok-border: #bbf7d0;
+    --color-warn: #b45309;
+    --color-warn-soft: #fffbeb;
+    --color-warn-border: #fde68a;
+    --color-danger: #b91c1c;
+    --color-danger-soft: #fef2f2;
+    --color-danger-border: #fecaca;
+    /* Solid destructive fill — kept separate from --color-danger because that
+       one is TEXT on a surface and inverts between themes, which would leave
+       white-on-light-red at 2.5:1 in dark. */
+    --color-danger-solid: #dc2626;
+    --color-danger-solid-hover: #b91c1c;
+
+    /* A third hue, distinct from accent and from every status color — the
+       comparison and pathway views use it to separate two datasets. */
+    /* An intentionally INVERTED surface — the conversation sidebar, tooltips,
+       the dark utility button. Distinct from --color-fg-strong, which is a text
+       color and flips the other way between themes. */
+    --color-inverse: #27272a;
+    --color-inverse-hover: #3f3f46;
+    --color-on-inverse: #ffffff;
+
+    --color-alt: #7c3aed;
+    --color-alt-hover: #6d28d9;
+    --color-alt-soft: #f5f3ff;
+    --color-alt-border: #ddd6fe;
+
+    --color-risk-low-soft: #f0fdf4;
+    --color-risk-intermediate-soft: #fffbeb;
+    --color-risk-high-soft: #fef2f2;
+
+    /* Research-use-only / advisory */
+    --color-ruo: #b45309;
+    --color-ruo-bg: #fffbeb;
+    --color-ruo-border: #fde68a;
+
+    /* ── 3. CHART CHROME ────────────────────────────────────────────────── */
+    --color-chart-grid: #f0f0f0;
+    --color-chart-axis: #6b7280;
+    --color-chart-label: #9ca3af;
+    --color-chart-tooltip-bg: #ffffff;
+    --color-chart-tooltip-fg: #18181b;
+    --color-chart-tooltip-border: #e4e4e7;
+
+    /* Type steps not covered by the built-in scale */
+    --text-note: 11px;
+    --text-note--line-height: 1.45;
+    --text-metric: 22px;
+    --text-metric--line-height: 1.1;
+
+    /* Radii — collapses the app's rounded/md/lg/xl/2xl inconsistency to two steps */
+    --radius-control: 6px;
+    --radius-card: 10px;
+
+    /* Elevation + layout */
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.06), 0 1px 3px rgb(0 0 0 / 0.08);
+    --spacing-rail: 400px;
+    --spacing-header: 48px;
+}
+
+/* ── Theme scopes ───────────────────────────────────────────────────────────
+   Only the SEMANTIC and CHART tiers are re-pointed. Custom properties cascade,
+   so this re-themes every consumer at once — no `dark:` variant on ~1300 class
+   strings, no JS, no flash. */
+:root:not([data-theme="dark"]) {
+    color-scheme: light;
+}
+
+/* The light values also live in @theme (i.e. on :root), but custom properties
+   INHERIT — so a light-locked subtree nested inside <html data-theme="dark">
+   would otherwise inherit the dark table. This block re-declares them at the
+   lock point, which is what makes the print report and the PNG-export node
+   actually render light. */
+[data-theme="light"] {
+    color-scheme: light;
+
+    --color-canvas: #fafafa;
+    --color-surface: #ffffff;
+    --color-surface-raised: #ffffff;
+    --color-surface-sunken: #f4f4f5;
+    --color-surface-accent: #f5f6ff;
+    --color-surface-hover: #f4f4f5;
+    --color-border: #e4e4e7;
+    --color-border-strong: #d4d4d8;
+    --color-border-accent: #a5b4fc;
+    --color-fg: #27272a;
+    --color-fg-strong: #18181b;
+    --color-fg-muted: #52525b;
+    --color-fg-faint: #71717a;
+    --color-on-accent: #ffffff;
+    --color-accent: #4f46e5;
+    --color-accent-hover: #4338ca;
+    --color-accent-fg: #4338ca;
+    --color-accent-soft: #eef2ff;
+    --color-accent-ring: #6366f1;
+    --color-ok: #15803d;
+    --color-ok-soft: #f0fdf4;
+    --color-ok-border: #bbf7d0;
+    --color-warn: #b45309;
+    --color-warn-soft: #fffbeb;
+    --color-warn-border: #fde68a;
+    --color-danger: #b91c1c;
+    --color-danger-soft: #fef2f2;
+    --color-danger-border: #fecaca;
+    --color-danger-solid: #dc2626;
+    --color-danger-solid-hover: #b91c1c;
+    --color-inverse: #27272a;
+    --color-inverse-hover: #3f3f46;
+    --color-on-inverse: #ffffff;
+    --color-alt: #7c3aed;
+    --color-alt-hover: #6d28d9;
+    --color-alt-soft: #f5f3ff;
+    --color-alt-border: #ddd6fe;
+    --color-risk-low-soft: #f0fdf4;
+    --color-risk-intermediate-soft: #fffbeb;
+    --color-risk-high-soft: #fef2f2;
+    --color-ruo: #b45309;
+    --color-ruo-bg: #fffbeb;
+    --color-ruo-border: #fde68a;
+    --color-chart-grid: #f0f0f0;
+    --color-chart-axis: #6b7280;
+    --color-chart-label: #9ca3af;
+    --color-chart-tooltip-bg: #ffffff;
+    --color-chart-tooltip-fg: #18181b;
+    --color-chart-tooltip-border: #e4e4e7;
+}
+
+[data-theme="dark"] {
+    /* Not optional: ClinicalCovariateFields renders <select> and
+       <input type="number">. Without this the <option> popup, number spinners,
+       caret, autofill highlight and scrollbars stay light-chromed on dark
+       inputs, which makes the dropdown list essentially unreadable. */
+    color-scheme: dark;
+
+    --color-canvas: #0b0d10;
+    --color-surface: #14171c;
+    --color-surface-raised: #1b1f26;
+    --color-surface-sunken: #0f1216;
+    --color-surface-accent: #171a2b;
+    --color-surface-hover: #1f242c;
+
+    --color-border: #262b33;
+    --color-border-strong: #363c46;
+    --color-border-accent: #4f46e5;
+
+    /* Contrast on --color-surface (#14171c): fg 14.3:1, muted 7.6:1, faint 5.6:1.
+       Do not lower fg-faint — the 11px captions are already at the floor. */
+    --color-fg: #e6e8ec;
+    --color-fg-strong: #f5f6f8;
+    --color-fg-muted: #a2a9b5;
+    --color-fg-faint: #8a919e;
+    --color-on-accent: #ffffff;
+
+    /* Accent stays #4f46e5 in dark: white-on-accent is 6.3:1, whereas the
+       lighter #6366f1 would drop to 4.46:1 and fail. */
+    --color-accent: #4f46e5;
+    --color-accent-hover: #6366f1;
+    --color-accent-fg: #a5b4fc;
+    --color-accent-soft: #1b1f3a;
+    --color-accent-ring: #818cf8;
+
+    --color-ok: #4ade80;
+    --color-ok-soft: #0f2418;
+    --color-ok-border: #17532f;
+    --color-warn: #fbbf24;
+    --color-warn-soft: #2a1f06;
+    --color-warn-border: #57400d;
+    --color-danger: #f87171;
+    --color-danger-soft: #2c1113;
+    --color-danger-border: #5c1f22;
+    --color-danger-solid: #b91c1c;
+    --color-danger-solid-hover: #991b1b;
+
+    --color-inverse: #1b1f26;
+    --color-inverse-hover: #262b33;
+    --color-on-inverse: #e6e8ec;
+
+    --color-alt: #a78bfa;
+    --color-alt-hover: #c4b5fd;
+    --color-alt-soft: #1e1733;
+    --color-alt-border: #4c1d95;
+
+    --color-risk-low-soft: #0f2418;
+    --color-risk-intermediate-soft: #2a1f06;
+    --color-risk-high-soft: #2c1113;
+
+    --color-ruo: #fbbf24;
+    --color-ruo-bg: #2a1f06;
+    --color-ruo-border: #57400d;
+
+    --color-chart-grid: #232830;
+    --color-chart-axis: #8b93a1;
+    --color-chart-label: #6f7784;
+    --color-chart-tooltip-bg: #1b1f26;
+    --color-chart-tooltip-fg: #e6e8ec;
+    --color-chart-tooltip-border: #363c46;
+
+    /* Depth on dark comes from a light top rim, not a grey blur. */
+    --shadow-card:
+        inset 0 1px 0 rgb(255 255 255 / 0.04),
+        0 1px 2px rgb(0 0 0 / 0.5),
+        0 2px 8px rgb(0 0 0 / 0.35);
+}
+
 @layer base {
 
     html,
@@ -7,6 +301,8 @@
         margin: 0;
         padding: 0;
         height: 100%;
+        background-color: var(--color-canvas);
+        color: var(--color-fg);
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
             'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
             sans-serif;
@@ -17,6 +313,168 @@
     #root {
         height: 100%;
     }
+
+    :focus-visible {
+        outline: 2px solid var(--color-accent-ring);
+        outline-offset: 2px;
+    }
+
+    ::selection {
+        background: var(--color-accent-soft);
+        color: var(--color-fg-strong);
+    }
+}
+
+/* Markdown rendered from assistant turns. @tailwindcss/typography is not
+   installed, and its own light/dark handling would fight the token layer. */
+.md-body {
+    font-size: 0.875rem;
+    line-height: 1.6;
+    color: var(--color-fg);
+}
+
+.md-body> :first-child {
+    margin-top: 0;
+}
+
+.md-body> :last-child {
+    margin-bottom: 0;
+}
+
+.md-body p,
+.md-body ul,
+.md-body ol,
+.md-body pre,
+.md-body blockquote,
+.md-body table {
+    margin: 0.5rem 0;
+}
+
+.md-body h1,
+.md-body h2,
+.md-body h3,
+.md-body h4 {
+    margin: 0.85rem 0 0.35rem;
+    font-weight: 600;
+    line-height: 1.3;
+    color: var(--color-fg-strong);
+}
+
+.md-body h1 { font-size: 1.05rem; }
+.md-body h2 { font-size: 1rem; }
+.md-body h3 { font-size: 0.9375rem; }
+.md-body h4 { font-size: 0.875rem; }
+
+.md-body ul,
+.md-body ol {
+    padding-left: 1.25rem;
+}
+
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li { margin: 0.15rem 0; }
+.md-body li > ul, .md-body li > ol { margin: 0.15rem 0; }
+
+.md-body a {
+    color: var(--color-accent-fg);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+.md-body code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8125em;
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    padding: 0.05em 0.3em;
+}
+
+.md-body pre {
+    background: var(--color-surface-sunken);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-control);
+    padding: 0.6rem 0.7rem;
+    overflow-x: auto;
+}
+
+.md-body pre code {
+    background: none;
+    border: 0;
+    padding: 0;
+    font-size: 0.8125rem;
+}
+
+.md-body blockquote {
+    border-left: 2px solid var(--color-border-accent);
+    padding-left: 0.75rem;
+    color: var(--color-fg-muted);
+}
+
+.md-body hr {
+    border: 0;
+    border-top: 1px solid var(--color-border);
+    margin: 0.85rem 0;
+}
+
+/* Tables are the reason a real markdown renderer earns its place — the agent is
+   prompted to report cohorts, sample counts and C-indices as GFM tables. */
+.md-body table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+}
+
+.md-body th,
+.md-body td {
+    border-bottom: 1px solid var(--color-border);
+    padding: 0.3rem 0.5rem 0.3rem 0;
+    text-align: left;
+    vertical-align: top;
+}
+
+.md-body th {
+    font-weight: 600;
+    color: var(--color-fg-muted);
+    white-space: nowrap;
+}
+
+/* Recharts chrome — axes, gridlines, legends, the default tooltip.
+   Recharts emits these as SVG PRESENTATION attributes (stroke="#ccc"), which
+   CSS wins over, so one scoped block themes every chart in the app without
+   touching a single <CartesianGrid> prop. The exceptions are the legend text
+   and default tooltip, which Recharts sets as INLINE styles — those need
+   !important. Series colours are untouched: they are data identity and stay
+   owned by GROUP_COLORS / DATASET_COLORS in TS. */
+.recharts-cartesian-grid line {
+    stroke: var(--color-chart-grid);
+}
+
+.recharts-cartesian-axis-line,
+.recharts-cartesian-axis-tick-line {
+    stroke: var(--color-chart-axis);
+}
+
+.recharts-cartesian-axis-tick-value {
+    fill: var(--color-chart-axis);
+}
+
+.recharts-label,
+.recharts-legend-item-text {
+    fill: var(--color-chart-label);
+    color: var(--color-chart-label) !important;
+}
+
+.recharts-default-tooltip {
+    background: var(--color-chart-tooltip-bg) !important;
+    border: 1px solid var(--color-chart-tooltip-border) !important;
+    border-radius: var(--radius-control);
+    color: var(--color-chart-tooltip-fg) !important;
+}
+
+.recharts-tooltip-item,
+.recharts-tooltip-label {
+    color: var(--color-chart-tooltip-fg) !important;
 }
 
 /* F22 — one-page printable clinical evidence report.
@@ -26,7 +484,22 @@
     display: none;
 }
 
+/* The report is a light artifact that may be rendered from inside a dark tree,
+   so print forces light unconditionally — see the data-theme="light" lock on
+   the .print-report roots in PatientReport.tsx / ClinicalReport.tsx. */
 @media print {
+
+    :root,
+    [data-theme] {
+        color-scheme: light !important;
+    }
+
+    html,
+    body {
+        background: #fff !important;
+        color: #000 !important;
+    }
+
     body * {
         visibility: hidden;
     }
@@ -34,6 +507,7 @@
     .print-report,
     .print-report * {
         visibility: visible;
+        color: #000 !important;
     }
 
     .print-report {
@@ -44,7 +518,7 @@
         width: 100%;
         padding: 0.5in;
         font-size: 11pt;
-        color: #000;
+        background: #fff !important;
     }
 
     .print-report .page-break {
