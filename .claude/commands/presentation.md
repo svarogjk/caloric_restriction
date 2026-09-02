@@ -97,7 +97,8 @@ All accent colors were chosen to keep ≥4.5:1 contrast against the white/slate-
 
 **Pipeline & Services (slides 25–33)**
 
-25. **The 6-Step Workflow We Automate** — Search → Parse → Map → Find Survival Data → Cox/KM → Synthesise
+25. **The 6-Step Analysis Pipeline We Automate** — Search → Parse → Map → Find Survival Data → Cox/KM → Synthesise
+    (named "pipeline" to distinguish it from the console's own 6-step clinical flow: Case → Profile → Evidence → Score → Why → Options)
 26. **GEOClient: Accessing 200K+ Datasets from NCBI GEO**
 27. **GEOLoaderService: Parsing Expression Matrices**
 28. **GEOSurvivalWorkflowOrchestrator: Pipeline Coordinator**
@@ -132,9 +133,9 @@ All accent colors were chosen to keep ≥4.5:1 contrast against the white/slate-
 
 **Demo (slides 48–50)**
 
-48. **Demo: Natural Language Query** — screenshot of the chat interface
-49. **Demo: Volcano Plot & Gene Results** — screenshot of ranked genes
-50. **Demo: Kaplan-Meier Survival Curves** — screenshot of survival curves
+48. **Demo: The Case Is the Query** — clinical console entry page + answerable-question catalogue
+49. **Demo: Risk Scoring and What Drove It** — C-index tiles, reference KM by risk group, covariate contributions
+50. **Demo: Treatments to Consider (Advisory)** — treated-vs-untreated cohort curves + CIViC/DGIdb evidence table
 
 **Lessons Learned (slide 51)**
 
@@ -143,7 +144,8 @@ All accent colors were chosen to keep ≥4.5:1 contrast against the white/slate-
 ## Screenshots
 
 Place screenshots in `presentations/screenshots/` or a dated subfolder (e.g. `260123/`).
-Required files: `starting_page.png`, `volcano_plot.png`, `kaplan_meier_curves.png` (or `km_curves.png`).
+Required files: `app_entry_page.png`, `patient_scoring.png`, `treatments_prediction.png`.
+Images are aspect-fitted into a 12.333 × 5.22 in box, so wide and near-square screenshots both work.
 The script searches dated subdirectories newest-first, then falls back to the root screenshots folder.
 
 ## Editing Slides

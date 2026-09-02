@@ -538,7 +538,7 @@ def add_hr_slide(prs: Presentation) -> None:
     # Gene A: HR = 0.35 (protective)
     gax = hr2x(0.35)
     _rect(slide, gax - 0.03, nl_y + 0.22, 0.06, 0.20, TEAL, "GeneAMark")
-    tb_ga = _tb(slide, gax - 1.0, nl_y + 1.10, 2.0, 0.55)
+    tb_ga = _tb(slide, max(0.35, gax - 1.0), nl_y + 1.10, 2.0, 0.55)
     _para(tb_ga.text_frame, "HR = 0.35\nGene A protects", 11, TEAL, align=PP_ALIGN.CENTER)
 
     # Gene B: HR = 2.8 (harmful)
@@ -850,32 +850,36 @@ def add_backend_arch_visual_slide(prs: Presentation) -> None:
 
     route_x, route_w = 0.35, 3.25
     svc_x,   svc_w   = 4.00, 9.00
-    row_h, gap = 0.76, 0.10
+    row_h, gap = 0.68, 0.08
     start_y = 1.20
 
     routes = [
-        ("GET  /api/search/stream",  "SSE analysis stream",    TEAL),
-        ("POST /api/chat/…",         "Streaming AI chat",      PURPLE),
-        ("POST /api/auth/…",         "JWT auth endpoints",     AMBER),
-        ("POST /api/compare/…",      "Side-by-side analysis",  BLUE),
-        ("POST /api/enrichment/…",   "GO/KEGG enrichment",     CORAL),
+        ("GET  /api/search/stream",     "SSE analysis stream",     TEAL),
+        ("POST /api/signature  /predict", "Build + score risk model", BLUE),
+        ("POST /api/treatment-context", "Treated vs untreated",    AMBER),
+        ("POST /api/chat/therapy-…",    "Advisory treatments",     CORAL),
+        ("POST /api/chat/…",            "Streaming AI chat",       PURPLE),
+        ("GET  /api/gallery  /enrich",  "Curated models · GO/KEGG", TEAL),
     ]
     services = [
         ("GEOSurvivalWorkflowOrchestrator",
          "chains GEOClient → GeneMapping → SurvivalAnalysis  via asyncio.gather(return_exceptions=True)",
          TEAL),
+        ("SignatureService  → lifelines CoxPHFitter",
+         "multi-gene risk model · cross-cohort Harrell's C · quantile-normalised single-sample scoring",
+         BLUE),
+        ("TreatmentContextService",
+         "per-regimen KM within documented GEO cohorts · observational, confounded by indication",
+         AMBER),
+        ("TherapyEvidenceService  → CIViC + DGIdb",
+         "biomarker→therapy records for risk-driving genes · advisory, research use only",
+         CORAL),
         ("PydanticAIService  ← pydantic-ai Agent",
          "5 registered tools · numpy cosine RAG · domain score badge per response",
          PURPLE),
-        ("AuthService  → JWT + bcrypt",
-         "register · login · /me · Depends(get_current_user) per protected route",
-         AMBER),
-        ("CompareService",
-         "side-by-side result diff · shared result permalinks  (/results/:id  public)",
-         BLUE),
-        ("PathwayEnrichmentService",
-         "GO term enrichment · KEGG pathways  (stub, roadmap F11)",
-         CORAL),
+        ("GalleryService  ·  PathwayEnrichmentService",
+         "pre-built curated cancer models · GO/KEGG/Reactome via g:Profiler REST",
+         TEAL),
     ]
 
     for i, ((route_label, route_sub, color), (svc_label, svc_desc, _)) in enumerate(
@@ -887,7 +891,7 @@ def add_backend_arch_visual_slide(prs: Presentation) -> None:
         _rect(slide, route_x, ry, 0.06, row_h, color, f"beRA{i}")
         tb_r = _tb(slide, route_x + 0.14, ry + 0.08, route_w - 0.18, 0.32)
         _para(tb_r.text_frame, route_label, 10, color, bold=True, mono=True)
-        tb_rs = _tb(slide, route_x + 0.14, ry + 0.42, route_w - 0.18, 0.26)
+        tb_rs = _tb(slide, route_x + 0.14, ry + 0.38, route_w - 0.18, 0.26)
         _para(tb_rs.text_frame, route_sub, 9, MUTED)
         # Arrow
         arrow_cy = ry + row_h / 2 - 0.05
@@ -898,12 +902,12 @@ def add_backend_arch_visual_slide(prs: Presentation) -> None:
         _rect(slide, svc_x, ry, 0.06, row_h, color, f"beSA{i}")
         tb_sh = _tb(slide, svc_x + 0.14, ry + 0.06, svc_w - 0.20, 0.32)
         _para(tb_sh.text_frame, svc_label, 12, color, bold=True)
-        tb_sd = _tb(slide, svc_x + 0.14, ry + 0.40, svc_w - 0.20, 0.30)
+        tb_sd = _tb(slide, svc_x + 0.14, ry + 0.36, svc_w - 0.20, 0.30)
         _para(tb_sd.text_frame, svc_desc, 9, MUTED)
 
     # Storage strip
     total_content_w = svc_x + svc_w - route_x
-    storage_y = start_y + 5 * (row_h + gap) - gap + 0.14
+    storage_y = start_y + 6 * (row_h + gap) - gap + 0.14
     _rect(slide, route_x, storage_y, total_content_w, 0.24, TEAL_DARK, "beStorHdr")
     tb_sh = _tb(slide, route_x + 0.14, storage_y + 0.04, 2.0, 0.16)
     _para(tb_sh.text_frame, "PERSISTENT STORAGE", 10, TEAL, bold=True)
@@ -945,13 +949,19 @@ def add_frontend_arch_visual_slide(prs: Presentation) -> None:
         ("React 18 + TypeScript  (Vite + Tailwind)", LIGHT, False),
         ("│", MUTED, True),
         ("├─ <App>  (React Router v6)", LIGHT, True),
-        ("│   ├─ <ChatContainer>", TEAL, True),
-        ("│   │   ├─ <MessageList>  +  <ChatInput>", MUTED, True),
-        ("│   │   └─ <AnalysisResults>", MUTED, True),
-        ("│   │       tabs: volcano / KM / forest plot", MUTED, True),
-        ("│   ├─ <AnalysisHistoryPage>", BLUE, True),
-        ("│   ├─ <ComparisonPage>", BLUE, True),
+        ("│   ├─ <ClinicalConsole>   \"/\"  ← front door", TEAL, True),
+        ("│   │   ├─ <ConsoleThread>   15 entry kinds", MUTED, True),
+        ("│   │   │     case → readout → treatment, one log", MUTED, True),
+        ("│   │   ├─ <ChartStrip> + <ConsoleComposer>", MUTED, True),
+        ("│   │   └─ <PatientRail>   \"where you are\", step N of 6", MUTED, True),
+        ("│   ├─ <ChatContainer>   \"/research\"  (discovery)", PURPLE, True),
+        ("│   ├─ <AnalysisHistoryPage>  ·  <ComparisonPage>", BLUE, True),
         ("│   └─ <SharedResultPage>  (public, no login)", MUTED, True),
+        ("│", MUTED, True),
+        ("├─ Console hooks  (scoring kept out of the view)", AMBER, True),
+        ("│   ├─ usePatientScoring   expression + covariates → risk", MUTED, True),
+        ("│   ├─ useAnalysisRun      SSE run lifecycle", MUTED, True),
+        ("│   └─ useConsoleActions   action chips → thunks", MUTED, True),
         ("│", MUTED, True),
         ("├─ Redux Toolkit Store", PURPLE, True),
         ("│   ├─ authSlice   user · token · isAuthenticated", MUTED, True),
@@ -977,11 +987,11 @@ def add_frontend_arch_visual_slide(prs: Presentation) -> None:
     _para(tb_rh.text_frame, "STATE + DATA FLOW", 11, BLUE, bold=True)
 
     _ic(slide, rx, 1.48, rw, 1.80, "REDUX STATE FLOW", PURPLE, [
-        "User submits query  →  dispatch(sendMessage())",
+        "Doctor describes a case  →  parsed in-browser, de-identified",
         "Thunk calls EventSource /api/search/stream",
         "onmessage  →  dispatch(setAnalysisProgress(event))",
-        "<AnalysisResults> re-renders on each SSE event",
-        "On complete  →  dispatch(setResults(data))  →  tabs render",
+        "Progress entry re-renders in place inside the thread",
+        "On complete  →  readout + treatment entries append to the log",
     ], "feRx")
 
     _ic(slide, rx, 3.42, rw, 1.55, "TWO STREAMING PROTOCOLS", TEAL, [
@@ -1339,7 +1349,18 @@ def add_image_slide(
     tb = _tb(slide, 0.5, 0.30, 12.333, 0.75, "Title")
     _para(tb.text_frame, title, 24, INK, bold=True)
     _rect(slide, 0.5, 1.05, 12.333, 0.04, TEAL, "TitleLine")
-    slide.shapes.add_picture(str(image_path), Inches(1.0), Inches(1.20), width=Inches(11.333))
+
+    # Aspect-fit inside the box between the title rule and the caption. Screenshots
+    # range from wide (entry page, 2.13:1) to nearly square (scoring panel, 1.30:1);
+    # a hardcoded width would run the tall ones off the bottom of the slide.
+    box_x, box_y = Inches(0.5), Inches(1.18)
+    box_w, box_h = Inches(12.333), Inches(5.22)
+    pic = slide.shapes.add_picture(str(image_path), box_x, box_y)
+    scale = min(box_w / pic.width, box_h / pic.height)
+    pic.width, pic.height = int(pic.width * scale), int(pic.height * scale)
+    pic.left = int(box_x + (box_w - pic.width) / 2)
+    pic.top = int(box_y + (box_h - pic.height) / 2)
+
     tb_cap = _tb(slide, 0.5, 6.50, 12.333, 0.75, "Caption")
     _para(tb_cap.text_frame, caption, 14, TEAL, align=PP_ALIGN.CENTER)
 
@@ -2938,7 +2959,8 @@ def add_caching_layers_slide(prs: Presentation) -> None:
          "Skip repeated GET /conversations API calls","timestamp gated in Redux Toolkit",          "cleared on new message",BLUE),
     ]
 
-    lh = (6.20 - 0.20) / len(layers)
+    row_gap = 0.04
+    lh = (7.20 - 1.82 - (len(layers) - 1) * row_gap) / len(layers)
     col_widths = [1.65, 1.20, 2.10, 2.60, 2.00, 1.45]
     col_headers = ["Layer", "Bound", "Location", "Prevents", "Key", "Lifetime"]
     col_x = [0.5, 2.20, 3.45, 5.60, 8.25, 10.30]
@@ -2950,7 +2972,7 @@ def add_caching_layers_slide(prs: Presentation) -> None:
         _para(tb_h.text_frame, hdr, 10, TEAL, bold=True)
 
     for ri, (name, bound, loc, prevents, key, lifetime, col) in enumerate(layers):
-        ry = 1.82 + ri * (lh + 0.04)
+        ry = 1.82 + ri * (lh + row_gap)
         _rect(slide, 0.5, ry, 11.78, lh, CARD if ri % 2 == 0 else CARD_ALT, f"caRow{ri}")
         vals = [name, bound, loc, prevents, key, lifetime]
         for ci, (val, cx, cw) in enumerate(zip(vals, col_x, col_widths)):
@@ -3245,7 +3267,7 @@ def _build_slide_list(screenshots_dir: Path) -> list[Callable[[Presentation], No
         # Slide 25: 6-step workflow overview
         lambda prs: add_workflow_slide(
             prs,
-            "The 6-Step Workflow We Automate",
+            "The 6-Step Analysis Pipeline We Automate",
             steps=[
                 ("1", "Search Datasets",
                  "Query NCBI Entrez eSearch with disease + tissue keywords — returns GSE accession IDs"),
@@ -3260,7 +3282,7 @@ def _build_slide_list(screenshots_dir: Path) -> list[Callable[[Presentation], No
                 ("6", "Synthesise Across Studies",
                  "Rank genes by # significant cohorts; pool HRs; report I² heterogeneity; export CSV + Methods text"),
             ],
-            bottom_text="GEO Survival Analysis automates all 6 steps  ·  under 5 minutes  ·  no coding required",
+            bottom_text="All 6 steps run behind one clinical question  ·  under 5 minutes  ·  no coding required",
         ),
         lambda prs: add_geoclient_slide(prs),          # Slide 26
         lambda prs: add_geoloader_slide(prs),          # Slide 27
@@ -3387,23 +3409,23 @@ def _build_slide_list(screenshots_dir: Path) -> list[Callable[[Presentation], No
         # Slide 48
         lambda prs: add_image_slide(
             prs,
-            "Demo: Natural Language Query",
-            _find_screenshot(screenshots_dir, "starting_page.png"),
-            'Type a natural language query — e.g. "What genes predict poor survival in triple-negative breast cancer?"',
+            "Demo: The Case Is the Query",
+            _find_screenshot(screenshots_dir, "app_entry_page.png"),
+            "A de-identified case line parsed in the browser, plus the seven questions the app actually computes an answer to",
         ),
         # Slide 49
         lambda prs: add_image_slide(
             prs,
-            "Demo: Volcano Plot & Gene Results",
-            _find_screenshot(screenshots_dir, "volcano_plot.png"),
-            "Ranked genes with hazard ratios, p-values, and risk direction consistency across datasets",
+            "Demo: Risk Scoring and What Drove It",
+            _find_screenshot(screenshots_dir, "patient_scoring.png"),
+            "Expression vs clinical vs combined C-index, reference survival by risk group, and per-covariate contributions",
         ),
         # Slide 50
         lambda prs: add_image_slide(
             prs,
-            "Demo: Kaplan-Meier Survival Curves",
-            _find_screenshot(screenshots_dir, "kaplan_meier_curves.png", "km_curves.png"),
-            "Compare survival probability between high and low expression groups — interpretable by clinicians",
+            "Demo: Treatments to Consider (Advisory)",
+            _find_screenshot(screenshots_dir, "treatments_prediction.png"),
+            "Treated-vs-untreated curves within a documented GEO cohort, with CIViC/DGIdb evidence — observational, not randomised",
         ),
 
         # ── SECTION 11: Lessons Learned ─────────────────────────────────────────
