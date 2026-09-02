@@ -11,7 +11,7 @@ interface PromptChipsProps {
 const PromptChips: React.FC<PromptChipsProps> = ({ prompts, onSelect }) => {
     if (prompts.length === 0) return null
     return (
-        <div className="flex items-center gap-1.5 px-3 pb-1.5 overflow-x-auto">
+        <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto">
             <span className="flex-shrink-0 text-[10px] uppercase tracking-wide text-fg-faint">Suggested</span>
             {prompts.map((p) => (
                 <button

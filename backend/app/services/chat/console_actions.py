@@ -45,6 +45,15 @@ _KNOWN_CASE_IDS = frozenset({
     "ovarian_hgsc", "gastric_diffuse", "glioma_idh_wt", "prostate_ar",
 })
 
+# Mirrors QuestionId in frontend/src/utils/questionCatalogue.ts — the questions the
+# app has a real pipeline for. Duplicated on the same grounds as
+# _CURATED_CANCER_KEYS above: a small, stable whitelist is cheaper to keep in sync
+# than an import from the UI layer, and validating here is what stops the agent
+# inventing a goal that no endpoint serves.
+_QUESTION_IDS = frozenset({
+    "risk", "drivers", "trust", "treatment", "regimens", "gene", "discovery",
+})
+
 
 def _record(ctx: RunContext["AgentDeps"], action: str, **payload) -> None:
     if ctx.deps.action_sink is not None:
@@ -53,6 +62,15 @@ def _record(ctx: RunContext["AgentDeps"], action: str, **payload) -> None:
 
 def _chart(ctx: RunContext["AgentDeps"]) -> dict:
     return ctx.deps.patient_context or {}
+
+
+def _blocked_reason(ctx: RunContext["AgentDeps"]) -> str | None:
+    """The console's own sentence for why the current step cannot run.
+
+    Refusals quote this rather than re-wording it, so the agent tells the
+    clinician exactly what the next-step card already says on screen.
+    """
+    return (ctx.deps.research_context or {}).get("workflow_blocked_reason")
 
 
 async def set_cancer_type(ctx: RunContext["AgentDeps"], cancer_key: str) -> str:
@@ -103,7 +121,9 @@ async def request_tumour_profile(ctx: RunContext["AgentDeps"], reason: str) -> s
     """
     chart = _chart(ctx)
     if not chart.get("cancer_type") and not chart.get("model_id"):
-        return "Set a cancer type first with set_cancer_type before requesting the tumour profile."
+        return _blocked_reason(ctx) or (
+            "Set a cancer type first with set_cancer_type before requesting the tumour profile."
+        )
     _record(ctx, "request_expression", reason=reason)
     return "The tumour expression intake card will be shown to the clinician."
 
@@ -138,11 +158,12 @@ async def score_patient(ctx: RunContext["AgentDeps"]) -> str:
         Confirmation, or a refusal explaining what's still missing
     """
     chart = _chart(ctx)
+    blocked = _blocked_reason(ctx)
     if not chart.get("model_id") and not chart.get("cancer_type"):
-        return "No cancer type/model set yet — call set_cancer_type or run_survival_analysis first."
+        return blocked or "No cancer type/model set yet — call set_cancer_type or run_survival_analysis first."
     genes_provided = chart.get("genes_provided") or 0
     if genes_provided <= 0:
-        return "No tumour expression has been provided yet — call request_tumour_profile first."
+        return blocked or "No tumour expression has been provided yet — call request_tumour_profile first."
     _record(ctx, "score_patient")
     return "Scoring the patient now — the risk readout will appear in the thread."
 
@@ -156,7 +177,7 @@ async def explain_for_clinician(ctx: RunContext["AgentDeps"]) -> str:
         Confirmation, or a refusal if there's no score yet
     """
     if not _chart(ctx).get("risk_group"):
-        return "The patient hasn't been scored yet — call score_patient first."
+        return _blocked_reason(ctx) or "The patient hasn't been scored yet — call score_patient first."
     _record(ctx, "explain_for_clinician")
     return "Showing a plain-language summary of this patient's risk readout."
 
@@ -171,7 +192,7 @@ async def show_model_quality(ctx: RunContext["AgentDeps"]) -> str:
         Confirmation, or a refusal if no model is set
     """
     if not _chart(ctx).get("model_id"):
-        return "No model is set yet — call set_cancer_type or run_survival_analysis first."
+        return _blocked_reason(ctx) or "No model is set yet — call set_cancer_type or run_survival_analysis first."
     _record(ctx, "show_model_quality")
     return "Showing the model's discrimination, nomogram, and concordance benchmark."
 
@@ -218,7 +239,7 @@ async def show_treatment_context(ctx: RunContext["AgentDeps"]) -> str:
         Confirmation, or a refusal if no cancer type is set
     """
     if not _chart(ctx).get("cancer_type"):
-        return "No cancer type is set yet — call set_cancer_type first."
+        return _blocked_reason(ctx) or "No cancer type is set yet — call set_cancer_type first."
     _record(ctx, "show_treatment_context")
     return "Showing outcomes across documented treatment cohorts for this cancer type."
 
@@ -233,7 +254,7 @@ async def show_driver_biology(ctx: RunContext["AgentDeps"]) -> str:
         Confirmation, or a refusal if there's no score yet
     """
     if not _chart(ctx).get("risk_group"):
-        return "The patient hasn't been scored yet — call score_patient first."
+        return _blocked_reason(ctx) or "The patient hasn't been scored yet — call score_patient first."
     _record(ctx, "show_driver_biology")
     return "Showing pathway enrichment for this patient's risk-driving genes."
 
@@ -358,8 +379,37 @@ async def run_survival_analysis(
     return " ".join(parts)
 
 
+async def set_workflow_goal(ctx: RunContext["AgentDeps"], question_id: str) -> str:
+    """
+    Record which of the app's answerable questions this session is pursuing.
+    Call this as soon as the clinician's intent is clear — it scopes the
+    workflow, so steps the question does not need stop being reported as
+    missing.
+
+    Args:
+        question_id: One of: risk, drivers, trust, treatment, regimens, gene,
+            discovery. See the "What this app can actually answer" list.
+
+    Returns:
+        Confirmation, or a refusal naming the valid goals
+    """
+    qid = question_id.strip().lower()
+    if qid not in _QUESTION_IDS:
+        return (
+            f"'{question_id}' is not a question this app has a pipeline for. Valid goals: "
+            f"{', '.join(sorted(_QUESTION_IDS))}. If the clinician wants something else, say "
+            "plainly that there is no computation for it rather than setting a goal."
+        )
+    _record(ctx, "set_goal", question_id=qid)
+    return (
+        f"Goal set to '{qid}'. The Workflow block now lists only the steps this question "
+        "needs — follow its NEXT line."
+    )
+
+
 # Tool names excluded from the Domain Score — see pydantic_ai_service.py._compute_domain_score.
 ACTION_TOOL_NAMES = frozenset({
+    "set_workflow_goal",
     "set_cancer_type",
     "request_tumour_profile",
     "load_example_case",
@@ -374,6 +424,7 @@ ACTION_TOOL_NAMES = frozenset({
 })
 
 ACTION_TOOLS = [
+    set_workflow_goal,
     set_cancer_type,
     request_tumour_profile,
     load_example_case,

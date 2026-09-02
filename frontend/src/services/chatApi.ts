@@ -100,6 +100,16 @@ export interface ResearchContextPayload {
     analysis_gene_filter_applied?: boolean
     analysis_top_genes?: string[]
     treatment_evidence_shown?: boolean
+    /** The catalogue question this session is pursuing (utils/questionCatalogue.ts). */
+    workflow_goal?: string | null
+    /** Current step id from deriveWorkflow() — the ONE ladder the agent follows. */
+    workflow_step?: string | null
+    workflow_done?: string[]
+    workflow_blocked_reason?: string | null
+    /** Name of the console_actions.py tool that advances the current step. */
+    workflow_next_action?: string | null
+    /** Scientific limitations in force, so the agent states the same ones the UI shows. */
+    workflow_caveats?: string[]
 }
 
 /**

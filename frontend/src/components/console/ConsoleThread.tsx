@@ -14,13 +14,17 @@ import TreatmentContextCard from './entries/TreatmentContextCard'
 import PathwayCard from './entries/PathwayCard'
 import AnalysisProgressEntry from './entries/AnalysisProgressEntry'
 import AnalysisResultCard from './entries/AnalysisResultCard'
+import StartCard, { StartCardProps } from './entries/StartCard'
+import CaseSetupCard, { CaseSetupCardProps } from './entries/CaseSetupCard'
+import IntakeCard, { IntakeCardProps } from './entries/IntakeCard'
+import NextStepCard, { NextStepCardProps } from './entries/NextStepCard'
 
 interface ConsoleThreadProps {
     entries: ConsoleEntry[]
     onConfirmAction: (entryId: string) => void
     onDeclineAction: (entryId: string) => void
     onDismissNoteFact: (entryId: string, key: string) => void
-    /** Focuses the chart rail — the single live intake form lives there now. */
+    /** Scrolls to the live form of a given kind — superseded steps link back to it. */
     onFocusChart: () => void
     onShowTreatmentEvidence: (modelId: string) => void
     onAsk: (question: string) => void
@@ -28,45 +32,50 @@ interface ConsoleThreadProps {
     progressByRun: Record<string, AnalysisProgressType | null>
     isStreaming: boolean
     streamingContent: string
+    /** Nothing has happened yet — the greeting hugs the lifted composer instead
+     *  of floating alone at the top of an empty column. */
+    empty?: boolean
+    // Live step forms. Bundled as the cards' own prop types rather than spread
+    // across ~25 props, since the thread only forwards them.
+    startProps: StartCardProps
+    caseSetupProps: CaseSetupCardProps
+    intakeProps: IntakeCardProps
+    nextStepProps: NextStepCardProps
 }
 
-const EmptyThread: React.FC = () => (
-    <div className="rounded-card border border-border bg-surface px-3.5 py-3">
-        <div className="flex items-center gap-2 mb-1.5">
-            <span className="w-5 h-5 rounded-full bg-accent-soft text-accent-fg text-[11px] flex items-center justify-center" aria-hidden>
-                ✦
-            </span>
-            <span className="text-[11px] font-medium text-fg-muted">Assistant</span>
-        </div>
-        <p className="text-sm text-fg">
-            Describe the case below, or start the chart on the right by picking a cancer type or loading a
-            worked example.
-        </p>
-        <p className="text-[11px] text-fg-faint mt-1.5">
-            Case details you type are parsed in your browser and read straight into the chart — only a
-            de-identified summary is ever sent. No names, MRNs, or dates of birth.
-        </p>
-    </div>
-)
-
 /**
- * The conversation log: turns, the workflow steps the agent proposed, and the
- * evidence cards those steps produced. Chart STATE lives in PatientRail — the
- * thread only ever records that something happened.
+ * The conversation log — turns, workflow steps, and the evidence cards those
+ * steps produced — and now the steps' own controls.
+ *
+ * The intake forms used to live in the side rail, which meant the assistant
+ * could ask for a cancer type but the answer had to be given somewhere else.
+ * They render here instead; the rail reports chart state and nothing more.
+ * Exactly one card of each kind is live: later duplicates of `case-setup` and
+ * `intake` collapse to an IntakeSummaryRow, because every copy is bound to the
+ * same underlying state.
  */
 const ConsoleThread: React.FC<ConsoleThreadProps> = ({
     entries, onConfirmAction, onDeclineAction, onDismissNoteFact, onFocusChart,
-    onShowTreatmentEvidence, onAsk, progressByRun, isStreaming, streamingContent,
+    onShowTreatmentEvidence, onAsk, progressByRun, isStreaming, streamingContent, empty,
+    startProps, caseSetupProps, intakeProps, nextStepProps,
 }) => {
     const endRef = useRef<HTMLDivElement>(null)
     useEffect(() => {
         endRef.current?.scrollIntoView({ behavior: 'smooth' })
     }, [entries.length, streamingContent])
 
+    const lastIdOfKind = (kind: ConsoleEntry['kind']): string | null => {
+        for (let i = entries.length - 1; i >= 0; i--) {
+            if (entries[i].kind === kind) return entries[i].id
+        }
+        return null
+    }
+    const liveCaseSetupId = lastIdOfKind('case-setup')
+    const liveIntakeId = lastIdOfKind('intake')
+
     return (
-        <div className="flex-1 overflow-y-auto px-4 py-4">
-            <div className="max-w-3xl mx-auto space-y-3">
-                {entries.length === 0 && !isStreaming && <EmptyThread />}
+        <div className={`flex-1 overflow-y-auto px-4 py-4 ${empty ? 'flex flex-col justify-end' : ''}`}>
+            <div className="w-full max-w-3xl mx-auto space-y-3">
                 {entries.map((entry) => {
                     const content = (() => {
                         switch (entry.kind) {
@@ -102,8 +111,16 @@ const ConsoleThread: React.FC<ConsoleThreadProps> = ({
                                         onDecline={entry.status === 'proposed' ? () => onDeclineAction(entry.id) : undefined}
                                     />
                                 )
+                            case 'start':
+                                return <StartCard {...startProps} />
+                            case 'case-setup':
+                                return entry.id === liveCaseSetupId
+                                    ? <CaseSetupCard {...caseSetupProps} />
+                                    : <IntakeSummaryRow label="cancer type requested" onJumpToActive={onFocusChart} />
                             case 'intake':
-                                return <IntakeSummaryRow onJumpToActive={onFocusChart} />
+                                return entry.id === liveIntakeId
+                                    ? <IntakeCard {...intakeProps} />
+                                    : <IntakeSummaryRow label="tumour expression profile requested" onJumpToActive={onFocusChart} />
                             case 'readout':
                                 return (
                                     <ReadoutCard
@@ -172,6 +189,14 @@ const ConsoleThread: React.FC<ConsoleThreadProps> = ({
                     return content ? <div key={entry.id} id={entry.id}>{content}</div> : null
                 })}
                 {isStreaming && <AssistantEntry text={streamingContent} streaming />}
+                {/* Rendered outside the entry list, not appended to it: the next
+                    step is derived from current state, so there must be exactly
+                    one and it must always be last. Suppressed while the start
+                    card is alone on screen — that card IS step 1, and saying so
+                    twice reads as two different things to do. */}
+                {!isStreaming && entries.length > 1 && (
+                    <div id="next-step"><NextStepCard {...nextStepProps} /></div>
+                )}
                 <div ref={endRef} />
             </div>
         </div>

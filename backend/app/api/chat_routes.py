@@ -122,9 +122,9 @@ class ResearchContext(BaseModel):
     what the last one produced, and how far along the research workflow is.
 
     Deliberately a sibling of PatientContext rather than more fields on it —
-    PatientContext is a privacy contract with its own validation tests, and its
-    MISSING ladder assumes a patient exists. This one applies with no data
-    loaded at all, which is the whole point."""
+    PatientContext is a privacy contract with its own validation tests, and it
+    only describes a chart that exists. This one applies with no data loaded at
+    all, which is the whole point, so the workflow ladder lives here."""
 
     has_patient_chart: bool = False
     expression_genes_pasted: Optional[int] = Field(default=None, ge=0)
@@ -138,6 +138,18 @@ class ResearchContext(BaseModel):
     analysis_gene_filter_applied: bool = False
     analysis_top_genes: list[str] = Field(default_factory=list, max_length=8)
     treatment_evidence_shown: bool = False
+
+    # ---- Workflow state, derived in the browser (frontend/src/utils/caseWorkflow.ts).
+    # The agent used to be handed TWO independently-assembled "MISSING:" ladders —
+    # one from the chart block, one from the research block — which contradicted
+    # each other whenever a patient chart existed but no analysis had run. These
+    # fields carry the single ladder the clinician can also see on screen.
+    workflow_goal: Optional[str] = Field(default=None, max_length=32)
+    workflow_step: Optional[str] = Field(default=None, max_length=32)
+    workflow_done: list[str] = Field(default_factory=list, max_length=8)
+    workflow_blocked_reason: Optional[str] = Field(default=None, max_length=200)
+    workflow_next_action: Optional[str] = Field(default=None, max_length=64)
+    workflow_caveats: list[str] = Field(default_factory=list, max_length=8)
 
 
 class PatientContext(BaseModel):

@@ -20,13 +20,18 @@ from app.services.chat.console_actions import (
     ACTION_TOOL_NAMES,
     ACTION_TOOLS,
     run_survival_analysis,
+    set_workflow_goal,
     load_example_case,
     request_tumour_profile,
     score_patient,
     set_cancer_type,
     show_treatment_evidence,
 )
-from app.services.chat.pydantic_ai_service import _build_chart_block, _compute_domain_score
+from app.services.chat.pydantic_ai_service import (
+    _build_chart_block,
+    _build_workflow_block,
+    _compute_domain_score,
+)
 from app.services.signature_service import SignatureService
 
 
@@ -73,20 +78,27 @@ def test_patient_context_has_no_value_carrying_fields():
 
 # ---------- _build_chart_block ----------
 
-def test_chart_block_empty_chart_lists_both_missing():
-    block = _build_chart_block({})
-    assert "MISSING: cancer type, tumour profile" in block
+# The chart block reports FACTS about the chart. It deliberately carries no
+# "what next" line any more: it and _build_research_block used to append one
+# each, so a chart with no analysis told the agent to call request_tumour_profile
+# AND run_survival_analysis in the same prompt. _build_workflow_block is now the
+# only place a next step is stated.
+
+def test_chart_block_states_no_next_step():
+    for ctx in ({}, {"cancer_type": "breast", "model_id": "curated_breast"}):
+        assert "MISSING" not in _build_chart_block(ctx)
 
 
 def test_chart_block_cancer_set_no_expression_yet():
     block = _build_chart_block({"cancer_type": "breast", "model_id": "curated_breast"})
     assert "Cancer type: breast" in block
-    assert "MISSING: tumour expression profile" in block
-    # No expression/covariate values ever appear.
-    assert "expression" not in block.lower() or "expression profile" in block.lower()
+    # Nothing about a tumour profile is reported, because none was provided...
+    assert "Tumour profile" not in block
+    # ...and the block states outright that the agent cannot see patient values.
+    assert "cannot see the patient's identity, expression values, or clinical values" in block
 
 
-def test_chart_block_scored_reports_nothing_missing():
+def test_chart_block_scored_reports_the_score_without_values():
     ctx = {
         "cancer_type": "breast",
         "model_id": "curated_breast",
@@ -108,14 +120,8 @@ def test_chart_block_scored_reports_nothing_missing():
     assert "82th percentile" in block or "82" in block
     assert "MKI67" in block and "ESR1" in block
     assert "age" in block and "grade" in block
-    assert "MISSING: nothing — the patient is scored" in block
     # Covariate NAMES appear, but the block explicitly says values are withheld.
     assert "values NOT transmitted" in block
-
-
-def test_chart_block_partway_prompts_score_patient():
-    block = _build_chart_block({"cancer_type": "breast", "model_id": "curated_breast", "genes_provided": 50})
-    assert "MISSING: nothing further to set up — call score_patient" in block
 
 
 # ---------- Action tools: validate before recording an intent ----------
@@ -388,7 +394,7 @@ def test_agent_tools_are_the_five_original_plus_one_new_read_tool():
 
 
 def test_action_tools_count():
-    assert len(ACTION_TOOLS) == 11
+    assert len(ACTION_TOOLS) == 12
 
 
 # ---------- research session block (the no-data half of the workflow) ----------
@@ -396,11 +402,11 @@ def test_action_tools_count():
 from app.services.chat.pydantic_ai_service import _build_research_block, _build_settings_block
 
 
-def test_research_block_asks_for_an_analysis_when_nothing_has_run():
+def test_research_block_reports_that_nothing_has_run():
     block = _build_research_block({})
     assert "No analysis has been run" in block
-    assert "MISSING: no analysis yet" in block
-    assert "run_survival_analysis" in block
+    # The next step belongs to _build_workflow_block, not here.
+    assert "MISSING" not in block
 
 
 def test_research_block_says_no_patient_data_is_fine():
@@ -411,10 +417,9 @@ def test_research_block_says_no_patient_data_is_fine():
     assert "most questions do not need any" in block
 
 
-def test_research_block_forbids_a_second_run_while_one_is_in_flight():
+def test_research_block_reports_a_run_in_flight():
     block = _build_research_block({"analysis_running": True})
     assert "IN FLIGHT" in block
-    assert "Do NOT propose another" in block
 
 
 def test_research_block_flags_a_restricted_run_as_not_fdr_corrected():
@@ -426,17 +431,10 @@ def test_research_block_flags_a_restricted_run_as_not_fdr_corrected():
     assert "never FDR q-values" in block
 
 
-def test_research_block_advances_to_treatment_evidence_once_an_analysis_exists():
+def test_research_block_names_the_last_analysis():
     block = _build_research_block({"analysis_result_id": "r1", "analysis_query": "gastric"})
-    assert "MISSING: treatment evidence" in block
-    assert "works with no tumour profile" in block
-
-
-def test_research_block_is_done_once_treatment_evidence_is_shown():
-    block = _build_research_block({
-        "analysis_result_id": "r1", "analysis_query": "gastric", "treatment_evidence_shown": True,
-    })
-    assert "MISSING: nothing" in block
+    assert "gastric" in block and "r1" in block
+    assert "MISSING" not in block
 
 
 def test_research_block_always_carries_the_observational_caveat():
@@ -458,3 +456,101 @@ def test_settings_block_states_the_hazard_ratio_gates():
 def test_settings_block_omits_the_gates_when_they_are_not_supplied():
     block = _build_settings_block({"organism": "Homo sapiens"})
     assert "Hazard-ratio gates" not in block
+
+
+# ---------- the single workflow ladder (_build_workflow_block) ----------
+#
+# The defect this replaces: _build_chart_block and _build_research_block each
+# appended their own "MISSING:" line to the SAME system prompt, so with a chart
+# open and no analysis run the agent was told to call request_tumour_profile and
+# run_survival_analysis at once. The console now derives one ladder
+# (frontend/src/utils/caseWorkflow.ts) and sends it; this block renders it.
+
+def test_workflow_block_is_empty_when_the_console_sends_no_workflow():
+    # Older clients, and the /research chat, send no workflow fields at all.
+    assert _build_workflow_block({}) == ""
+    assert _build_workflow_block({"analysis_running": True}) == ""
+
+
+def test_workflow_block_states_exactly_one_next_step():
+    block = _build_workflow_block({
+        "workflow_step": "evidence",
+        "workflow_done": ["case", "profile"],
+        "workflow_next_action": "run_survival_analysis",
+    })
+    assert block.count("- NEXT:") == 1
+    assert "call run_survival_analysis" in block
+    assert "[x] Case" in block and "[x] Profile" in block and "[>] Evidence" in block
+
+
+def test_workflow_block_refuses_the_step_when_it_is_blocked():
+    block = _build_workflow_block({
+        "workflow_step": "score",
+        "workflow_done": ["case"],
+        "workflow_next_action": "score_patient",
+        "workflow_blocked_reason": "Step 2 (Profile) first — no tumour expression profile has been provided.",
+    })
+    assert block.count("- NEXT:") == 1
+    assert "BLOCKED" in block
+    assert "Do not call score_patient" in block
+
+
+def test_workflow_block_forwards_the_goal_and_its_caveats():
+    block = _build_workflow_block({
+        "workflow_goal": "treatment",
+        "workflow_step": "options",
+        "workflow_done": ["case", "profile", "evidence", "score"],
+        "workflow_next_action": "show_treatment_evidence",
+        "workflow_caveats": ["Synthetic demo model — illustrative only, not evidence about a real cohort."],
+    })
+    assert "Goal for this session: treatment" in block
+    # A caveat the clinician can already see must be repeated, never contradicted.
+    assert "Synthetic demo model" in block
+    assert "never contradict them" in block
+
+
+def test_workflow_block_says_nothing_is_left_when_the_goal_is_met():
+    block = _build_workflow_block({
+        "workflow_step": None,
+        "workflow_done": ["case", "evidence"],
+        "workflow_goal": "trust",
+    })
+    assert "NEXT: nothing" in block
+
+
+# ---------- set_workflow_goal ----------
+
+def test_set_workflow_goal_rejects_a_question_the_app_cannot_answer():
+    sink = []
+    ctx = _FakeCtx(deps=_deps(action_sink=sink))
+    out = asyncio.run(set_workflow_goal(ctx, "cure_the_patient"))
+    assert "not a question this app has a pipeline for" in out
+    assert sink == []
+
+
+def test_set_workflow_goal_records_a_known_goal():
+    sink = []
+    ctx = _FakeCtx(deps=_deps(action_sink=sink))
+    out = asyncio.run(set_workflow_goal(ctx, "  Treatment  "))
+    assert sink == [{"action": "set_goal", "question_id": "treatment"}]
+    assert "treatment" in out
+
+
+# ---------- refusals quote the console's own sentence ----------
+
+def test_score_patient_quotes_the_consoles_blocked_reason():
+    # So the agent tells the clinician exactly what the next-step card says,
+    # rather than a second, differently-worded version of the same gate.
+    reason = "Step 2 (Profile) first — no tumour expression profile has been provided."
+    ctx = _FakeCtx(deps=_deps(
+        patient_context={"cancer_type": "breast", "model_id": "m1", "genes_provided": 0},
+        research_context={"workflow_blocked_reason": reason},
+    ))
+    assert asyncio.run(score_patient(ctx)) == reason
+
+
+def test_score_patient_falls_back_to_its_own_wording_without_a_workflow():
+    ctx = _FakeCtx(deps=_deps(
+        patient_context={"cancer_type": "breast", "model_id": "m1", "genes_provided": 0},
+    ))
+    assert "No tumour expression has been provided" in asyncio.run(score_patient(ctx))

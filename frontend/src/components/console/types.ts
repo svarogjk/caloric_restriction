@@ -11,6 +11,10 @@ export type ConsoleEntry =
     | { kind: 'doctor-question'; id: string; text: string; timestamp?: string }
     | { kind: 'assistant'; id: string; text: string; domainScore?: number; modelUsed?: string; timestamp?: string; streaming?: boolean }
     | { kind: 'action'; id: string; action: ConsoleAction; status: ActionStatus; detail?: string }
+    /** The opening "one patient, one question" card — first entry, before anything else. */
+    | { kind: 'start'; id: string }
+    /** Step 1 in the thread: cancer type + this model's clinical covariates. */
+    | { kind: 'case-setup'; id: string }
     | { kind: 'intake'; id: string }
     | {
           kind: 'readout'

@@ -10,12 +10,16 @@ import { estimateGeneDrivers } from '../../utils/signatureViz'
 import { analyseExpression, QN_MIN_GENES, LOW_COVERAGE_FRAC } from '../../utils/expressionFeedback'
 import { buildPatientPrompts } from '../../utils/patientPrompts'
 import { summariseAnalysis } from '../../utils/analysisSummary'
+import { deriveWorkflow, WorkflowStep, WorkflowStepId } from '../../utils/caseWorkflow'
+import {
+    AnswerableQuestion, QuestionId, QUESTION_CATALOGUE, getQuestion, fillTemplate,
+} from '../../utils/questionCatalogue'
 import { usePatientScoring } from '../../hooks/usePatientScoring'
 import { useAnalysisRun } from '../../hooks/useAnalysisRun'
 import { useConsoleActions, ConsoleActionHandlers } from '../../hooks/useConsoleActions'
 import {
     ConsoleEntry, ActionStatus, ChartSource,
-    chartModelId, chartResultId, chartCancerKey, chartLabel, scoreDisabledReason,
+    chartModelId, chartResultId, chartCancerKey, chartLabel, hasModelSource, scoreDisabledReason,
 } from './types'
 import ChartStrip from './ChartStrip'
 import ConsoleThread from './ConsoleThread'
@@ -57,8 +61,14 @@ const ClinicalConsole: React.FC = () => {
     const resultId = chartResultId(source)
     const label = chartLabel(source)
 
-    const [entries, setEntries] = useState<ConsoleEntry[]>([])
+    // The opening card is an entry rather than an "empty thread" placeholder, so
+    // the catalogue of answerable questions stays in the log and can be scrolled
+    // back to once the conversation has moved on.
+    const [entries, setEntries] = useState<ConsoleEntry[]>([{ kind: 'start', id: 'start' }])
     const [railOpen, setRailOpen] = useState(false)
+    /** Which catalogue question this session is pursuing — scopes the workflow so
+     *  a cohort-only question is never told a tumour profile is missing. */
+    const [goal, setGoal] = useState<QuestionId | null>(null)
     /** Model built from the most recent analysis — lets treatment evidence work
      *  with no patient chart at all. */
     const [lastAnalysisModelId, setLastAnalysisModelId] = useState<string | null>(null)
@@ -99,6 +109,49 @@ const ClinicalConsole: React.FC = () => {
     )
     const hasChart = source.kind !== 'none' || exprText.trim().length > 0
 
+    // ---------- workflow (derived — see utils/caseWorkflow.ts) ----------
+    const goalQuestion = goal ? getQuestion(goal) ?? null : null
+    const lastAnalysis = useMemo(
+        () => [...entries].reverse().find((e) => e.kind === 'analysis-result') ?? null,
+        [entries],
+    ) as Extract<ConsoleEntry, { kind: 'analysis-result' }> | null
+    const analysisSummary = useMemo(
+        () => (lastAnalysis ? summariseAnalysis(lastAnalysis.result, lastAnalysis.focusGenes) : null),
+        [lastAnalysis],
+    )
+    const covariateCount = Object.values(clinical).filter((v) => v !== '').length
+
+    /** Where the evidence step's cohorts came from — curated model, or this session's run. */
+    const evidenceDetail = useMemo(() => {
+        const curated = cancers.find((c) => c.key === cancerKey)
+        if (source.kind === 'curated' && curated?.model_id) {
+            const c = curated.pooled_c_index
+            return [curated.n_genes ? `${curated.n_genes} genes` : null, c ? `C-index ${c.toFixed(2)}` : null]
+                .filter(Boolean).join(' · ') || 'curated model'
+        }
+        if (analysisSummary) return `${analysisSummary.nDatasetsWithSurvival} GEO cohorts`
+        return null
+    }, [source.kind, cancerKey, cancers, analysisSummary])
+
+    const workflow = useMemo(() => deriveWorkflow({
+        sourceKind: source.kind,
+        sourceLabel: label,
+        hasModel: hasModelSource(source),
+        modelIsDemo: scoring.modelIsDemo,
+        feedback: expressionFeedback,
+        prediction: scoring.prediction,
+        analysisRunning: analysisRun.isRunning,
+        evidenceDetail,
+        focusGenesUsed: (lastAnalysis?.focusGenes.length ?? 0) > 0,
+        neededSteps: goalQuestion?.steps ?? null,
+        shownWhy: entries.some((e) => e.kind === 'model-quality' || e.kind === 'pathway'),
+        shownOptions: entries.some((e) => e.kind === 'treatment-evidence' || e.kind === 'treatment-context'),
+        covariateCount,
+    }), [
+        source, label, scoring.modelIsDemo, expressionFeedback, scoring.prediction,
+        analysisRun.isRunning, evidenceDetail, lastAnalysis, goalQuestion, entries, covariateCount,
+    ])
+
     // ---------- de-identified chart snapshot sent to the agent ----------
     const buildPatientContext = (): PatientContextPayload | null => {
         if (source.kind === 'none') return null
@@ -138,8 +191,9 @@ const ClinicalConsole: React.FC = () => {
      * leave it with no situational context at all in research mode.
      */
     const buildResearchContext = (): ResearchContextPayload => {
-        const last = [...entries].reverse().find((e) => e.kind === 'analysis-result')
-        const summary = last ? summariseAnalysis(last.result, last.focusGenes) : null
+        const last = lastAnalysis
+        const summary = analysisSummary
+        const currentStep = workflow.steps.find((s) => s.id === workflow.current) ?? null
         return {
             has_patient_chart: source.kind !== 'none',
             expression_genes_pasted: expressionFeedback.geneCount || null,
@@ -153,6 +207,15 @@ const ClinicalConsole: React.FC = () => {
             analysis_gene_filter_applied: (last?.focusGenes.length ?? 0) > 0,
             analysis_top_genes: (summary?.genes ?? []).slice(0, 8).map((g) => g.gene_symbol ?? g.gene_id),
             treatment_evidence_shown: entries.some((e) => e.kind === 'treatment-evidence'),
+            // The single workflow ladder. The agent used to receive two competing
+            // "MISSING:" lines assembled independently on the backend; this is now
+            // the one source, derived from the same state the clinician can see.
+            workflow_goal: goal,
+            workflow_step: workflow.current,
+            workflow_done: workflow.doneIds,
+            workflow_blocked_reason: currentStep?.blockedReason ?? null,
+            workflow_next_action: currentStep?.actionTool ?? null,
+            workflow_caveats: workflow.caveats.slice(0, 8),
         }
     }
 
@@ -197,9 +260,15 @@ const ClinicalConsole: React.FC = () => {
         }
     }
 
-    const handleSubmitQuestion = (text: string) => {
+    const handleSubmitQuestion = (text: string, newGoal?: QuestionId) => {
+        if (newGoal) setGoal(newGoal)
         pushEntry({ kind: 'doctor-question', id: newId(), text, timestamp: formatTurnTime() })
         void sendToAgent(text)
+    }
+
+    /** A catalogue question picked from the start card: sets the goal, then asks it. */
+    const chooseQuestion = (question: AnswerableQuestion, vars: { gene?: string; cancer?: string }) => {
+        handleSubmitQuestion(fillTemplate(question, vars), question.id)
     }
 
     const handleSubmitCase = (rawText: string, facts: ReturnType<typeof parseCaseDescription>) => {
@@ -231,10 +300,17 @@ const ClinicalConsole: React.FC = () => {
         if (Object.keys(facts.covariates).length > 0) {
             setClinical((prev) => ({ ...prev, ...facts.covariates }))
         }
-        pushEntry({ kind: 'intake', id: newId() })
+        // Open the step the description did NOT settle. A note naming a cancer type
+        // has completed step 1, so asking for it again would read as if the app had
+        // ignored what was just typed.
+        pushEntry(facts.cancerTerm ? { kind: 'intake', id: newId() } : { kind: 'case-setup', id: newId() })
 
         if (turn) void sendToAgent(turn)
     }
+
+    /** Called by the StartCard, which owns its own input; the composer path
+     *  parses first and calls handleSubmitCase directly. */
+    const handleStartCase = (rawText: string) => handleSubmitCase(rawText, parseCaseDescription(rawText))
 
     // ---------- action handlers (what the client actually executes) ----------
     const selectCancer = (cancer: GalleryCancer) => {
@@ -267,6 +343,17 @@ const ClinicalConsole: React.FC = () => {
 
     const doScore = () => {
         void scoring.score(exprText, clinical)
+    }
+
+    /** Scroll to the live form of a kind, opening one if the thread has none. */
+    const focusEntry = (kind: 'case-setup' | 'intake') => {
+        setRailOpen(false)
+        const existing = [...entries].reverse().find((e) => e.kind === kind)
+        const id = existing?.id ?? newId()
+        if (!existing) pushEntry({ kind, id } as ConsoleEntry)
+        requestAnimationFrame(() => {
+            document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        })
     }
 
     /** Update one entry in place — analysis entries change status as the run
@@ -383,6 +470,40 @@ const ClinicalConsole: React.FC = () => {
         run_survival_analysis: (query, genes) => { void startCohortBuild(query, genes ?? []) },
     }
 
+    /**
+     * Run the current workflow step from the in-thread next-step card.
+     *
+     * Every branch is a real computation or an intake control — nothing here is
+     * satisfied by the assistant producing prose, which is the whole point of
+     * routing the workflow through app steps rather than through the model.
+     */
+    const advanceStep = (step: WorkflowStepId) => {
+        switch (step) {
+            case 'case':
+                focusEntry('case-setup')
+                return
+            case 'profile':
+                focusEntry('intake')
+                return
+            case 'evidence':
+                // Only a 'pending' source has something to build: 'cohort' already
+                // carries a resultId (so the step is done), and a curated type with
+                // no model yet has nothing to build — advanceDisabledReason says so.
+                if (source.kind === 'pending') void startCohortBuild(source.query)
+                return
+            case 'score':
+                doScore()
+                return
+            case 'why':
+                handlers.show_model_quality()
+                if (scoring.prediction) handlers.show_driver_biology()
+                return
+            case 'options':
+                handlers.show_treatment_evidence()
+                return
+        }
+    }
+
     const consoleActions = useConsoleActions({
         handlers,
         hasChart,
@@ -442,17 +563,37 @@ const ClinicalConsole: React.FC = () => {
         setFileError(null)
         scoring.reset()
         pendingActionsRef.current = {}
-        setEntries([])
+        setEntries([{ kind: 'start', id: 'start' }])
         setRailOpen(false)
+        setGoal(null)
         setLastAnalysisModelId(null)
     }
 
-    const chips = buildPatientPrompts(source.kind !== 'none' ? {
-        cancerLabel: label, prediction: scoring.prediction,
-        signatureGeneDetails: scoring.signatureGeneDetails, lastExpression: scoring.lastExpression,
-    } : null)
+    // Once a patient is scored the suggested follow-ups are about THIS chart; before
+    // that they are the catalogue, so the chips and the start card offer the same
+    // set of answerable questions rather than two different vocabularies.
+    const chips = scoring.prediction
+        ? buildPatientPrompts({
+            cancerLabel: label, prediction: scoring.prediction,
+            signatureGeneDetails: scoring.signatureGeneDetails, lastExpression: scoring.lastExpression,
+        })
+        : QUESTION_CATALOGUE.filter((q) => q.placeholders.length === 0).map((q) => q.label)
+
+    // Only the start card so far — the thread bottom-aligns and the composer lifts,
+    // so the two meet in the middle instead of leaving a void above a bottom bar.
+    const conversationEmpty = entries.length <= 1 && !isStreaming
 
     const disabledReason = scoreDisabledReason(source, expressionFeedback.geneCount)
+
+    /** Why the current step's button can't run, beyond the workflow's own gating.
+     *  The evidence case matters: a curated cancer type whose model is still being
+     *  prepared leaves the step unblocked (its prerequisite IS met) with nothing
+     *  to build, which used to render an enabled button that did nothing. */
+    const advanceDisabledReason =
+        workflow.current === 'score' ? disabledReason
+        : workflow.current === 'evidence' && source.kind === 'curated'
+            ? 'This cancer type\u2019s model is still being prepared \u2014 pick another type, or build a cohort model from your own query.'
+            : undefined
 
     const loadDemoProfile = async () => {
         const demo = await scoring.loadDemoPatient()
@@ -470,13 +611,37 @@ const ClinicalConsole: React.FC = () => {
             scoring.prediction ? `${scoring.prediction.risk_group} risk` : null,
         ].filter(Boolean).join(' · ')
 
-    // The rail is rendered ONCE and repositioned with CSS (right-hand column on
-    // lg+, full-height sheet below it) — rendering it twice would duplicate the
-    // #live-intake anchor and let scrollIntoView target the hidden copy.
-    const focusChart = () => {
-        setRailOpen(true)
+    /** Superseded step rows and "score this patient" buttons jump to the one live
+     *  intake form, which is now in the thread rather than in the rail. */
+    const focusChart = () => focusEntry('intake')
+
+    /**
+     * A node clicked in the side workflow map: navigate to it, never run it.
+     * Running is always an explicit click on the next-step card's button —
+     * the evidence step costs 2-5 minutes of GEO downloads, and a map is a
+     * place to look, not a place to spend someone's afternoon by accident.
+     */
+    const goToStep = (step: WorkflowStep) => {
+        setRailOpen(false)
+        if (step.status === 'active' || step.status === 'running') {
+            requestAnimationFrame(() => {
+                document.getElementById('next-step')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            })
+            return
+        }
+        const kindsFor: Partial<Record<WorkflowStepId, ConsoleEntry['kind'][]>> = {
+            case: ['case-setup'],
+            profile: ['intake'],
+            evidence: ['analysis-result'],
+            score: ['readout'],
+            why: ['model-quality', 'pathway'],
+            options: ['treatment-evidence', 'treatment-context'],
+        }
+        const kinds = kindsFor[step.id] ?? []
+        const target = [...entries].reverse().find((e) => kinds.includes(e.kind))
+        const id = target?.id ?? 'next-step'
         requestAnimationFrame(() => {
-            document.getElementById('live-intake')?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+            document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
         })
     }
 
@@ -494,30 +659,21 @@ const ClinicalConsole: React.FC = () => {
         handleSubmitQuestion(question)
     }
 
+    const onClinicalChange = (name: string, value: string) =>
+        setClinical((c) => ({ ...c, [name]: value }))
+
     const rail = (
         <PatientRail
             source={source}
             cancerIcon={cancerIcon}
-            cancers={cancers}
-            cancersLoading={cancersLoading}
-            onSelectCancer={selectCancer}
-            onBuildOther={(query) => void startCohortBuild(query)}
-            onLoadCase={loadCase}
-            onTryFormatExample={setExprText}
+            geneCount={expressionFeedback.geneCount}
+            covariateCount={covariateCount}
             onClear={handleClear}
-            exprText={exprText}
-            onExprChange={(t) => { setExprText(t); setFileError(null) }}
-            expressionFeedback={expressionFeedback}
-            covariates={scoring.covariates}
-            clinical={clinical}
-            onClinicalChange={(name, value) => setClinical((c) => ({ ...c, [name]: value }))}
-            onScore={doScore}
-            scoring={scoring.loading}
-            scoreDisabledReason={disabledReason}
-            fileError={fileError}
-            onFileError={setFileError}
-            onLoadDemoProfile={loadDemoProfile}
-            canLoadDemoProfile={!!scoring.resolvedModelId}
+            onEditInThread={focusChart}
+            workflow={workflow}
+            goalLabel={goalQuestion?.label ?? null}
+            onGoToStep={goToStep}
+            onClearGoal={() => setGoal(null)}
             prediction={scoring.prediction}
             modelIsDemo={scoring.modelIsDemo}
             timeUnit={scoring.timeUnit}
@@ -539,6 +695,7 @@ const ClinicalConsole: React.FC = () => {
                         genesProvided={expressionFeedback.geneCount}
                         prediction={scoring.prediction}
                         modelIsDemo={scoring.modelIsDemo}
+                        workflow={workflow}
                         onClear={handleClear}
                         expanded={railOpen}
                         onToggle={() => setRailOpen((o) => !o)}
@@ -555,6 +712,45 @@ const ClinicalConsole: React.FC = () => {
                     progressByRun={analysisRun.progressByRun}
                     isStreaming={isStreaming}
                     streamingContent={streamingContent}
+                    empty={conversationEmpty}
+                    startProps={{
+                        onSubmitCase: handleStartCase,
+                        onLoadCase: loadCase,
+                        onChooseQuestion: chooseQuestion,
+                        selectedGoal: goal,
+                    }}
+                    caseSetupProps={{
+                        cancers,
+                        cancersLoading,
+                        onSelectCancer: selectCancer,
+                        onBuildOther: (query) => void startCohortBuild(query),
+                        selectedLabel: source.kind === 'none' ? null : label,
+                        covariates: scoring.covariates,
+                        clinical,
+                        onClinicalChange,
+                    }}
+                    intakeProps={{
+                        exprText,
+                        onExprChange: (t) => { setExprText(t); setFileError(null) },
+                        feedback: expressionFeedback,
+                        covariates: scoring.covariates,
+                        clinical,
+                        onClinicalChange,
+                        onScore: doScore,
+                        loading: scoring.loading,
+                        disabledReason,
+                        fileError,
+                        onFileError: setFileError,
+                        onLoadDemoProfile: loadDemoProfile,
+                        canLoadDemoProfile: !!scoring.resolvedModelId,
+                    }}
+                    nextStepProps={{
+                        workflow,
+                        goalLabel: goalQuestion?.label ?? null,
+                        onAdvance: advanceStep,
+                        advanceDisabledReason,
+                        busy: scoring.loading,
+                    }}
                 />
                 <ConsoleComposer
                     ref={composerRef}
@@ -563,6 +759,8 @@ const ClinicalConsole: React.FC = () => {
                     chips={chips}
                     disabled={isStreaming}
                     contextSummary={contextSummary}
+                    lifted={conversationEmpty}
+                    requireGoal={goal === null}
                 />
             </div>
 

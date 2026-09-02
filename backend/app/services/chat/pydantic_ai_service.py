@@ -67,7 +67,23 @@ show_driver_biology**.
 Some need a patient chart and some do not — run_survival_analysis,
 reuse_previous_analysis, show_model_quality and show_treatment_evidence all work
 with no patient data at all. The "Research session" and "Active patient chart"
-blocks below say what is already set and what MISSING step to drive next.
+blocks below say what is already set; the "Workflow" block says what to do next,
+and it is the ONLY place that says so.
+
+## What this app can actually answer
+Every question the console can compute an answer to maps onto one of these, and
+each one runs real computation over GEO cohorts — never your own recall:
+- **risk** — how high is this patient's risk (risk group, percentile, C-index)
+- **drivers** — which genes drive that score, and their pathway enrichment
+- **trust** — the model's training/validation cohorts, per-cohort C-index, nomogram, concordance
+- **treatment** — documented biomarker-to-therapy evidence (CIViC/DGIdb) for this profile
+- **regimens** — outcomes across documented treatment cohorts for this cancer type
+- **gene** — is a named gene prognostic or predictive here (per-cohort HR + interaction test)
+- **discovery** — which genes predict survival in a cancer type, ranked by cross-cohort consistency
+
+If a question falls outside all of these, say plainly that the app has no
+computation for it, answer only from what tools return or what is already on
+screen, and offer the nearest one of the above. Never invent a capability.
 
 ## Response Standards
 - Every dataset reference must include its GSE accession (e.g. GSE12345, GSE67890)
@@ -127,30 +143,85 @@ def _build_research_block(research: dict) -> str:
     else:
         lines.append("- No patient data loaded — this is fine, most questions do not need any")
 
-    # MISSING ladder — same idiom as _build_chart_block.
-    if research.get("analysis_running"):
-        missing = (
-            "an analysis is already in flight. Do NOT propose another — answer from indexed "
-            "data or from the previous result, and say the run is still going"
-        )
-    elif not result_id:
-        missing = (
-            "no analysis yet. Call run_survival_analysis with a concrete query. If the question "
-            "names specific genes, pass them as candidate_genes. If the topic is vague, call "
-            "search_known_datasets or search_geo_datasets first"
-        )
-    elif not research.get("treatment_evidence_shown"):
-        missing = (
-            "treatment evidence. Call show_treatment_evidence — it works with no tumour profile "
-            "(cohort-level treated-vs-untreated arms from the model's own GEO cohort)"
-        )
-    else:
-        missing = "nothing — answer from what is already on screen"
-    lines.append(f"- MISSING: {missing}")
+    # The "what next" ladder deliberately does NOT live here — see
+    # _build_workflow_block. Two independently-derived ladders (this one and the
+    # chart block's) used to contradict each other in the same prompt.
 
     lines.append(
         "\nObservational treated-vs-untreated curves are NOT randomised evidence. Treatment "
         "assignment reasons are unknown and may fully explain any difference. Always say so."
+    )
+    return "\n".join(lines)
+
+
+# Mirrors WORKFLOW_STEP_IDS / SPECS in frontend/src/utils/caseWorkflow.ts. Only
+# the labels and the tool mapping are duplicated (small and stable); the STATE is
+# always sent from the browser, never re-derived here — one derivation, one truth.
+_WORKFLOW_STEPS: list[tuple[str, str, str]] = [
+    ("case", "Case", "set_cancer_type"),
+    ("profile", "Profile", "request_tumour_profile"),
+    ("evidence", "Evidence", "run_survival_analysis"),
+    ("score", "Score", "score_patient"),
+    ("why", "Why", "show_model_quality"),
+    ("options", "Options", "show_treatment_evidence"),
+]
+
+
+def _build_workflow_block(research: dict) -> str:
+    """The ONE next-step ladder.
+
+    The console derives the whole pipeline from the state the clinician can see
+    (frontend/src/utils/caseWorkflow.ts) and sends the result. Rendering it here
+    rather than recomputing it means the agent's "what next" and the clinician's
+    on-screen "what next" cannot disagree — which they did, routinely, when the
+    chart block and the research block each appended their own MISSING line.
+    """
+    step = research.get("workflow_step")
+    if not step and not research.get("workflow_done"):
+        return ""
+
+    done = set(research.get("workflow_done") or [])
+    goal = research.get("workflow_goal")
+
+    lines = ["\n## Workflow (the single source of what to do next)"]
+    if goal:
+        lines.append(f"- Goal for this session: {goal}")
+
+    for step_id, label, _tool in _WORKFLOW_STEPS:
+        if step_id in done:
+            mark = "[x]"
+        elif step_id == step:
+            mark = "[>]"
+        else:
+            mark = "[ ]"
+        lines.append(f"  {mark} {label}")
+
+    caveats = research.get("workflow_caveats") or []
+    if caveats:
+        lines.append("- Limitations ALREADY shown to the clinician — repeat them, never contradict them:")
+        for c in caveats:
+            lines.append(f"  - {c}")
+
+    if step:
+        tool = research.get("workflow_next_action")
+        blocked = research.get("workflow_blocked_reason")
+        if blocked:
+            lines.append(
+                f"- NEXT: '{step}' is BLOCKED — {blocked} Do not call {tool or 'its tool'}; "
+                "say what is needed and drive the earlier step instead."
+            )
+        else:
+            lines.append(
+                f"- NEXT: call {tool} to advance the '{step}' step. This is the only next "
+                "step — do not propose a different one, and do not ask the clinician to do "
+                "by hand what this tool does."
+            )
+    else:
+        lines.append("- NEXT: nothing. Every step this goal needs has run — answer from what is on screen.")
+
+    lines.append(
+        "- Steps marked [ ] that come AFTER the current one are not yet reachable. Never "
+        "describe their output as if it existed."
     )
     return "\n".join(lines)
 
@@ -250,15 +321,7 @@ def _build_chart_block(patient_context: dict) -> str:
     if patient_context.get("warnings"):
         lines.append("- Model warnings: " + "; ".join(patient_context["warnings"]))
 
-    if not cancer_type and not model_id:
-        missing = "cancer type, tumour profile — call set_cancer_type or run_survival_analysis first"
-    elif not genes_provided and not risk_group:
-        missing = "tumour expression profile — call request_tumour_profile"
-    elif not risk_group:
-        missing = "nothing further to set up — call score_patient to score the patient"
-    else:
-        missing = "nothing — the patient is scored"
-    lines.append(f"- MISSING: {missing}")
+    # No MISSING line here — the Workflow section is the single ladder.
 
     lines.append(
         "\nWorkflow rules:\n"
@@ -438,6 +501,15 @@ class PydanticAIService:
         async def _research_prompt(ctx: RunContext[AgentDeps]) -> str:
             if ctx.deps.research_context:
                 return _build_research_block(ctx.deps.research_context)
+            return ""
+
+        # The single next-step ladder, derived in the browser and forwarded. Kept
+        # separate from _research_prompt so the facts about the session and the
+        # instruction about what to do next stay independently reviewable.
+        @agent.system_prompt
+        async def _workflow_prompt(ctx: RunContext[AgentDeps]) -> str:
+            if ctx.deps.research_context:
+                return _build_workflow_block(ctx.deps.research_context)
             return ""
 
         self._agents[model_name] = agent

@@ -7,7 +7,7 @@ import ClinicalCovariateFields from '../../oncologist/ClinicalCovariateFields'
 import { ClinicalCovariateSpec } from '../../../services/api'
 import { ExpressionFeedback } from '../../../utils/expressionFeedback'
 
-interface IntakeCardProps {
+export interface IntakeCardProps {
     exprText: string
     onExprChange: (text: string) => void
     feedback: ExpressionFeedback
