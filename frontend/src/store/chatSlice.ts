@@ -112,6 +112,12 @@ export interface ChatState {
     // Patient personalization (carried from the landing into the analysis)
     personalizeEnabled: boolean
     patientExpression: string
+    // Oncologist-mode patient/model snapshot, kept in sync by usePatientScoring
+    // so ANY chat surface (not just the clinical console, which builds its own
+    // richer context per-message) can forward it into sendMessage — without
+    // this, a page that only renders PatientPanel had no way to tell the chat
+    // agent a patient was already loaded/scored.
+    signatureContext: PatientContextPayload | null
 }
 
 const initialState: ChatState = {
@@ -151,6 +157,7 @@ const initialState: ChatState = {
     // Patient personalization
     personalizeEnabled: false,
     patientExpression: '',
+    signatureContext: null,
 }
 
 // ==================== Async Thunks ====================
@@ -483,6 +490,9 @@ const chatSlice = createSlice({
             state.analysisError = null
             state.analysisProgress = null
         },
+        setSignatureContext: (state, action: PayloadAction<PatientContextPayload | null>) => {
+            state.signatureContext = action.payload
+        },
         setAnalysisProgress: (state, action: PayloadAction<AnalysisProgress | null>) => {
             state.analysisProgress = action.payload
         },
@@ -712,6 +722,7 @@ export const {
     setHazardRatioUpper,
     setHazardRatioLower,
     clearAnalysisResults,
+    setSignatureContext,
     setAnalysisProgress,
     startStreaming,
     appendStreamToken,

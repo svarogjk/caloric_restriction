@@ -135,7 +135,7 @@ def test_therapy_rationale_no_evidence_path():
     model = svc.build_demo_signature(max_genes=6)  # genes DEMOG* -> no KB evidence
 
     class _EmptyTherapy:
-        def lookup(self, genes, max_total=40):
+        def lookup(self, genes, max_total=40, cancer_type=None):
             return []
 
     chat_routes.set_therapy_services(svc, _EmptyTherapy())
@@ -289,7 +289,7 @@ def test_therapy_rationale_marks_unbudgeted_drugs_not_checked(monkeypatch):
     ]
 
     class _FixedTherapy:
-        def lookup(self, genes, max_total=40):
+        def lookup(self, genes, max_total=40, cancer_type=None):
             return evidence
 
     async def fake_generate_response(self, messages, model, conversation_id):

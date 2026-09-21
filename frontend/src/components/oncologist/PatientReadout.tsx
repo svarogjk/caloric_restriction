@@ -83,14 +83,26 @@ const PatientReadout: React.FC<PatientReadoutProps> = ({
             )}
 
             {/* Incremental-value C-index trio */}
-            {(result.c_index_combined != null || result.c_index_expression_only != null) && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
-                    <CIdx label="Expression" value={result.c_index_expression_only} />
-                    <CIdx label="Clinical" value={result.c_index_clinical_only} />
-                    <CIdx label="Combined" value={result.c_index_combined ?? result.pooled_c_index} highlight />
-                    <CIdx label="Δ vs expression" value={result.delta_c_index} signed />
-                </div>
-            )}
+            {(() => {
+                const combinedIsWorse =
+                    result.c_index_combined != null && result.delta_c_index != null && result.delta_c_index < 0
+                return (result.c_index_combined != null || result.c_index_expression_only != null) && (
+                    <>
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                            <CIdx label="Expression" value={result.c_index_expression_only} highlight={combinedIsWorse} />
+                            <CIdx label="Clinical" value={result.c_index_clinical_only} />
+                            <CIdx label="Combined" value={result.c_index_combined ?? result.pooled_c_index} highlight={!combinedIsWorse} />
+                            <CIdx label="Δ vs expression" value={result.delta_c_index} signed />
+                        </div>
+                        {combinedIsWorse && (
+                            <p className="text-[11px] text-warn">
+                                Adding clinical covariates reduced discrimination for this patient — the
+                                expression-only estimate may be more reliable here.
+                            </p>
+                        )}
+                    </>
+                )
+            })()}
 
             {hasKmData && (
                 <div>

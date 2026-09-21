@@ -52,6 +52,7 @@ const ChatContainer: React.FC = () => {
         isStreaming,
         streamingContent,
         autoSave,
+        signatureContext,
     } = useSelector((state: RootState) => state.chat)
 
     const [settingsOpen, setSettingsOpen] = useState(false)
@@ -107,6 +108,7 @@ const ChatContainer: React.FC = () => {
                     conversationId: result.payload.conversationId,
                     content,
                     model: selectedModel,
+                    patientContext: signatureContext,
                 }))
             }
         } else {
@@ -114,6 +116,7 @@ const ChatContainer: React.FC = () => {
                 conversationId: activeConversationId,
                 content,
                 model: selectedModel,
+                patientContext: signatureContext,
             }))
         }
     }

@@ -18,6 +18,28 @@ DEFAULT_MIN_COVERAGE = 0.7
 # categorical (one-hot encoded) rather than numeric.
 NUMERIC_COERCION_THRESHOLD = 0.8
 
+# GEO metadata routinely encodes "not recorded" as its own literal string
+# (e.g. a node/grade column with values "0"/"1"/"2"/"--"). Naively one-hot
+# encoding that string as an ordinary category lets it soak up a Cox
+# coefficient that reflects whatever unrelated subgroup/era/cohort happened to
+# leave that field blank — not a real clinical effect — and that coefficient
+# can outweigh every genuine category. Callers must route such tokens through
+# a distinct "not recorded" indicator instead of an ordinary category (see
+# `signature_service._augment_with_combined`). Deliberately excludes values
+# that are real, meaningful categories (e.g. "none" as in "no treatment").
+MISSING_VALUE_TOKENS = frozenset({
+    "--", "-", "na", "n/a", "n.a.", "unknown", "unk", "not available",
+    "not assessed", "not reported", "not recorded", "nx", "missing", "unavailable",
+})
+
+
+def is_missing_token(value: object) -> bool:
+    """True when a raw categorical value is a missing-data placeholder token
+    rather than a real clinical level."""
+    if value is None:
+        return True
+    return str(value).strip().lower() in MISSING_VALUE_TOKENS
+
 
 def select_usable_covariates(
     metadata_df: pd.DataFrame,

@@ -467,8 +467,10 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                                     <tbody>
                                         {data.evidence
                                             .filter((e) => displayedDrugKeys.has(e.drug.toLowerCase()))
-                                            .map((e, i) => (
-                                                <tr key={i} className="border-b border-border">
+                                            .map((e, i) => {
+                                                const offDisease = e.disease_matches_current_cancer === false
+                                                return (
+                                                <tr key={i} className={`border-b border-border ${offDisease ? 'opacity-60' : ''}`}>
                                                     <td className="py-1 pr-2 font-medium text-fg-strong">{e.gene}</td>
                                                     <td className="py-1 pr-2">
                                                         <div className="flex items-center gap-1.5">
@@ -486,9 +488,14 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                                                             ? [e.evidence_type, e.significance, e.evidence_level && `level ${e.evidence_level}`]
                                                                   .filter(Boolean)
                                                                   .join(' · ')
-                                                            : [e.interaction_type, e.approved ? 'approved' : 'investigational']
+                                                            : [e.interaction_type, e.approved ? 'approved (indication unspecified)' : 'investigational']
                                                                   .filter(Boolean)
                                                                   .join(' · ')}
+                                                        {e.disease && (
+                                                            <span className={offDisease ? 'block text-[10px] text-warn font-medium' : 'block text-[10px] text-fg-faint'}>
+                                                                {e.disease}{offDisease ? ' — different cancer type' : ''}
+                                                            </span>
+                                                        )}
                                                     </td>
                                                     <td className="py-1 pr-2">
                                                         {e.url ? (
@@ -505,7 +512,7 @@ const TherapyDirections: React.FC<TherapyDirectionsProps> = ({
                                                         )}
                                                     </td>
                                                 </tr>
-                                            ))}
+                                            )})}
                                     </tbody>
                                 </table>
                             </div>

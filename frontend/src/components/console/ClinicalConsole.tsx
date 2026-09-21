@@ -73,7 +73,7 @@ const ClinicalConsole: React.FC = () => {
      *  with no patient chart at all. */
     const [lastAnalysisModelId, setLastAnalysisModelId] = useState<string | null>(null)
 
-    const scoring = usePatientScoring({ resultId, modelId })
+    const scoring = usePatientScoring({ resultId, modelId, cancerLabel: label })
     const analysisRun = useAnalysisRun()
 
     // An analysis outlives the component that started it — close the stream on

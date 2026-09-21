@@ -34,7 +34,11 @@ const ClinicalCovariateFields: React.FC<ClinicalCovariateFieldsProps> = ({ covar
                                 className="w-full text-sm border border-border-strong rounded p-1.5 focus:outline-none focus:ring-1 focus:ring-accent-ring"
                             >
                                 <option value="">—</option>
-                                {cov.options.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                                {cov.options.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                        {opt === cov.missing_level ? 'Not recorded (unknown)' : opt}
+                                    </option>
+                                ))}
                             </select>
                         ) : (
                             <input

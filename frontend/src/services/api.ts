@@ -320,6 +320,10 @@ export interface ClinicalCovariateSpec {
     min_value: number | null
     max_value: number | null
     required: boolean
+    // If set, this is the option value standing in for "not recorded in the
+    // training cohort" rather than a real clinical level — render it
+    // distinctly (see ClinicalCovariateFields).
+    missing_level: string | null
 }
 
 export interface GalleryCancer {
@@ -335,6 +339,9 @@ export interface GalleryCancer {
     c_index_expression_only: number | null
     c_index_combined: number | null
     delta_c_index: number | null
+    // Set when pooled_c_index is at/below scoring_thresholds.weak_discrimination_c_index —
+    // render distinctly from a normal "Ready" model, never with the same styling.
+    discrimination_warning: string | null
     clinical_covariates: ClinicalCovariateSpec[]
     model_is_demo: boolean | null
     // Underlying cohort analysis (provenance):
@@ -347,6 +354,7 @@ export interface GalleryCancer {
 export interface ScoringThresholds {
     qn_min_genes: number
     low_coverage_frac: number
+    weak_discrimination_c_index: number
 }
 
 export interface GalleryResponse {
@@ -563,6 +571,9 @@ export interface TherapyEvidenceRecord {
     interaction_type?: string | null
     approved?: boolean | null
     source_db?: string | null
+    // True/False when `disease` could be compared to the patient's current
+    // cancer type (CIViC only); null/undefined when unknown (e.g. DGIdb).
+    disease_matches_current_cancer?: boolean | null
     cohort_km?: TreatmentKMEvidence | null
 }
 

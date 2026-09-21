@@ -26,6 +26,7 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -40,6 +41,34 @@ _DGIDB_TSV = _DATA_DIR / "therapy_sources" / "dgidb_interactions.tsv"
 _MAX_CIVIC_PER_GENE = 10
 _MAX_DGIDB_PER_GENE = 8
 _RELEVANT_CIVIC_TYPES = {"Predictive", "Prognostic"}
+
+
+_DISEASE_STOPWORDS = frozenset({
+    "cancer", "cancers", "carcinoma", "tumor", "tumour", "tumors", "tumours",
+    "neoplasm", "neoplasms", "disease", "of", "the", "and", "not", "otherwise",
+    "specified", "adenocarcinoma",
+})
+
+
+def _disease_tokens(text: str) -> set:
+    words = re.findall(r"[a-z]+", text.lower())
+    return {w for w in words if w not in _DISEASE_STOPWORDS and len(w) >= 4}
+
+
+def _disease_matches(disease: Optional[str], cancer_type: Optional[str]) -> Optional[bool]:
+    """Best-effort, non-authoritative check that a CIViC evidence row's
+    `disease` (e.g. "Acute Myeloid Leukemia") is about the same cancer as the
+    app's current `cancer_type` (e.g. "breast"). Returns None (unknown, not a
+    match claim) when either side is missing — never assume a match. This is
+    a coarse keyword-overlap heuristic, not an ontology lookup: good enough to
+    catch a flatly different cancer type (AML evidence surfaced for a breast
+    case), not to arbitrate borderline subtype naming."""
+    if not disease or not cancer_type:
+        return None
+    a, b = _disease_tokens(disease), _disease_tokens(cancer_type)
+    if not a or not b:
+        return None
+    return bool(a & b)
 
 
 def _gene_from_molecular_profile(profile: str) -> Optional[str]:
@@ -91,18 +120,38 @@ class TherapyEvidenceService:
 
     # ---------- lookup ----------
 
-    def lookup(self, genes: List[str], max_total: int = 40) -> List[dict]:
+    def lookup(
+        self, genes: List[str], max_total: int = 40, cancer_type: Optional[str] = None
+    ) -> List[dict]:
         """Flatten documented evidence for `genes` (case-insensitive) into a list
-        of attributed records, capped to `max_total`. Empty when nothing known."""
+        of attributed records, capped to `max_total`. Empty when nothing known.
+
+        Each record carries `disease_matches_current_cancer`: True/False when
+        the evidence's own disease can be compared against `cancer_type`
+        (CIViC only — DGIdb interactions carry no disease field), else None
+        (unknown; never claimed as a match). Within each gene, non-matching
+        evidence (documented for a clearly different cancer type, e.g. an
+        AML-specific drug surfaced for a breast-cancer patient) sorts after
+        matching/unknown evidence so capping to `max_total` doesn't crowd out
+        genuinely relevant rows — it is never dropped outright, since GEO
+        Survival Analysis never fabricates OR hides documented evidence."""
         out: List[dict] = []
         for gene in genes:
             entry = self._index.get(gene.upper())
             if not entry:
                 continue
+            gene_recs: List[dict] = []
             for rec in entry.get("civic", []):
-                out.append({"gene": gene.upper(), "source": "CIViC", **rec})
+                match = _disease_matches(rec.get("disease"), cancer_type)
+                gene_recs.append(
+                    {"gene": gene.upper(), "source": "CIViC", "disease_matches_current_cancer": match, **rec}
+                )
             for rec in entry.get("dgidb", []):
-                out.append({"gene": gene.upper(), "source": "DGIdb", **rec})
+                gene_recs.append(
+                    {"gene": gene.upper(), "source": "DGIdb", "disease_matches_current_cancer": None, **rec}
+                )
+            gene_recs.sort(key=lambda r: r["disease_matches_current_cancer"] is False)
+            out.extend(gene_recs)
             if len(out) >= max_total:
                 break
         return out[:max_total]

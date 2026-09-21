@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useDispatch } from 'react-redux'
 import {
     personalizePatient, getDemoPatient, getSignatureModel,
     PredictResponse, ClinicalCovariateSpec, ReferenceKMCurve, SignatureGene,
 } from '../services/api'
 import { parsePastedExpression } from '../utils/signatureViz'
+import { AppDispatch } from '../store/store'
+import { setSignatureContext } from '../store/chatSlice'
 
 interface UsePatientScoringArgs {
     /** A saved analysis to auto-build a signature from… */
@@ -12,6 +15,12 @@ interface UsePatientScoringArgs {
     modelId?: string | null
     /** Curated: covariates already known up front, skips the model metadata fetch for them. */
     initialCovariates?: ClinicalCovariateSpec[]
+    /** Display label for the cancer type/query — forwarded into the shared
+     *  `signatureContext` (Redux) as `cancer_type` so any chat surface that
+     *  reads it (see ChatContainer) can tell the agent a patient is loaded,
+     *  even on a page (like the unified Patient tab) that doesn't build its
+     *  own richer per-message context the way the clinical console does. */
+    cancerLabel?: string | null
 }
 
 export interface UsePatientScoringResult {
@@ -47,7 +56,8 @@ export interface UsePatientScoringResult {
  * that touches patient data. Shared by PatientPanel and the clinical console so
  * there is exactly one scoring code path to reason about for privacy and correctness.
  */
-export function usePatientScoring({ resultId, modelId, initialCovariates }: UsePatientScoringArgs): UsePatientScoringResult {
+export function usePatientScoring({ resultId, modelId, initialCovariates, cancerLabel }: UsePatientScoringArgs): UsePatientScoringResult {
+    const dispatch = useDispatch<AppDispatch>()
     const [covariates, setCovariates] = useState<ClinicalCovariateSpec[]>(initialCovariates ?? [])
     const [signatureGenes, setSignatureGenes] = useState<string[]>([])
     const [signatureGeneDetails, setSignatureGeneDetails] = useState<SignatureGene[]>([])
@@ -61,6 +71,36 @@ export function usePatientScoring({ resultId, modelId, initialCovariates }: UseP
     const [timeUnit, setTimeUnit] = useState('days')
     const [lastExpression, setLastExpression] = useState<Record<string, number>>({})
     const [lastClinical, setLastClinical] = useState<Record<string, string>>({})
+
+    // Keep the shared `signatureContext` (chatSlice) in sync so any chat
+    // surface can tell the agent what's loaded/scored right now, without
+    // relying on each page to hand-build its own context object.
+    useEffect(() => {
+        if (!resolvedModelId) {
+            dispatch(setSignatureContext(null))
+            return
+        }
+        const covariateNames = prediction
+            ? prediction.contributions.filter((c) => c.kind === 'clinical').map((c) => c.label)
+            : []
+        dispatch(setSignatureContext({
+            cancer_type: cancerLabel ?? null,
+            model_id: resolvedModelId,
+            model_is_demo: modelIsDemo,
+            genes_provided: Object.keys(lastExpression).length || null,
+            risk_group: (prediction?.risk_group as 'low' | 'intermediate' | 'high' | undefined) ?? null,
+            risk_percentile: prediction?.risk_percentile ?? null,
+            genes_used: prediction?.genes_used ?? null,
+            genes_total: prediction?.genes_total ?? null,
+            pooled_c_index: prediction?.pooled_c_index ?? null,
+            c_index_combined: prediction?.c_index_combined ?? null,
+            delta_c_index: prediction?.delta_c_index ?? null,
+            scored_on: prediction?.scored_on ?? null,
+            clinical_covariate_names: covariateNames,
+            warnings: prediction?.warnings ?? [],
+        }))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [resolvedModelId, modelIsDemo, prediction, cancerLabel, lastExpression])
 
     // For a curated/pre-built model, load its covariates + signature genes up front.
     // Also resyncs resolvedModelId and clears any prior prediction whenever `modelId`

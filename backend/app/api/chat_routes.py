@@ -608,6 +608,10 @@ class TherapyEvidenceRecord(BaseModel):
     interaction_type: Optional[str] = None   # DGIdb
     approved: Optional[bool] = None
     source_db: Optional[str] = None
+    # True/False when this row's disease can be compared to the patient's
+    # cancer_type (CIViC only); None when unknown (e.g. DGIdb, which carries
+    # no disease field) — never implies a match when it can't tell.
+    disease_matches_current_cancer: Optional[bool] = None
     # Real-GEO-cohort survival evidence for this drug (F24b), attached for
     # the top few highest-confidence rows only; see _rank_drugs_by_gene_priority.
     cohort_km: Optional[TreatmentKMEvidence] = None
@@ -654,10 +658,16 @@ def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence:
                 bits.append(f", {e['direction']}")
             if e.get("evidence_level"):
                 bits.append(f", level {e['evidence_level']}")
-            disease = f"; {e['disease']}" if e.get("disease") else ""
+            disease = ""
+            if e.get("disease"):
+                tag = " — DIFFERENT CANCER TYPE, not this patient's" if e.get("disease_matches_current_cancer") is False else ""
+                disease = f"; {e['disease']}{tag}"
             lines.append("".join(bits) + ")" + disease)
         else:
-            appr = "approved" if e.get("approved") else "investigational"
+            appr = (
+                "approved (for some indication — DGIdb does not record which disease)"
+                if e.get("approved") else "investigational"
+            )
             itype = f", {e['interaction_type']}" if e.get("interaction_type") else ""
             lines.append(f"{e['gene']} → {e['drug']} (DGIdb interaction{itype}; {appr})")
     evidence_block = "\n".join(f"- {ln}" for ln in lines)
@@ -675,7 +685,11 @@ def _build_therapy_prompt(genes: list[str], risk_group: Optional[str], evidence:
         "3. State explicitly this is advisory and hypothesis-generating, grounded in documented "
         "evidence; research-use-only; not a prescription and not a guarantee of response.\n"
         "4. If the evidence is sparse or mixed, say so. Do not invent drugs, genes, or claims.\n"
-        "5. Under 180 words."
+        "5. Any row marked 'DIFFERENT CANCER TYPE, not this patient's' or 'approved (for some "
+        "indication — DGIdb does not record which disease)' was NOT established for this "
+        "patient's cancer type — say so explicitly if you mention it; do not present it as "
+        "directly applicable.\n"
+        "6. Under 180 words."
     )
 
 
@@ -711,10 +725,13 @@ def _rank_drugs_by_gene_priority(evidence: list[dict]) -> list[str]:
     strength only orders candidates within a gene. Drugs with documented
     CIViC resistance/adverse/poor-outcome significance are excluded — see
     `_is_negative_civic`."""
-    def rank(e: dict) -> int:
+    def rank(e: dict) -> tuple:
+        # Evidence documented for a clearly different cancer type never gets
+        # the limited cohort-KM lookup budget ahead of on-topic evidence.
+        disease_tier = 1 if e.get("disease_matches_current_cancer") is False else 0
         if e.get("source") == "CIViC":
-            return _CIVIC_LEVEL_RANK.get((e.get("evidence_level") or "").upper(), 2)
-        return 0 if e.get("approved") else 1
+            return (disease_tier, _CIVIC_LEVEL_RANK.get((e.get("evidence_level") or "").upper(), 2))
+        return (disease_tier, 0 if e.get("approved") else 1)
 
     by_gene: "OrderedDict[str, list[dict]]" = OrderedDict()
     for e in evidence:
@@ -840,7 +857,7 @@ async def therapy_rationale(request: TherapyRationaleRequest):
         g.gene_symbol
         for g in sorted(model.genes, key=lambda x: abs(x.coefficient), reverse=True)[:8]
     ]
-    evidence = _therapy_evidence_service.lookup(genes, max_total=40)
+    evidence = _therapy_evidence_service.lookup(genes, max_total=40, cancer_type=model.cancer_type)
 
     no_evidence_msg = (
         "No documented therapeutic associations were found in CIViC or DGIdb for these "

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -41,7 +42,7 @@ from app.models.signature_models import (
     SurvivalAtHorizon,
     TreatmentArmKM,
 )
-from app.services.covariate_utils import coerce_numeric, select_usable_covariates
+from app.services.covariate_utils import coerce_numeric, is_missing_token, select_usable_covariates
 from app.services.survival_analysis_service import _arm_label_matches_drug
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,12 @@ from lifelines.utils import concordance_index
 
 # Combined-model fitting failures we tolerate (fall back to expression-only).
 _COX_FIT_ERRORS = (ConvergenceError, ValueError, KeyError, ZeroDivisionError, np.linalg.LinAlgError)
+
+# Sentinel categorical level standing in for every missing-data placeholder
+# token found in a training-cohort column (see `is_missing_token`). Kept out
+# of the human-readable category namespace so it can never collide with a
+# real clinical value.
+_MISSING_LEVEL_KEY = "__not_recorded__"
 
 
 # ==================== Pure numeric helpers (unit-tested) ====================
@@ -126,6 +133,7 @@ def covariate_form_spec(model: PrognosticModel) -> List[dict]:
             "min_value": cov.min_value,
             "max_value": cov.max_value,
             "required": cov.required,
+            "missing_level": cov.missing_level,
         }
         for cov in model.clinical_covariates
     ]
@@ -169,6 +177,13 @@ class SignatureService:
     # normalization to be meaningful; below it we fall back to per-gene ranking.
     _QN_MIN_GENES = 40
     _LOW_COVERAGE_FRAC = 0.6  # warn below this fraction of signature genes matched
+    # Below this pooled (validation) C-index, a model discriminates so weakly
+    # (0.5 = coin flip) that presenting it identically to a well-validated
+    # model would overstate its usefulness. Surfaced as a gallery warning
+    # rather than auto-flipping risk direction, since a value this low more
+    # likely signals an upstream issue (e.g. survival/status encoding for
+    # that cohort) worth investigating on its own, not just a sign error.
+    WEAK_DISCRIMINATION_C_INDEX = 0.55
 
     # Curated Oncologist-Mode models are persisted here as JSON so they survive
     # restarts and LRU eviction (project convention: small caches under backend/,
@@ -258,7 +273,20 @@ class SignatureService:
         return count
 
     def find_model_by_cancer(self, cancer_type: str) -> Optional[PrognosticModel]:
-        """Return a loaded/persisted model tagged with this cancer type, if any."""
+        """Return a loaded/persisted model tagged with this cancer type, if any.
+
+        Prefers the stable curated model_id (`curated_<key>` — see
+        curated_models.py) when one is loaded. Without this, an ad-hoc F17
+        signature build or a per-drug treatment-context model (both of which
+        can carry the same `cancer_type`, e.g. "breast") could be returned
+        instead, arbitrarily, depending on `_models`' iteration order — which
+        `load_persisted_models()` populates in filesystem glob order, NOT by
+        recency. That silently shadows a just-rebuilt curated model (e.g. the
+        gallery headline) with a stale one from an unrelated prior build.
+        """
+        curated_id = f"curated_{cancer_type.lower()}"
+        if curated_id in self._models:
+            return self._models[curated_id]
         for model in self._models.values():
             if (model.cancer_type or "").lower() == cancer_type.lower():
                 return model
@@ -477,11 +505,22 @@ class SignatureService:
                 design[name] = ((numeric - mean) / std)
             else:
                 cats = clin[name].astype(str).where(clin[name].notna())
-                levels = cats.value_counts().index.tolist()
-                if len(levels) < 2 or len(levels) > 8:
+                is_missing = cats.map(is_missing_token)
+                # Missing-data placeholders (e.g. "--", "NX") must never be
+                # fit as an ordinary category — see `is_missing_token`. They
+                # get routed to one shared "not recorded" indicator instead,
+                # and the reference (baseline) level is chosen among the
+                # REAL levels only, so "not recorded" can never become the
+                # implicit baseline either.
+                real_counts = cats[~is_missing].value_counts()
+                real_levels = real_counts.index.tolist()
+                if len(real_levels) < 2 or len(real_levels) > 8:
                     continue  # constant or too sparse to encode usefully
+                has_missing = bool(is_missing.any())
+                levels = real_levels + ([_MISSING_LEVEL_KEY] if has_missing else [])
                 cat_info[name] = levels
-                design[name] = pd.Categorical(cats, categories=levels)
+                coded = cats.where(~is_missing, _MISSING_LEVEL_KEY)
+                design[name] = pd.Categorical(coded, categories=levels)
 
         cov_names = [c for c in design.columns if c != "risk"]
         if not cov_names:
@@ -538,6 +577,7 @@ class SignatureService:
                     category_coefficients=cat_coefs,
                     reference_category=reference,
                     options=levels,
+                    missing_level=_MISSING_LEVEL_KEY if _MISSING_LEVEL_KEY in levels else None,
                     required=False,
                 )
             )
@@ -583,7 +623,12 @@ class SignatureService:
         model.c_index_combined = float(c_combined) if c_combined is not None else None
         if c_combined is not None:
             model.delta_c_index = float(c_combined) - expression_pooled_c
-            model.pooled_c_index = float(c_combined)  # headline now reflects combined
+            # Only let the combined score become the headline when it's at
+            # least as discriminating as expression alone — a "combined"
+            # model that's actually worse (noisy/underpowered clinical data)
+            # must not silently replace a better expression-only headline.
+            if model.delta_c_index >= 0:
+                model.pooled_c_index = float(c_combined)
 
     def _combined_linear_predictor(
         self,
@@ -809,7 +854,15 @@ class SignatureService:
                             f"(known: {', '.join(cov.options or [])}); contributed 0."
                         )
                     contrib = cov.category_coefficients.get(level, 0.0)
-                    label = f"{cov.display_label} = {level}"
+                    if cov.missing_level and level == cov.missing_level:
+                        label = f"{cov.display_label} not recorded in training cohort"
+                        warnings_out.append(
+                            f"{cov.display_label} was marked 'not recorded' — its contribution "
+                            "reflects which training-cohort samples lacked this field, not a "
+                            "specific clinical value for this patient. Provide a real value if known."
+                        )
+                    else:
+                        label = f"{cov.display_label} = {level}"
                 score += float(contrib)
                 contributions.append(
                     RiskContribution(label=label, contribution=float(contrib), kind="clinical")
@@ -903,8 +956,16 @@ class SignatureService:
         """Synthesise a fully-formed model with a genuine prognostic signal so
         the whole F17/F18/F19/F23 surface is demonstrable offline. Includes
         synthetic clinical covariates (age, grade) that truly affect survival,
-        so the combined clinical+expression path is exercised without GEO data."""
-        rng = np.random.default_rng(42)
+        so the combined clinical+expression path is exercised without GEO data.
+
+        The seed is derived from `cancer_type` (via a stable CRC32, not
+        Python's randomized `hash()`) rather than a fixed constant, so
+        different curated cancer types that all fall back to this demo path
+        don't render byte-identical "C-index" numbers next to each other in
+        the gallery — a coincidence that reads as a bug even though each is
+        honestly labelled `is_demo=True`."""
+        base_seed = zlib.crc32(cancer_type.encode()) % (2**31)
+        rng = np.random.default_rng(base_seed)
         # Real cancer gene symbols (synthetic coefficients) so the demo exercises
         # the realistic surfaces — therapy-evidence lookup and the landing sample
         # patient both resolve. The model stays clearly labelled is_demo=True.
@@ -943,9 +1004,9 @@ class SignatureService:
             return acc, expr, surv, clinical
 
         cohorts = [
-            make_cohort("GSE_DEMO_TRAIN", 160, 1),
-            make_cohort("GSE_DEMO_VAL1", 90, 2),
-            make_cohort("GSE_DEMO_VAL2", 70, 3),
+            make_cohort("GSE_DEMO_TRAIN", 160, base_seed + 1),
+            make_cohort("GSE_DEMO_VAL1", 90, base_seed + 2),
+            make_cohort("GSE_DEMO_VAL2", 70, base_seed + 3),
         ]
         return self._build_from_cohorts(
             query=query,

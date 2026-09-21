@@ -23,26 +23,32 @@ const CancerTypeSelect: React.FC<CancerTypeSelectProps> = ({ cancers, loading, o
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {cancers.map((c) => {
                     const ready = !!c.model_id
+                    const weak = ready && !!c.discrimination_warning
                     return (
                         <button
                             key={c.key}
                             type="button"
                             disabled={!ready}
                             onClick={() => onSelect(c)}
+                            title={weak ? c.discrimination_warning ?? undefined : undefined}
                             className={`text-left rounded-card border p-2.5 transition-colors ${
-                                ready
-                                    ? 'border-border bg-surface hover:border-border-accent hover:bg-surface-accent'
-                                    : 'border-clinical-100 opacity-60 cursor-not-allowed'
+                                !ready
+                                    ? 'border-clinical-100 opacity-60 cursor-not-allowed'
+                                    : weak
+                                        ? 'border-warn-border bg-warn-soft hover:bg-warn-soft'
+                                        : 'border-border bg-surface hover:border-border-accent hover:bg-surface-accent'
                             }`}
                         >
                             <div className="flex items-center gap-1.5 text-sm font-medium text-fg-strong">
                                 <span>{c.icon}</span> {c.label}
                             </div>
                             {ready ? (
-                                <p className="text-[11px] text-fg-muted mt-0.5">
-                                    Ready — scores in seconds · C-index {(c.pooled_c_index ?? 0).toFixed(2)}
+                                <p className={`text-[11px] mt-0.5 ${weak ? 'text-warn font-medium' : 'text-fg-muted'}`}>
+                                    {weak ? '⚠ Weak discrimination' : 'Ready — scores in seconds'} · C-index {(c.pooled_c_index ?? 0).toFixed(2)}
                                     {c.n_genes ? ` · ${c.n_genes} genes` : ''}
-                                    {c.model_is_demo && ' · demo model'}
+                                    {c.model_is_demo && (
+                                        <span className="text-warn font-semibold"> · illustrative demo (not real GEO validation)</span>
+                                    )}
                                 </p>
                             ) : (
                                 <p className="text-[11px] text-fg-faint mt-0.5">Preparing model…</p>

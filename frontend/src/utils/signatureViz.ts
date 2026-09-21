@@ -173,8 +173,13 @@ export function topTreatmentCurves(
         }
         // When a cohort is shared, the curve describes the cohort, not any one
         // drug — label it that way instead of picking a drug name arbitrarily.
+        // The drugs listed are whichever independent per-drug GEO searches
+        // happened to resolve to this SAME accession — the cohort's own
+        // treatment column does not document them together (that's exactly
+        // why several unrelated drug searches collided on one series), so
+        // this must read as "search matched", never as documented co-therapy.
         const subject = shared.length > 1
-            ? `${km.arm_variable ?? 'Treatment'} cohort (${shared.slice(0, 3).join(', ')}${shared.length > 3 ? `, +${shared.length - 3}` : ''})`
+            ? `${km.arm_variable ?? 'Treatment'} cohort (search matched: ${shared.slice(0, 3).join(', ')}${shared.length > 3 ? `, +${shared.length - 3}` : ''})`
             : drug
 
         if (km.tier === 'arm_comparison' && km.arms && km.arms.length > 0) {

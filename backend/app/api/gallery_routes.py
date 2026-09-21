@@ -92,6 +92,9 @@ async def get_gallery(db: AsyncSession = Depends(get_db)):
             logger.warning("Gallery lookup failed for %s: %s", entry["key"], e)
 
         model = signature_service.find_model_by_cancer(entry["key"]) if signature_service else None
+        weak_discrimination = (
+            model is not None and model.pooled_c_index < SignatureService.WEAK_DISCRIMINATION_C_INDEX
+        )
 
         items.append(
             {
@@ -100,6 +103,11 @@ async def get_gallery(db: AsyncSession = Depends(get_db)):
                 "model_id": model.model_id if model else None,
                 "n_genes": len(model.genes) if model else None,
                 "pooled_c_index": model.pooled_c_index if model else None,
+                "discrimination_warning": (
+                    f"C-index {model.pooled_c_index:.2f} is close to or below 0.5 (coin flip) — "
+                    "this model's risk ranking is weak and should be treated with caution."
+                    if weak_discrimination else None
+                ),
                 "c_index_expression_only": model.c_index_expression_only if model else None,
                 "c_index_combined": model.c_index_combined if model else None,
                 "delta_c_index": model.delta_c_index if model else None,
@@ -119,5 +127,6 @@ async def get_gallery(db: AsyncSession = Depends(get_db)):
     scoring_thresholds = {
         "qn_min_genes": SignatureService._QN_MIN_GENES,
         "low_coverage_frac": SignatureService._LOW_COVERAGE_FRAC,
+        "weak_discrimination_c_index": SignatureService.WEAK_DISCRIMINATION_C_INDEX,
     }
     return {"cancers": items, "scoring_thresholds": scoring_thresholds}

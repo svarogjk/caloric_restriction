@@ -39,7 +39,7 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
     const {
         prediction, resolvedModelId, modelIsDemo, covariates, referenceCurves, timeUnit,
         lastExpression, lastClinical, loading, error, score, loadDemoPatient,
-    } = usePatientScoring({ resultId, modelId, initialCovariates })
+    } = usePatientScoring({ resultId, modelId, initialCovariates, cancerLabel: label })
 
     const setField = (name: string, value: string) => setClinical((c) => ({ ...c, [name]: value }))
 

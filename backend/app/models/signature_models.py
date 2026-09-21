@@ -86,6 +86,13 @@ class ClinicalCovariate(BaseModel):
     category_coefficients: dict[str, float] = Field(default_factory=dict)  # level -> coef
     reference_category: Optional[str] = None        # dropped (baseline) categorical level
     options: Optional[List[str]] = None             # categorical selectable levels
+    # If set, this is the key (within `options`/`category_coefficients`) for
+    # samples whose training-cohort value was a missing-data placeholder
+    # (e.g. "--", "NX") rather than a real clinical level. Its coefficient
+    # reflects cohort composition, not a specific clinical value — the UI
+    # must render/caveat it distinctly from real categories (never as a
+    # normal option a clinician would knowingly choose).
+    missing_level: Optional[str] = None
     min_value: Optional[float] = None               # numeric form hint
     max_value: Optional[float] = None
     required: bool = False
