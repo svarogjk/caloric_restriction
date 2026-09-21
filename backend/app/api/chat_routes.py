@@ -586,6 +586,13 @@ class TherapyRationaleRequest(BaseModel):
     # against an unrelated model's tertiles.
     expression: dict[str, float] = Field(default_factory=dict)
     clinical: Optional[dict[str, float | str]] = None
+    # The COSMIC cancer-gene restriction the user actually has set, sent from
+    # the client the same way /api/search sends it. Falls back to the model's
+    # own flag when absent. Inheriting from the model alone was wrong: a demo
+    # or curated model always carries False, so a Tier-2 build for a patient
+    # scored against one ran genome-wide (~40k genes) no matter what the user
+    # had ticked — which is most of why those builds hit their deadline.
+    cancer_genes_only: Optional[bool] = None
 
 
 class TherapyEvidenceRecord(BaseModel):
@@ -748,6 +755,7 @@ async def _resolve_cohort_km(
     model, drug: str, cohort_cache: dict,
     expression: Optional[dict[str, float]] = None,
     clinical: Optional[dict[str, float | str]] = None,
+    cancer_genes_only: Optional[bool] = None,
 ) -> TreatmentKMEvidence:
     """Resolve tiered real-GEO-cohort KM evidence for one suggested drug:
     Tier 1 — true treated-vs-untreated arms within the model's training
@@ -799,7 +807,11 @@ async def _resolve_cohort_km(
         try:
             return await get_treatment_service().get_or_build_km_for_drug(
                 model.cancer_type, drug, synonyms=synonyms,
-                cancer_genes_only=model.cancer_genes_only,
+                # Client-supplied setting wins; the model's own flag is only a
+                # fallback for callers that don't send one.
+                cancer_genes_only=(
+                    model.cancer_genes_only if cancer_genes_only is None else cancer_genes_only
+                ),
                 expression=expression, clinical=clinical,
             )
         except RuntimeError as e:
@@ -876,7 +888,8 @@ async def therapy_rationale(request: TherapyRationaleRequest):
     for drug in top_drugs:
         try:
             km_by_drug[drug] = await _resolve_cohort_km(
-                model, drug, cohort_cache, request.expression, request.clinical
+                model, drug, cohort_cache, request.expression, request.clinical,
+                request.cancer_genes_only,
             )
         except (ValueError, KeyError, OSError, RuntimeError) as e:
             logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)
@@ -901,6 +914,13 @@ class CohortKMRequest(BaseModel):
     # the patient rather than falling back to a cross-model label match.
     expression: dict[str, float] = Field(default_factory=dict)
     clinical: Optional[dict[str, float | str]] = None
+    # The COSMIC cancer-gene restriction the user actually has set, sent from
+    # the client the same way /api/search sends it. Falls back to the model's
+    # own flag when absent. Inheriting from the model alone was wrong: a demo
+    # or curated model always carries False, so a Tier-2 build for a patient
+    # scored against one ran genome-wide (~40k genes) no matter what the user
+    # had ticked — which is most of why those builds hit their deadline.
+    cancer_genes_only: Optional[bool] = None
 
 
 class CohortKMResponse(BaseModel):
@@ -925,7 +945,8 @@ async def therapy_rationale_cohort_km(request: CohortKMRequest):
     for drug in drugs:
         try:
             results.append(await _resolve_cohort_km(
-                model, drug, cohort_cache, request.expression, request.clinical
+                model, drug, cohort_cache, request.expression, request.clinical,
+                request.cancer_genes_only,
             ))
         except (ValueError, KeyError, OSError, RuntimeError) as e:
             logger.warning("Cohort KM resolution failed for drug=%s: %s", drug, e)

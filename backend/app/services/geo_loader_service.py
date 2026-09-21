@@ -250,6 +250,62 @@ class GEODataLoaderService:
 
             return loaded_data
     
+    async def load_metadata_only(self, dataset: GEODataset) -> Optional[LoadedGEOData]:
+        """Load ONLY a dataset's sample metadata (clinical annotations).
+
+        Everything downstream of the treated-vs-untreated arm split — survival
+        column detection, `_extract_survival_data`, `_detect_treatment_column`,
+        `_fit_treatment_arm_km` — reads `sample_metadata` and never touches
+        `expression_matrix`. So for that question the two most expensive steps
+        of `load_dataset` are pure waste:
+
+        * `apply_gene_mapping`, which can pull a multi-GB GPL SOFT annotation
+          file for a platform that isn't cached yet, and
+        * `_normalize_expression` + quality metrics over the full matrix.
+
+        This skips both. When the dataset is already cached, it reads the
+        standalone `*.metadata.parquet` written by `_save_to_storage` and does
+        no network I/O at all. Otherwise it falls back to the normal series
+        matrix fetch (the metadata lives in the same file as the expression
+        values, so the download itself is unavoidable) and returns the parsed
+        result WITHOUT saving it — `load_dataset` remains the single writer of
+        the dataset cache, so a metadata-only fetch can never leave a
+        gene-mapping-less parquet behind for it to trip over later.
+
+        Returns None when no metadata could be obtained.
+        """
+        meta_path = self.DATASETS_DIR / f"{dataset.accession}.metadata.parquet"
+        if meta_path.exists():
+            try:
+                meta_df = await asyncio.to_thread(pd.read_parquet, meta_path)
+            # pyarrow.ArrowInvalid (corrupt/truncated parquet) subclasses ValueError.
+            except (OSError, ValueError) as e:
+                logger.warning(f"Cached metadata unreadable for {dataset.accession}: {e}")
+            else:
+                if not meta_df.empty:
+                    logger.info(f"Loaded cached metadata only for {dataset.accession}")
+                    return LoadedGEOData(
+                        accession=dataset.accession,
+                        title=dataset.title,
+                        platform=dataset.platforms[0] if dataset.platforms else "",
+                        expression_matrix=pd.DataFrame(),
+                        sample_metadata=meta_df,
+                        platform_info={},
+                        loading_strategy=DataLoadingStrategy(
+                            file_format="series_matrix", separator="\t", skip_rows=0,
+                            sample_id_column=None, expression_start_row=0, has_header=True,
+                            notes="Metadata-only load from cache",
+                        ),
+                        quality_metrics={},
+                        cache_path=meta_path,
+                    )
+
+        loaded = await self._try_series_matrix(dataset)
+        if loaded is None or loaded.sample_metadata is None or loaded.sample_metadata.empty:
+            logger.info(f"No sample metadata available for {dataset.accession}")
+            return None
+        return loaded
+
     async def _try_series_matrix(self, dataset: GEODataset) -> Optional[LoadedGEOData]:
         """Try loading from series matrix file"""
         url = dataset.series_matrix_url

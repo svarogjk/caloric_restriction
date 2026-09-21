@@ -7,6 +7,7 @@ Identifies genes associated with survival/lifespan across multiple datasets
 import hashlib
 import asyncio
 import math
+import re
 from typing import List, Optional, Dict, Any, Tuple, Callable, Awaitable
 from dataclasses import dataclass
 from datetime import datetime
@@ -136,6 +137,8 @@ class GEOSurvivalWorkflowOrchestrator:
         gene_filter: Optional[List[str]] = None,
         hazard_ratio_upper: float = 1.2,
         hazard_ratio_lower: float = 0.8,
+        max_retry_batches: Optional[int] = None,
+        max_platform_mb: Optional[float] = None,
         progress_callback: Optional[Callable[[str, str, Optional[int], Optional[int]], Awaitable[None]]] = None,
     ) -> CrossDatasetSurvivalAnalysis:
         """
@@ -150,6 +153,27 @@ class GEOSurvivalWorkflowOrchestrator:
             ranking_multiplier: Multiplier for datasets to rank before analysis
             hazard_ratio_upper: A gene is significant if HR >= this (risk-associated)
             hazard_ratio_lower: ...or HR <= this (protective-associated)
+            max_retry_batches: Cap on how many EXTRA batches of datasets to pull in
+                when the initial batch yields too few results. None (the default,
+                used by the interactive search) means "keep going until the ranked
+                list is exhausted" — worth it when a user is waiting on the one
+                analysis they asked for. Background callers that fan out over many
+                queries at once (e.g. TreatmentContextService builds one of these
+                per suggested drug) should pass a small number: without it a query
+                that matches little walks the whole ranked list — up to
+                `max_datasets * ranking_multiplier` datasets, each costing a
+                download, a platform-annotation load and two LLM calls.
+            max_platform_mb: Drop ranked datasets whose GPL annotation is not
+                already mapped locally and is larger than this. Ranking only
+                applies a soft score penalty for big platforms, which is right
+                for an interactive search — the user asked about THOSE cohorts,
+                so a 3 GB annotation download is a cost worth paying. A
+                background treatment build has no such attachment: any cohort
+                with a usable treated arm will do, and several GEO platforms run
+                to multiple GB (GPL17585 is ~12 GB), which is minutes of
+                download and gigabytes of RSS that no gene filter can avoid —
+                `cancer_genes_only` is applied AFTER probe->gene mapping, so the
+                annotation has to be fetched either way. None means no cap.
 
         Returns:
             CrossDatasetSurvivalAnalysis with survival-associated genes
@@ -213,6 +237,16 @@ class GEOSurvivalWorkflowOrchestrator:
             search_result.datasets, query, datasets_for_ranking
         )
 
+        if max_platform_mb is not None:
+            ranked_datasets = await self._drop_oversized_platforms(
+                ranked_datasets, max_platform_mb
+            )
+            if not ranked_datasets:
+                logger.warning(
+                    f"All ranked datasets exceed the {max_platform_mb:.0f}MB platform cap"
+                )
+                return self._create_empty_result(query, start_time)
+
         # Analyze an initial batch, then retry with more if too few succeed
         initial_batch_size = min(len(ranked_datasets), max(max_datasets, 10))
         top_datasets = ranked_datasets[:initial_batch_size]
@@ -232,11 +266,20 @@ class GEOSurvivalWorkflowOrchestrator:
         # Retry with next batch if too few datasets yielded results
         min_desired_results = min(3, max_datasets)
         already_tried = initial_batch_size
+        retries_done = 0
         while len(survival_results) < min_desired_results and already_tried < len(ranked_datasets):
+            if max_retry_batches is not None and retries_done >= max_retry_batches:
+                logger.info(
+                    f"Stopping after {retries_done} retry batch(es) with {len(survival_results)} "
+                    f"results (max_retry_batches={max_retry_batches}); "
+                    f"{len(ranked_datasets) - already_tried} ranked datasets left untried"
+                )
+                break
             next_batch_end = min(already_tried + max_datasets, len(ranked_datasets))
             next_batch = ranked_datasets[already_tried:next_batch_end]
             if not next_batch:
                 break
+            retries_done += 1
             logger.info(f"Only {len(survival_results)} results so far, retrying with next batch of {len(next_batch)} datasets (indices {already_tried}-{next_batch_end})")
             await _cb("loading_dataset", f"Loading additional datasets ({already_tried}/{len(ranked_datasets)})...", already_tried, len(ranked_datasets))
             await self._preload_platforms(next_batch)
@@ -414,10 +457,15 @@ class GEOSurvivalWorkflowOrchestrator:
             'melanoma': ['melanoma', 'skin cancer'],
         }
 
+        # Word-boundary match, NOT plain substring. Several terms here are short
+        # acronyms ('ALL', 'CLL', 'GBM', 'CRC', 'HCC'), and a substring test makes
+        # them fire inside ordinary words: 'ALL' matches the "all" in "overall
+        # survival", so any query ending in that phrase without an earlier match
+        # was classified as leukemia and sent to GEO looking for leukemia series.
         detected_cancer = None
         for cancer_key, cancer_terms in cancer_types.items():
             for term in cancer_terms:
-                if term.lower() in query_lower:
+                if re.search(rf"\b{re.escape(term.lower())}\b", query_lower):
                     detected_cancer = cancer_key
                     break
             if detected_cancer:
@@ -513,6 +561,42 @@ class GEOSurvivalWorkflowOrchestrator:
             logger.error(f"Dataset ranking failed: {e}")
             return datasets[:top_k], None, None
     
+    async def _drop_oversized_platforms(
+        self, datasets: List[GEODataset], max_mb: float
+    ) -> List[GEODataset]:
+        """Filter out datasets needing a big, not-yet-cached GPL annotation.
+
+        A platform already mapped on disk is free to reuse however large the
+        original file was, so only an uncached one is judged by size. Sizes come
+        from the same disk-backed cache the ranking service fills, so this is
+        usually zero network calls.
+        """
+        gms = self.loader_service.gene_mapping_service
+        kept: List[GEODataset] = []
+        for ds in datasets:
+            over = False
+            for platform in (ds.platforms or []):
+                if gms._get_prebuilt_mapping_path(platform):
+                    continue
+                try:
+                    size_mb = await gms.get_platform_size_mb(platform)
+                except (OSError, ValueError, KeyError) as e:
+                    logger.debug(f"Platform size lookup failed for {platform}: {e}")
+                    continue
+                if size_mb is not None and size_mb > max_mb:
+                    logger.info(
+                        f"Skipping {ds.accession}: uncached platform {platform} is "
+                        f"{size_mb:.0f}MB (cap {max_mb:.0f}MB)"
+                    )
+                    over = True
+                    break
+            if not over:
+                kept.append(ds)
+        logger.info(
+            f"Platform cap kept {len(kept)}/{len(datasets)} ranked datasets"
+        )
+        return kept
+
     async def _preload_platforms(self, datasets: List[GEODataset]) -> None:
         """Pre-load all platform mappings"""
         

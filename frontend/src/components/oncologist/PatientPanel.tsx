@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { ClinicalCovariateSpec } from '../../services/api'
 import PatientReadout from './PatientReadout'
 import ClinicalCovariateFields from './ClinicalCovariateFields'
-import { RuoNotice } from '../ui'
+import { ExpressionLoadNotice, RuoNotice } from '../ui'
 import { usePatientScoring } from '../../hooks/usePatientScoring'
 
 interface PatientPanelProps {
@@ -98,6 +98,9 @@ const PatientPanel: React.FC<PatientPanelProps> = ({
             {enabled && (
                 <>
                     <RuoNotice scope="intake" />
+                    {resultId && !modelId && (
+                        <ExpressionLoadNotice scope="patient" variant="inline" />
+                    )}
 
                     <div>
                         <label className="block text-sm font-medium text-fg mb-1">Tumour expression profile</label>

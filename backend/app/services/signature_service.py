@@ -1059,6 +1059,8 @@ class SignatureService:
         """Re-load a cohort's cached expression matrix via the loader service."""
         from app.services.geo_client import GEODataset
 
+        if self.orchestrator is None:
+            return None
         loader = self.orchestrator.loader_service
         path = loader.DATASETS_DIR / f"{accession}.parquet"
         if not path.exists():
@@ -1172,15 +1174,46 @@ class SignatureService:
     async def _load_cohort_treatment_arms_uncached(
         self, accession: str
     ) -> Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str], str]]:
+        loaded = await self._reload_cohort(accession)
+        if loaded is None:
+            return None
+        return await self.extract_treatment_arms(loaded)
+
+    async def extract_treatment_arms(
+        self, loaded, prefer_regex: bool = False
+    ) -> Optional[Tuple[pd.DataFrame, pd.Series, Dict[int, str], str]]:
+        """Detect a survival + treatment-arm split on an ALREADY-loaded cohort.
+
+        Split out of `_load_cohort_treatment_arms_uncached` so callers that
+        obtained the cohort some other way can reuse it — in particular
+        `TreatmentContextService`'s metadata-only fast path, which fetches via
+        `GEODataLoaderService.load_metadata_only` and therefore has no cached
+        `.parquet` for `_reload_cohort` to find.
+
+        Reads `sample_metadata` exclusively; the expression matrix may be empty.
+
+        `prefer_regex` tries the free, instant regex detector before the LLM one.
+        Set it when SCREENING several candidate cohorts to find one usable split:
+        the default LLM-first order spends a call per candidate, and under a
+        provider rate limit every one of those 429s and falls back to the same
+        regex anyway — just minutes later and having burned the quota the rest
+        of the pipeline needs. When a cohort has already been chosen, leave it
+        off: LLM-first resolves non-standard column names regex misses.
+        """
         if self.orchestrator is None:
             return None
         survival_service = self.orchestrator.survival_service
 
-        loaded = await self._reload_cohort(accession)
-        if loaded is None or loaded.sample_metadata is None:
+        if loaded.sample_metadata is None or loaded.sample_metadata.empty:
             return None
 
-        detection = await survival_service.detect_survival_columns(loaded)
+        detection = None
+        if prefer_regex:
+            detection = survival_service.detect_survival_data_regex(loaded)
+            if detection is not None and not detection.has_survival_data:
+                detection = None
+        if detection is None:
+            detection = await survival_service.detect_survival_columns(loaded)
         if detection is None:
             return None
         time_col = (detection.survival_time_column or "").split(",")[0].strip()

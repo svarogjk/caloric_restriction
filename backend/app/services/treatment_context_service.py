@@ -16,8 +16,21 @@ Build lifecycle
    a. Model already on disk → score patient → return result.
    b. Model not on disk but a cached analysis exists → background build.
    c. Neither → return is_building=True so the UI can request /warm explicitly.
-2. POST /warm → runs the full orchestrator pipeline for missing treatment models;
-   each takes ~2-5 min per query.
+2. POST /warm → runs the full orchestrator pipeline for missing treatment models.
+
+Per-drug lookups (F24b, `get_or_build_km_for_drug`) resolve cheapest-first:
+
+  fast path   `find_arm_cohort_for_drug` — search, rank, then load METADATA ONLY
+              for the top few series and take the first with a usable
+              treated-vs-untreated split. No probe->gene mapping, no Cox pass.
+              This is what the chart actually renders, and it needs no
+              expression data at all.
+  pre-screen  If that search returns nothing, the drug has no cohort footprint
+              → negative-cache it and never start a build.
+  fallback    Otherwise a full model build, needed only for the tier-2
+              per-tertile `reference_km` curves. Bounded three ways:
+              `max_retry_batches=1`, `_BUILD_DEADLINE_SECONDS`, and
+              `_build_semaphore`.
 
 Patient expression is never persisted (same policy as /predict).
 """
@@ -33,8 +46,10 @@ from typing import TYPE_CHECKING, Optional
 
 from app.config.database import get_db_session
 from app.models.signature_models import (
+    ARM_COMPARISON_CAVEAT,
     COHORT_REFERENCE_CAVEAT,
     TREATMENT_RUO_DISCLAIMER,
+    TreatmentArmKM,
     TreatmentComparison,
     TreatmentComparisonResult,
     TreatmentKMEvidence,
@@ -175,12 +190,66 @@ def _slugify_drug_name(drug_name: str) -> str:
     return slug or "drug"
 
 
+def _drug_query(cancer_key: str, drug_name: str) -> str:
+    """GEO search query for an uncurated drug.
+
+    Uses the CANONICAL cancer phrase ("lung cancer") rather than the bare
+    `TREATMENT_QUERIES` key ("lung"). The orchestrator's `_extract_keywords`
+    detects a cancer type by matching full phrases — "lung cancer",
+    "lung adenocarcinoma", "nsclc" — and also checks for the bare words
+    "cancer"/"carcinoma" anywhere in the query. A query built from the key
+    alone ("lung NIVOLUMAB overall survival") matches none of those, so it is
+    classified as a GENERIC clinical query and its first four words are OR'd
+    together into a very broad NCBI search. That returns mostly irrelevant
+    series, few of which yield survival results, which in turn drives the
+    orchestrator's retry loop through its entire ranked list.
+
+    Every curated entry in TREATMENT_QUERIES already spells out the full
+    phrase for exactly this reason; this keeps synthesized queries consistent
+    with them.
+    """
+    phrase = CANCER_TYPE_TERMS.get(cancer_key, [cancer_key])[0]
+    return f"{phrase} {drug_name} overall survival"
+
+
 # Negative-build results ("no matching GEO datasets") expire after this long,
 # so a drug that later gains coverage isn't cached-negative forever, while
 # repeated Regenerate clicks within a session don't re-trigger a fresh
 # 2-5 min orchestrator run for a drug with no data.
 _NEGATIVE_CACHE_TTL_SECONDS = 3600
 _NEGATIVE_CACHE_MAX = 200
+
+# How many top-ranked GEO series the metadata-only fast path inspects before
+# giving up and falling back to a full model build. Each costs at most one
+# series-matrix download plus one LLM survival-column detection — no platform
+# annotation, no probe->gene mapping, no Cox pass.
+_FASTPATH_CANDIDATES = 5
+_ARM_COHORT_CACHE_MAX = 200
+
+# Hard ceiling on a fallback model build. The UI stops polling at 10 min
+# (TherapyDirections.tsx POLL_TIMEOUT_MS); before this existed a build that
+# outran the timer kept consuming NCBI and LLM budget with nothing left to
+# display it. Sits inside that window so a timeout is recorded as a negative
+# cache entry BEFORE the user is told to click Regenerate.
+_BUILD_DEADLINE_SECONDS = 480
+
+# Global cap on concurrent treatment-model builds. One "Treatments to consider"
+# click resolves up to _MAX_COHORT_KM_DRUGS (8) drugs, each of which could
+# otherwise spawn its own full orchestrator run: ~16 concurrent GEO downloads
+# behind a single 0.34 s NCBI rate limiter, 8 concurrent LLM ranking calls, all
+# contending with whatever foreground analysis the user is running. Queue them
+# instead — two at a time finishes the batch sooner than eight thrashing.
+_MAX_CONCURRENT_BUILDS = 2
+
+# Skip cohorts needing an uncached GPL annotation bigger than this. Of the
+# platforms this install has measured, 11 of 102 exceed 500 MB and the largest
+# is ~12 GB — minutes of download and gigabytes of RSS for ONE cohort. An
+# interactive search should still pay that (the user asked about those specific
+# cohorts); a background treatment build should not, because any cohort with a
+# usable treated arm answers the question equally well. Note the COSMIC filter
+# cannot avoid this cost: it is applied after probe->gene mapping, so the
+# annotation is fetched either way.
+_MAX_PLATFORM_MB = 500.0
 
 
 class TreatmentContextService:
@@ -193,6 +262,11 @@ class TreatmentContextService:
         self._build_stage: dict[str, str] = {}
         # model_id -> (reason, cached_at_monotonic) for recent failed/empty builds.
         self._negative_cache: "OrderedDict[str, tuple[str, float]]" = OrderedDict()
+        # model_id -> evidence resolved by the metadata-only fast path. Holds the
+        # ACCESSION and arms, not patient data, so it is safe to share across
+        # requests (patient expression is never persisted — see module docstring).
+        self._arm_cohort_cache: "OrderedDict[str, TreatmentKMEvidence]" = OrderedDict()
+        self._build_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_BUILDS)
 
     def _negative_cache_get(self, mid: str) -> Optional[str]:
         entry = self._negative_cache.get(mid)
@@ -210,6 +284,12 @@ class TreatmentContextService:
         self._negative_cache.move_to_end(mid)
         if len(self._negative_cache) > _NEGATIVE_CACHE_MAX:
             self._negative_cache.popitem(last=False)
+
+    def _arm_cohort_cache_put(self, mid: str, evidence: TreatmentKMEvidence) -> None:
+        self._arm_cohort_cache[mid] = evidence
+        self._arm_cohort_cache.move_to_end(mid)
+        if len(self._arm_cohort_cache) > _ARM_COHORT_CACHE_MAX:
+            self._arm_cohort_cache.popitem(last=False)
 
     # ------------------------------------------------------------------
     # Public API
@@ -248,19 +328,22 @@ class TreatmentContextService:
         expression: Optional[dict[str, float]] = None,
         clinical: Optional[dict[str, float | str]] = None,
     ) -> TreatmentKMEvidence:
-        """Tier-2 cohort-reference KM evidence for a drug suggested in the
-        "Treatments to consider" panel (F24b). Reuses a curated
-        `TREATMENT_QUERIES` entry when the drug name (or a known `synonym` —
-        brand name / research code) matches one; otherwise synthesizes a
-        query and builds/caches a dedicated treatment model the same way
-        curated entries are built. A short-TTL negative-result cache avoids
-        re-running a full orchestrator pipeline on every Regenerate click for
-        a drug with no matching GEO datasets.
+        """Cohort KM evidence for a drug suggested in the "Treatments to
+        consider" panel (F24b). Reuses a curated `TREATMENT_QUERIES` entry when
+        the drug name (or a known `synonym` — brand name / research code)
+        matches one; otherwise synthesizes a query for it.
+
+        Returns whatever is already known, cheapest first — a negative-cache
+        entry, a fast-path arm split, then a built model — and otherwise starts
+        a background `_resolve_drug_evidence` and reports `is_building`, which
+        the UI polls on. See the module docstring for that resolution order.
 
         `cancer_genes_only` should mirror the setting used for the patient's
         originating analysis (`PrognosticModel.cancer_genes_only`) — it changes
         the model_id (a `_cgo` suffix), so builds with and without the filter
-        never collide or reuse each other's cache.
+        never collide or reuse each other's cache. Note it is a cache-keying
+        and provenance concern, not a performance one (see
+        `_build_treatment_model`).
 
         When `expression` is supplied, the patient is scored against THIS
         treatment-specific model (its own genes/cutoffs — never a risk-group
@@ -272,13 +355,22 @@ class TreatmentContextService:
         entry = self._match_curated_entry(cancer_key, drug_name, synonyms) or {
             "name": drug_name,
             "slug": _slugify_drug_name(drug_name),
-            "query": f"{cancer_type} {drug_name} overall survival",
+            "query": _drug_query(cancer_key, drug_name),
         }
         mid = _model_id(cancer_key, entry["slug"], cancer_genes_only)
 
         neg_reason = self._negative_cache_get(mid)
         if neg_reason is not None:
             return TreatmentKMEvidence(drug=drug_name, tier="unavailable", build_error=neg_reason)
+
+        # Fast-path result from a previous resolve — an arm split found from
+        # clinical metadata alone, no model build needed. Checked before
+        # get_model() because it answers the same question far more directly:
+        # a treated-vs-untreated contrast rather than prognosis within a cohort.
+        cached_arms = self._arm_cohort_cache.get(mid)
+        if cached_arms is not None:
+            self._arm_cohort_cache.move_to_end(mid)
+            return cached_arms.model_copy(update={"drug": drug_name})
 
         model = self._sig.get_model(mid)
         if model is not None:
@@ -332,9 +424,16 @@ class TreatmentContextService:
             )
 
         if mid not in self._building:
+            # Claim BEFORE create_task. create_task only schedules; the body does
+            # not run until this coroutine yields, so claiming inside it let every
+            # caller arriving in the meantime spawn its own duplicate resolution.
+            self._building.add(mid)
+            self._build_stage[mid] = "Looking for a matching treatment cohort…"
             asyncio.create_task(
-                self._build_and_cache_negative(cancer_key, entry, mid, cancer_genes_only),
-                name=f"treatment_build_{mid}",
+                self._resolve_drug_evidence(
+                    cancer_key, entry, mid, drug_name, synonyms, cancer_genes_only,
+                ),
+                name=f"treatment_resolve_{mid}",
             )
         return TreatmentKMEvidence(
             drug=drug_name, tier="unavailable", is_building=True,
@@ -363,11 +462,186 @@ class TreatmentContextService:
         self, cancer_type: str, entry: dict[str, str], mid: str, cancer_genes_only: bool = False,
     ) -> None:
         """Wraps `_build_treatment_model`; records a negative-cache entry when
-        the build produced no usable model, so repeat requests for this drug
-        don't re-trigger a fresh orchestrator run within the TTL window."""
+        the build produced no usable model, so repeat requests for this
+        treatment don't re-trigger a fresh orchestrator run within the TTL
+        window.
+
+        Used by the CURATED-entry paths (the F24 comparison card and `warm`),
+        which build one model per drug CLASS and have no single drug name to
+        match arm labels against. The per-drug path uses
+        `_resolve_drug_evidence`, which tries the metadata-only fast path first.
+        """
         await self._build_treatment_model(cancer_type, entry, cancer_genes_only)
-        if self._sig.get_model(mid) is None:
+        if self._sig.get_model(mid) is None and self._negative_cache_get(mid) is None:
             self._negative_cache_put(mid, "No matching GEO cohort data available for this drug.")
+
+    async def _resolve_drug_evidence(
+        self, cancer_type: str, entry: dict[str, str], mid: str, drug_name: str,
+        synonyms: Optional[list[str]] = None, cancer_genes_only: bool = False,
+    ) -> None:
+        """Background resolution for one drug, cheapest option first.
+
+        1. Metadata-only fast path (`find_arm_cohort_for_drug`) — answers the
+           question actually being asked (did treated patients fare better?)
+           from clinical annotations alone, in seconds.
+        2. If the GEO search behind that turned up nothing at all, the drug has
+           no cohort coverage: negative-cache it and DON'T build. This is what
+           stops an agent with no clinical footprint (a research-only antibody,
+           say) from costing a full orchestrator run every time its TTL lapses.
+        3. Otherwise fall back to the bounded model build, which is still needed
+           to produce the tier-2 per-tertile `reference_km` curves.
+
+        The caller claims `_building` synchronously before scheduling this; the
+        claim covers the WHOLE resolution, not just the build, because the UI
+        re-polls every 15 s and step 1 alone takes longer than that.
+
+        Re-checks the caches on entry: an earlier resolution for this same mid
+        may have completed between this task being scheduled and actually
+        running, and repeating its work would discard the answer it just found.
+        """
+        try:
+            if self._negative_cache_get(mid) is not None or mid in self._arm_cohort_cache:
+                logger.debug("Resolution for %s already answered; skipping", mid)
+                return
+            if self._sig.get_model(mid) is not None:
+                return
+            try:
+                evidence, n_candidates = await self.find_arm_cohort_for_drug(
+                    cancer_type, entry, drug_name, synonyms,
+                )
+            except (ValueError, KeyError, OSError, RuntimeError) as exc:
+                logger.warning(
+                    "Fast-path arm lookup failed for %s (%s): %s", drug_name, mid, exc
+                )
+                evidence, n_candidates = None, -1
+
+            if evidence is not None:
+                self._arm_cohort_cache_put(mid, evidence)
+                logger.info(
+                    "Resolved %s via metadata-only fast path: %s", mid, evidence.accession
+                )
+                return
+
+            if n_candidates == 0:
+                self._negative_cache_put(
+                    mid, "No GEO cohort in this cancer type records this agent."
+                )
+                logger.info(
+                    "Pre-screen found no candidate cohorts for %s; skipping build", mid
+                )
+                return
+
+            await self._guarded_build(cancer_type, entry, mid, cancer_genes_only)
+            if self._sig.get_model(mid) is None and self._negative_cache_get(mid) is None:
+                self._negative_cache_put(
+                    mid, "No matching GEO cohort data available for this drug."
+                )
+        finally:
+            self._building.discard(mid)
+            self._build_stage.pop(mid, None)
+
+    async def find_arm_cohort_for_drug(
+        self, cancer_type: str, entry: dict[str, str], drug_name: str,
+        synonyms: Optional[list[str]] = None,
+    ) -> tuple[Optional[TreatmentKMEvidence], int]:
+        """Find a treated-vs-untreated KM split for `drug_name` WITHOUT running
+        the gene pipeline.
+
+        The arm curves that this feature actually renders come from
+        `_fit_treatment_arm_km` over a cohort's survival columns and its
+        treatment column — clinical metadata, no expression values. The full
+        `analyze_query` build exists only to produce a `PrognosticModel` whose
+        `training_accession` is then looked up the same way, so for the common
+        case it is a very expensive way to choose a GSE.
+
+        This searches and ranks as usual, then walks the top candidates loading
+        METADATA ONLY (no platform annotation, no probe->gene mapping, no Cox),
+        stopping at the first cohort with a usable arm split.
+
+        Returns `(evidence, n_candidates)`. `n_candidates == 0` means the GEO
+        search itself came back empty — the caller's cue to negative-cache
+        rather than fall back to a build.
+        """
+        orch = self._sig.orchestrator
+        if orch is None:
+            return None, -1
+
+        async with self._build_semaphore:
+            return await self._find_arm_cohort_uncapped(orch, entry, drug_name, synonyms)
+
+    async def _find_arm_cohort_uncapped(
+        self, orch, entry: dict[str, str], drug_name: str,
+        synonyms: Optional[list[str]] = None,
+    ) -> tuple[Optional[TreatmentKMEvidence], int]:
+        search_result = await orch._search_geo(entry["query"], None, _FASTPATH_CANDIDATES, 2)
+        candidates = list(search_result.datasets)
+        if not candidates:
+            return None, 0
+
+        ranked, _quality, _recs = await orch._rank_datasets(
+            candidates, entry["query"], min(len(candidates), _FASTPATH_CANDIDATES)
+        )
+        ranked = ranked[:_FASTPATH_CANDIDATES]
+
+        for ds in ranked:
+            loaded = await orch.loader_service.load_metadata_only(ds)
+            if loaded is None:
+                continue
+            # Screening several candidates: regex first so a provider rate
+            # limit can't turn the cheap path into the slow one.
+            arms_data = await self._sig.extract_treatment_arms(loaded, prefer_regex=True)
+            if arms_data is None:
+                continue
+            surv, treatment_binary, arm_names, arm_variable = arms_data
+
+            # Prefer a split whose treated-arm label actually names this drug —
+            # that is genuinely drug-specific evidence.
+            matched = self._sig.match_treatment_arm_km(
+                surv, treatment_binary, arm_names, drug_name, synonyms=synonyms
+            )
+            if matched:
+                return TreatmentKMEvidence(
+                    drug=drug_name, tier="arm_comparison", accession=ds.accession,
+                    arms=matched, arm_variable=arm_variable, same_cohort=False,
+                    time_unit=self._time_unit_for(surv),
+                    n_total=sum(a.n_samples for a in matched),
+                    caveat=ARM_COMPARISON_CAVEAT,
+                ), len(ranked)
+
+            # Otherwise fall back to the cohort's own documented treatment
+            # variable. Usually class-level ("chemotherapy: Yes/No"), so
+            # `arm_variable` travels with it to keep the UI honest about what
+            # the split really is.
+            arms = orch.survival_service._fit_treatment_arm_km(
+                surv["time"], surv["event"], treatment_binary, arm_names
+            )
+            if arms:
+                built = [TreatmentArmKM(**a) for a in arms]
+                return TreatmentKMEvidence(
+                    drug=drug_name, tier="arm_comparison", accession=ds.accession,
+                    arms=built, arm_variable=arm_variable, same_cohort=False,
+                    time_unit=self._time_unit_for(surv),
+                    n_total=sum(a.n_samples for a in built),
+                    caveat=(
+                        f"Observational treated-vs-untreated comparison within "
+                        f"{ds.accession}, split on that cohort's '{arm_variable}' "
+                        "field — treatment was not randomly assigned, and the cohort "
+                        "does not record which specific agent was given."
+                    ),
+                ), len(ranked)
+
+        return None, len(ranked)
+
+    @staticmethod
+    def _time_unit_for(surv) -> str:
+        """Infer the survival-time unit from the cohort's own scale. Follow-up
+        measured in the low hundreds is months; in the thousands, days. Only
+        used to label the chart axis."""
+        try:
+            median = float(surv["time"].median())
+        except (KeyError, TypeError, ValueError):
+            return "days"
+        return "months" if median < 300 else "days"
 
     async def warm(
         self, cancer_type: str, db: "AsyncSession", cancer_genes_only: bool = False,
@@ -382,8 +656,12 @@ class TreatmentContextService:
                 continue
             if mid in self._building:
                 continue
+            if self._negative_cache_get(mid) is not None:
+                continue
             asyncio.create_task(
-                self._build_treatment_model(cancer_type.lower(), entry, cancer_genes_only),
+                self._build_and_cache_negative(
+                    cancer_type.lower(), entry, mid, cancer_genes_only
+                ),
                 name=f"treatment_build_{mid}",
             )
             queued.append(entry["slug"])
@@ -403,6 +681,16 @@ class TreatmentContextService:
         cancer_genes_only: bool = False,
     ) -> TreatmentComparison:
         mid = _model_id(cancer_type, entry["slug"], cancer_genes_only)
+
+        # A recent build for this treatment found nothing. The card has no
+        # polling of its own (one fetch per mount), so without this check every
+        # remount re-triggers the same fruitless orchestrator run.
+        neg_reason = self._negative_cache_get(mid)
+        if neg_reason is not None:
+            return TreatmentComparison(
+                name=entry["name"], slug=entry["slug"],
+                is_building=False, build_error=neg_reason,
+            )
 
         # Model already available → score immediately.
         model = self._sig.get_model(mid)
@@ -432,7 +720,7 @@ class TreatmentContextService:
         # Model not on disk yet — kick off a background build if not already running.
         if mid not in self._building:
             asyncio.create_task(
-                self._build_treatment_model(cancer_type, entry, cancer_genes_only),
+                self._build_and_cache_negative(cancer_type, entry, mid, cancer_genes_only),
                 name=f"treatment_build_{mid}",
             )
 
@@ -446,11 +734,20 @@ class TreatmentContextService:
     ) -> None:
         """Background: build a treatment-specific signature model and persist it.
 
+        This is the FALLBACK path, reached only when the metadata-only fast
+        path (`find_arm_cohort_for_drug`) found no usable arm split. It is
+        needed for the tier-2 per-tertile `reference_km` curves, which do
+        require expression.
+
         `cancer_genes_only` mirrors the setting from the patient's originating
-        analysis (`PrognosticModel.cancer_genes_only`) rather than being fixed —
-        it's what keeps this build in the "~2-5 min" range (testing ~600 curated
-        cancer genes) instead of hours (testing every probe on the platform),
-        while still matching whatever filter the user actually chose.
+        analysis (`PrognosticModel.cancer_genes_only`). Note that it does NOT
+        materially bound the runtime: the filter is applied inside
+        `process_dataset`, after each dataset has already been downloaded,
+        parsed and probe->gene mapped, so it shrinks only the per-gene Cox
+        loop. What actually bounds this build is `max_retry_batches` below,
+        `_BUILD_DEADLINE_SECONDS`, and `_build_semaphore`. It does still fork
+        the model-id cache namespace (`_cgo` suffix), so builds with and
+        without the filter never reuse each other's results.
 
         Always invoked via `asyncio.create_task` — this coroutine outlives the
         HTTP request that queued it, so it opens its own DB session rather
@@ -459,12 +756,25 @@ class TreatmentContextService:
         provisioning a new connection; concurrent operations are not
         permitted").
         """
-        from app.services.analysis_result_service import analysis_result_service
-
         mid = _model_id(cancer_type, entry["slug"], cancer_genes_only)
         if mid in self._building:
             return
         self._building.add(mid)
+        try:
+            await self._guarded_build(cancer_type, entry, mid, cancer_genes_only)
+        finally:
+            self._building.discard(mid)
+            self._build_stage.pop(mid, None)
+
+    async def _guarded_build(
+        self, cancer_type: str, entry: dict[str, str], mid: str,
+        cancer_genes_only: bool = False,
+    ) -> None:
+        """Run a build under the global concurrency cap and the hard deadline.
+
+        Assumes the caller already claimed `mid` in `_building` — both entry
+        points do, they just claim it over different spans.
+        """
         self._build_stage[mid] = "Checking for a cached analysis…"
         logger.info(
             "Treatment model build started: %s (%s, cancer_genes_only=%s)",
@@ -475,61 +785,93 @@ class TreatmentContextService:
             self._build_stage[mid] = message
 
         try:
-            # Try to find a cached GEO analysis matching this query first — but
-            # only reuse it if it was built with the same cancer_genes_only
-            # setting; a query string match alone doesn't guarantee that (the
-            # same query could have been run before under the other setting).
-            async with get_db_session() as db:
-                cached = await analysis_result_service.find_recent_by_query(db, entry["query"])
-                full = (
-                    await analysis_result_service.get_result(db, cached["result_id"])
-                    if cached and cached.get("result_id") else None
+            # Serialized against other drug builds, then hard-deadlined. Without
+            # the deadline a build that outruns the UI's poll timeout keeps
+            # consuming NCBI and LLM budget with nothing left to display it.
+            self._build_stage[mid] = "Waiting for a build slot…"
+            async with self._build_semaphore:
+                await asyncio.wait_for(
+                    self._run_treatment_build(
+                        cancer_type, entry, mid, cancer_genes_only, _progress
+                    ),
+                    timeout=_BUILD_DEADLINE_SECONDS,
                 )
-            if full and bool(full.get("cancer_genes_only", False)) == cancer_genes_only:
-                model = await self._sig.build_from_result(full, cancer_type=cancer_type)
-                model.model_id = mid
-                self._sig.save_model_to_disk(model)
-                logger.info("Treatment model built from cache: %s", mid)
-                return
-
-            # No matching cached analysis — run the full pipeline via the orchestrator.
-            if self._sig.orchestrator is None:
-                logger.warning("Orchestrator unavailable, cannot build %s", mid)
-                return
-
-            from app.api.routes import _build_analysis_response
-
-            # min_occurrence=1: unlike the main cross-cohort search (whose whole
-            # value proposition is requiring a gene to replicate across >=2
-            # independent datasets), a narrow single-drug query like "breast
-            # PALBOCICLIB overall survival" realistically only ever turns up one
-            # usable GEO dataset. Requiring 2+ here means these builds almost
-            # never produce a gene, regardless of how good that one dataset is —
-            # confirmed repeatedly in production logs (every treatment build this
-            # session hit "Filtered N genes appearing in only 1 dataset"). A
-            # single well-analyzed cohort is exactly what "cohort_reference" tier
-            # is already framed/caveated for (COHORT_REFERENCE_CAVEAT).
-            raw = await self._sig.orchestrator.analyze_query(
-                query=entry["query"],
-                max_datasets=10,
-                min_occurrence=1,
-                cancer_genes_only=cancer_genes_only,
-                progress_callback=_progress,
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Treatment model build for %s exceeded %ss deadline; abandoning",
+                mid, _BUILD_DEADLINE_SECONDS,
             )
-            self._build_stage[mid] = "Training the prognostic signature…"
-            result_dict = _build_analysis_response(
-                raw, cancer_genes_only=cancer_genes_only, min_occurrence=1
-            ).model_dump()
-            model = await self._sig.build_from_result(result_dict, cancer_type=cancer_type)
-            model.model_id = mid
-            self._sig.save_model_to_disk(model)
-            logger.info("Treatment model built from fresh analysis: %s", mid)
-
+            self._negative_cache_put(
+                mid, "No cohort evidence found for this drug within the time budget."
+            )
         except (ValueError, KeyError, OSError, RuntimeError) as exc:
             logger.warning("Treatment model build failed for %s: %s", mid, exc)
-        finally:
-            self._building.discard(mid)
-            self._build_stage.pop(mid, None)
+
+    async def _run_treatment_build(
+        self, cancer_type: str, entry: dict[str, str], mid: str,
+        cancer_genes_only: bool, _progress,
+    ) -> None:
+        """The build itself. Separated from `_build_treatment_model` so the
+        latter can wrap it in a semaphore and a deadline without those
+        concerns tangling with the build logic."""
+        from app.services.analysis_result_service import analysis_result_service
+
+        # Try to find a cached GEO analysis matching this query first — but
+        # only reuse it if it was built with the same cancer_genes_only
+        # setting; a query string match alone doesn't guarantee that (the
+        # same query could have been run before under the other setting).
+        async with get_db_session() as db:
+            cached = await analysis_result_service.find_recent_by_query(db, entry["query"])
+            full = (
+                await analysis_result_service.get_result(db, cached["result_id"])
+                if cached and cached.get("result_id") else None
+            )
+        if full and bool(full.get("cancer_genes_only", False)) == cancer_genes_only:
+            model = await self._sig.build_from_result(full, cancer_type=cancer_type)
+            model.model_id = mid
+            self._sig.save_model_to_disk(model)
+            logger.info("Treatment model built from cache: %s", mid)
+            return
+
+        # No matching cached analysis — run the full pipeline via the orchestrator.
+        if self._sig.orchestrator is None:
+            logger.warning("Orchestrator unavailable, cannot build %s", mid)
+            return
+
+        from app.api.routes import _build_analysis_response
+
+        # min_occurrence=1: unlike the main cross-cohort search (whose whole
+        # value proposition is requiring a gene to replicate across >=2
+        # independent datasets), a narrow single-drug query like "breast
+        # PALBOCICLIB overall survival" realistically only ever turns up one
+        # usable GEO dataset. Requiring 2+ here means these builds almost
+        # never produce a gene, regardless of how good that one dataset is —
+        # confirmed repeatedly in production logs (every treatment build this
+        # session hit "Filtered N genes appearing in only 1 dataset"). A
+        # single well-analyzed cohort is exactly what "cohort_reference" tier
+        # is already framed/caveated for (COHORT_REFERENCE_CAVEAT).
+        raw = await self._sig.orchestrator.analyze_query(
+            query=entry["query"],
+            max_datasets=10,
+            min_occurrence=1,
+            cancer_genes_only=cancer_genes_only,
+            # One retry batch, not a walk to exhaustion. A narrow single-drug
+            # query legitimately turns up only one or two usable cohorts, so
+            # the orchestrator's default "keep pulling until 3 datasets yield
+            # results" would fetch, LLM-parse and Cox its entire ranked list
+            # (~30 datasets) before conceding — for every suggested drug.
+            max_retry_batches=1,
+            max_platform_mb=_MAX_PLATFORM_MB,
+            progress_callback=_progress,
+        )
+        self._build_stage[mid] = "Training the prognostic signature…"
+        result_dict = _build_analysis_response(
+            raw, cancer_genes_only=cancer_genes_only, min_occurrence=1
+        ).model_dump()
+        model = await self._sig.build_from_result(result_dict, cancer_type=cancer_type)
+        model.model_id = mid
+        self._sig.save_model_to_disk(model)
+        logger.info("Treatment model built from fresh analysis: %s", mid)
 
 
 # Module-level singleton — wired in main.py

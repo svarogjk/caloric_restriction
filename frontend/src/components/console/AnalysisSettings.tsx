@@ -5,7 +5,7 @@ import {
     setOrganism, setCancerGenesOnly, setDatasetCount,
     setHazardRatioUpper, setHazardRatioLower, setGeneFilterInput,
 } from '../../store/chatSlice'
-import { Field, FieldGrid } from '../ui'
+import { ExpressionLoadNotice, Field, FieldGrid } from '../ui'
 
 const ORGANISMS = ['Homo sapiens', 'Mus musculus', 'Rattus norvegicus']
 
@@ -88,6 +88,7 @@ const AnalysisSettings: React.FC = () => {
                     />
                     Restrict to ~600 COSMIC cancer driver genes
                 </label>
+                <ExpressionLoadNotice scope="analysis" variant="footnote" showFilterCaveat />
 
                 <Field label="Candidate genes" hint="Optional — one per line or comma-separated">
                     <textarea

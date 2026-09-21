@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react'
+import { useSelector } from 'react-redux'
+import { RootState } from '../../../store/store'
 import { getTreatmentContext, TreatmentComparison } from '../../../services/api'
 import KaplanMeierChart from '../../KaplanMeierChart'
 import { GROUP_COLORS, timesToYears } from '../../../utils/signatureViz'
-import { Card, RuoNotice } from '../../ui'
+import { Card, ExpressionLoadNotice, RuoNotice } from '../../ui'
 
 interface TreatmentContextCardProps {
     cancerType: string
@@ -21,28 +23,34 @@ interface TreatmentContextCardProps {
 const TreatmentContextCard: React.FC<TreatmentContextCardProps> = ({ cancerType, expression, clinical }) => {
     const [treatments, setTreatments] = useState<TreatmentComparison[] | null>(null)
     const [error, setError] = useState<string | null>(null)
+    const cancerGenesOnly = useSelector((s: RootState) => s.chat.cancerGenesOnly)
 
     useEffect(() => {
-        getTreatmentContext({ cancer_type: cancerType, expression, clinical })
+        getTreatmentContext({
+            cancer_type: cancerType, expression, clinical, cancer_genes_only: cancerGenesOnly,
+        })
             .then((r) => setTreatments(r.treatments))
             .catch((err) => {
                 const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail
                 setError(detail ?? 'Could not load treatment-cohort outcomes.')
             })
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [cancerType])
+    }, [cancerType, cancerGenesOnly])
 
     if (error) return <p className="text-xs text-danger">{error}</p>
     if (!treatments) return <p className="text-xs text-fg-faint">Loading treatment-cohort outcomes…</p>
 
+    const anyBuilding = treatments.some((t) => t.is_building)
+
     return (
         <div className="space-y-2">
+            {anyBuilding && <ExpressionLoadNotice scope="treatment" />}
             {treatments.map((t) => (
                 <Card key={t.slug} dense>
                     <div className="flex items-center justify-between">
                         <span className="text-sm font-medium text-fg-strong">{t.name}</span>
                         {t.is_building ? (
-                            <span className="text-[11px] text-warn">building ({t.build_stage ?? '…'}, ~2-5 min)</span>
+                            <span className="text-[11px] text-warn">building ({t.build_stage ?? '…'})</span>
                         ) : t.build_error ? (
                             <span className="text-[11px] text-danger">unavailable</span>
                         ) : (

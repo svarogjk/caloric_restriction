@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
+import { ExpressionLoadNotice } from '../ui'
 import { RootState, AppDispatch } from '../../store/store'
 import {
     fetchConversations,
@@ -251,6 +252,10 @@ const ChatContainer: React.FC = () => {
                                     Cancer genes only (~600)
                                 </label>
                             </div>
+                            <ExpressionLoadNotice
+                                scope="analysis" variant="footnote" showFilterCaveat
+                                className="basis-full"
+                            />
                         </div>
 
                         {/* Significance Thresholds */}

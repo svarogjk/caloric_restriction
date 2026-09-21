@@ -8,7 +8,7 @@ import {
 import { GROUP_COLORS, buildKMChartData } from '../../utils/signatureViz'
 import NomogramSVG from './NomogramSVG'
 import ConcordanceBenchmark from './ConcordanceBenchmark'
-import { RuoNotice } from '../ui'
+import { ExpressionLoadNotice, RuoNotice } from '../ui'
 
 interface SignaturePanelProps {
     resultId?: string | null
@@ -55,6 +55,12 @@ const SignaturePanel: React.FC<SignaturePanelProps> = ({ resultId, query }) => {
                         low / intermediate / high risk groups.
                     </p>
                     <RuoNotice variant="inline" className="max-w-lg mx-auto" />
+                    {resultId && (
+                        <ExpressionLoadNotice
+                            scope="signature"
+                            className="max-w-lg mx-auto mt-2 text-left"
+                        />
+                    )}
                 </div>
                 {error && (
                     <div className="text-sm text-warn bg-warn-soft border border-warn-border rounded p-2 max-w-lg mx-auto">
@@ -78,6 +84,9 @@ const SignaturePanel: React.FC<SignaturePanelProps> = ({ resultId, query }) => {
                         Try demo signature
                     </button>
                 </div>
+                <p className="text-[11px] text-fg-faint">
+                    The demo uses synthetic data — no download, instant.
+                </p>
                 {!resultId && (
                     <p className="text-xs text-fg-faint">
                         Save this analysis to enable building from real cohorts, or try the synthetic demo.

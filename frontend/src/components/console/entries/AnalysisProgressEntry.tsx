@@ -1,6 +1,7 @@
 import React from 'react'
 import AnalysisProgress from '../../chat/AnalysisProgress'
 import { AnalysisProgress as AnalysisProgressType } from '../../../store/chatSlice'
+import { ExpressionLoadNotice } from '../../ui'
 
 interface AnalysisProgressEntryProps {
     query: string
@@ -42,6 +43,7 @@ const AnalysisProgressEntry: React.FC<AnalysisProgressEntryProps> = ({ query, pr
                 Usually 2–5 minutes. You can keep asking questions while this runs.
             </p>
             <AnalysisProgress progress={progress} />
+            <ExpressionLoadNotice scope="analysis" variant="footnote" className="mt-2" />
         </div>
     )
 }

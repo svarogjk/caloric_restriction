@@ -588,6 +588,11 @@ export async function getTherapyRationale(params: {
      *  label match against an unrelated model's tertiles. Never persisted. */
     expression?: Record<string, number>
     clinical?: Record<string, string | number> | null
+    /** The COSMIC restriction the user actually has set. Sent explicitly because
+     *  the server otherwise inherits it from the model, and a demo or curated
+     *  model always carries `false` — which made Tier-2 builds run genome-wide
+     *  (~40k genes) no matter what was ticked. */
+    cancerGenesOnly?: boolean
 }): Promise<TherapyRationaleResponse> {
     const response = await apiClient.post<TherapyRationaleResponse>('/chat/therapy-rationale', {
         model_id: params.modelId,
@@ -596,6 +601,7 @@ export async function getTherapyRationale(params: {
         model: params.model ?? 'mistral',
         expression: params.expression ?? {},
         clinical: params.clinical ?? null,
+        cancer_genes_only: params.cancerGenesOnly ?? null,
     })
     return response.data
 }
@@ -605,6 +611,11 @@ export async function getCohortKM(params: {
     drugs: string[]
     expression?: Record<string, number>
     clinical?: Record<string, string | number> | null
+    /** The COSMIC restriction the user actually has set. Sent explicitly because
+     *  the server otherwise inherits it from the model, and a demo or curated
+     *  model always carries `false` — which made Tier-2 builds run genome-wide
+     *  (~40k genes) no matter what was ticked. */
+    cancerGenesOnly?: boolean
 }): Promise<TreatmentKMEvidence[]> {
     const response = await apiClient.post<{ results: TreatmentKMEvidence[] }>(
         '/chat/therapy-rationale/cohort-km',
@@ -613,6 +624,7 @@ export async function getCohortKM(params: {
             drugs: params.drugs,
             expression: params.expression ?? {},
             clinical: params.clinical ?? null,
+            cancer_genes_only: params.cancerGenesOnly ?? null,
         },
     )
     return response.data.results
@@ -646,11 +658,17 @@ export async function getTreatmentContext(params: {
     cancer_type: string
     expression: Record<string, number>
     clinical?: Record<string, string | number> | null
+    /** Mirrors the COSMIC restriction the patient's originating analysis ran
+     *  under. It is part of the treatment model's id (a `_cgo` suffix), so
+     *  omitting it doesn't just lose a preference — it requests a DIFFERENT
+     *  model than the one already built on disk, forcing a redundant build. */
+    cancer_genes_only?: boolean
 }): Promise<TreatmentComparisonResult> {
     const response = await apiClient.post<TreatmentComparisonResult>('/treatment-context', {
         cancer_type: params.cancer_type,
         expression: params.expression,
         clinical: params.clinical ?? null,
+        cancer_genes_only: params.cancer_genes_only ?? false,
     })
     return response.data
 }
