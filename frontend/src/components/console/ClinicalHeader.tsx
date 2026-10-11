@@ -59,7 +59,7 @@ const ClinicalHeader: React.FC<ClinicalHeaderProps> = ({ isAuthenticated, onOpen
                                 >
                                     <option value="mistral-large">mistral-large-latest</option>
                                     <option value="mistral">mistral-small-latest</option>
-                                    <option value="anthropic">claude-haiku-4-5-20251001</option>
+                                    <option value="anthropic">claude-haiku-5-5</option>
                                 </select>
                                 <Link to="/research" className="text-xs text-accent-fg hover:underline">
                                     Open Research mode →

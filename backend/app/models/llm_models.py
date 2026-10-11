@@ -43,7 +43,7 @@ mistral_model = MistralModel(
 )
 
 anthropic_model = AnthropicModel(
-    "claude-haiku-4-5-20251001",
+    "claude-haiku-5-5",
     provider=AnthropicProvider(api_key=anthropic_key or "missing"),
 )
 

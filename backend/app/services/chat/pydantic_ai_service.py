@@ -440,7 +440,7 @@ class PydanticAIService:
 
         if anthropic_key:
             models["anthropic"] = AnthropicModel(
-                "claude-haiku-4-5-20251001",
+                "claude-haiku-5-5",
                 provider=AnthropicProvider(api_key=anthropic_key),
             )
             logger.info("Initialized Anthropic model")

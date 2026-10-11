@@ -183,7 +183,7 @@ class QueryEstimationService:
                 anthropic_key = key_file.read_text().strip()
         if anthropic_key:
             agents["anthropic"] = Agent(
-                AnthropicModel("claude-haiku-4-5-20251001", provider=AnthropicProvider(api_key=anthropic_key)),
+                AnthropicModel("claude-haiku-5-5", provider=AnthropicProvider(api_key=anthropic_key)),
                 output_type=AIEstimationResult,
                 system_prompt=self._ESTIMATION_SYSTEM_PROMPT,
             )

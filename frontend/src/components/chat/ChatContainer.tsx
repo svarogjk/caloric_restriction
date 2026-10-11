@@ -182,7 +182,7 @@ const ChatContainer: React.FC = () => {
                         >
                             <option value="mistral-large">mistral-large-latest</option>
                             <option value="mistral">mistral-small-latest</option>
-                            <option value="anthropic">claude-haiku-4-5-20251001</option>
+                            <option value="anthropic">claude-haiku-5-5</option>
                         </select>
                     </div>
                 </div>

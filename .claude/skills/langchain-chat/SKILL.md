@@ -35,8 +35,8 @@ from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.mistral import MistralProvider
 from pydantic_ai.providers.anthropic import AnthropicProvider
 
-mistral = MistralModel("magistral-small-latest", provider=MistralProvider(api_key=key))
-claude  = AnthropicModel("claude-haiku-4-5-20251001", provider=AnthropicProvider(api_key=key))
+mistral = MistralModel("mistral-small-latest", provider=MistralProvider(api_key=key))
+claude  = AnthropicModel("claude-haiku-5-5", provider=AnthropicProvider(api_key=key))
 ```
 
 ## Non-streaming Invocation
